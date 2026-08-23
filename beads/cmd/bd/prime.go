@@ -326,6 +326,13 @@ func outputMemoriesOnlyContext(w io.Writer) error {
 // formatMemoriesForPrime queries memories from the k/v store and formats them for injection.
 // Returns empty string if no memories or if store is unavailable.
 func formatMemoriesForPrime(compact bool) string {
+	if memoryHook != nil {
+		memories, err := memoryHook.List("")
+		if err != nil || len(memories) == 0 {
+			return ""
+		}
+		return formatMemoriesMap(memories, compact)
+	}
 	// Try to initialize store if not already active (prime may run before other commands)
 	if store == nil {
 		timeout := primeStoreTimeout()
@@ -352,17 +359,26 @@ func formatMemoriesForPrime(compact bool) string {
 	}
 
 	fullPrefix := kvPrefix + memoryPrefix
-	var keys []string
 	memories := make(map[string]string)
 	for k, v := range allConfig {
 		if strings.HasPrefix(k, fullPrefix) {
 			userKey := strings.TrimPrefix(k, fullPrefix)
 			memories[userKey] = v
-			keys = append(keys, userKey)
 		}
 	}
 	if len(memories) == 0 {
 		return ""
+	}
+	return formatMemoriesMap(memories, compact)
+}
+
+func formatMemoriesMap(memories map[string]string, compact bool) string {
+	if len(memories) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(memories))
+	for k := range memories {
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 

@@ -116,6 +116,7 @@ func New(cfg config.File) (*App, error) {
 		return err
 	})
 	a.registerExecJobs(cfg.Jobs)
+	a.bindBeadsMemory()
 	return a, nil
 }
 
