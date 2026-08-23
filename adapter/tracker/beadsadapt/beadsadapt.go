@@ -25,6 +25,7 @@ func (Tracker) Run(_ context.Context, args []string) error {
 	if os.Getenv("BD_NAME") == "" {
 		_ = os.Setenv("BD_NAME", "iugum")
 	}
+	bdcmd.SetMemoryHook(sqliteHook)
 	os.Args = append([]string{os.Args[0]}, args...)
 	bdcmd.Execute()
 	return nil

@@ -16,8 +16,77 @@ import (
 // memoryPrefix is prepended (after kvPrefix) to all memory keys.
 const memoryPrefix = kvkeys.MemoryPrefix
 
+// MemoryHook redirects remember/recall/forget/memories away from Dolt kv.memory.
+// iugum sets this to contract.Memory (SQLite).
+type MemoryHook interface {
+	Remember(key, value string) error
+	Recall(key string) (value string, ok bool, err error)
+	Forget(key string) error
+	List(query string) (map[string]string, error) // empty query = all
+}
+
+var memoryHook MemoryHook
+
+// SetMemoryHook installs an external memory backend. Nil restores Dolt kv.
+func SetMemoryHook(h MemoryHook) { memoryHook = h }
+
 // memoryKeyFlag allows explicit key override for bd remember.
 var memoryKeyFlag string
+
+func memoryGet(key string) (string, bool, error) {
+	if memoryHook != nil {
+		return memoryHook.Recall(key)
+	}
+	storageKey := kvPrefix + memoryPrefix + key
+	value, err := store.GetConfig(rootCtx, storageKey)
+	return value, value != "", err
+}
+
+func memorySet(key, value string) error {
+	if memoryHook != nil {
+		return memoryHook.Remember(key, value)
+	}
+	storageKey := kvPrefix + memoryPrefix + key
+	return store.SetConfig(rootCtx, storageKey, value)
+}
+
+func memoryDelete(key string) error {
+	if memoryHook != nil {
+		return memoryHook.Forget(key)
+	}
+	storageKey := kvPrefix + memoryPrefix + key
+	return store.DeleteConfig(rootCtx, storageKey)
+}
+
+func memoryList(search string) (map[string]string, error) {
+	if memoryHook != nil {
+		return memoryHook.List(search)
+	}
+	allConfig, err := store.GetAllConfig(rootCtx)
+	if err != nil {
+		return nil, err
+	}
+	fullPrefix := kvkeys.MemoryConfigKeyPrefix
+	memories := make(map[string]string)
+	for k, v := range allConfig {
+		if strings.HasPrefix(k, fullPrefix) {
+			userKey := strings.TrimPrefix(k, fullPrefix)
+			memories[userKey] = v
+		}
+	}
+	search = strings.ToLower(search)
+	if search != "" {
+		filtered := make(map[string]string)
+		for k, v := range memories {
+			if strings.Contains(strings.ToLower(k), search) ||
+				strings.Contains(strings.ToLower(v), search) {
+				filtered[k] = v
+			}
+		}
+		memories = filtered
+	}
+	return memories, nil
+}
 
 // slugify converts a string to a URL-friendly slug for use as a memory key.
 // Takes the first ~8 words, lowercases, replaces non-alphanumeric with hyphens.
@@ -94,11 +163,7 @@ Examples:
 			return HandleErrorRespectJSON("could not generate key from content; use --key to specify one")
 		}
 
-		storageKey := kvPrefix + memoryPrefix + key
-
-		ctx := rootCtx
-
-		existing, _ := store.GetConfig(ctx, storageKey)
+		existing, _, _ := memoryGet(key)
 		verb := "Remembered"
 		if existing != "" {
 			verb = "Updated"
@@ -136,7 +201,7 @@ Examples:
 				key, insight, key)
 		}
 
-		if err := store.SetConfig(ctx, storageKey, insight); err != nil {
+		if err := memorySet(key, insight); err != nil {
 			return HandleErrorRespectJSON("storing memory: %v", err)
 		}
 		commandDidWrite.Store(true)
@@ -179,35 +244,13 @@ Examples:
 			return HandleError("%v", err)
 		}
 
-		ctx := rootCtx
-		allConfig, err := store.GetAllConfig(ctx)
-		if err != nil {
-			return HandleErrorRespectJSON("listing memories: %v", err)
-		}
-
-		// Filter for kv.memory.* keys
-		fullPrefix := kvkeys.MemoryConfigKeyPrefix
-		memories := make(map[string]string)
-		for k, v := range allConfig {
-			if strings.HasPrefix(k, fullPrefix) {
-				userKey := strings.TrimPrefix(k, fullPrefix)
-				memories[userKey] = v
-			}
-		}
-
 		var search string
 		if len(args) > 0 {
-			search = strings.ToLower(args[0])
+			search = args[0]
 		}
-		if search != "" {
-			filtered := make(map[string]string)
-			for k, v := range memories {
-				if strings.Contains(strings.ToLower(k), search) ||
-					strings.Contains(strings.ToLower(v), search) {
-					filtered[k] = v
-				}
-			}
-			memories = filtered
+		memories, err := memoryList(search)
+		if err != nil {
+			return HandleErrorRespectJSON("listing memories: %v", err)
 		}
 
 		if jsonOutput {
@@ -273,12 +316,12 @@ Examples:
 		}
 
 		key := args[0]
-		storageKey := kvPrefix + memoryPrefix + key
 
-		ctx := rootCtx
-
-		existing, _ := store.GetConfig(ctx, storageKey)
-		if existing == "" {
+		existing, ok, err := memoryGet(key)
+		if err != nil {
+			return HandleErrorRespectJSON("recalling memory: %v", err)
+		}
+		if !ok || existing == "" {
 			if jsonOutput {
 				if jerr := outputJSON(map[string]string{
 					"key":   key,
@@ -292,7 +335,7 @@ Examples:
 			return SilentExit()
 		}
 
-		if err := store.DeleteConfig(ctx, storageKey); err != nil {
+		if err := memoryDelete(key); err != nil {
 			return HandleErrorRespectJSON("forgetting memory: %v", err)
 		}
 		commandDidWrite.Store(true)
@@ -334,10 +377,7 @@ Examples:
 		}
 
 		key := args[0]
-		storageKey := kvPrefix + memoryPrefix + key
-
-		ctx := rootCtx
-		value, err := store.GetConfig(ctx, storageKey)
+		value, ok, err := memoryGet(key)
 		if err != nil {
 			return HandleErrorRespectJSON("recalling memory: %v", err)
 		}
@@ -346,16 +386,16 @@ Examples:
 			if jerr := outputJSON(map[string]interface{}{
 				"key":   key,
 				"value": value,
-				"found": value != "",
+				"found": ok && value != "",
 			}); jerr != nil {
 				return jerr
 			}
-			if value == "" {
+			if !ok || value == "" {
 				return SilentExit()
 			}
 			return nil
 		}
-		if value == "" {
+		if !ok || value == "" {
 			fmt.Fprintf(os.Stderr, "No memory with key %q\n", key)
 			return SilentExit()
 		}
