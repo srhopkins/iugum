@@ -1,19 +1,8 @@
 # iugum
 
-**iugum** /ˈjuː.ɡum/ · *YOO-gum*  
-*noun* · neuter · 2nd declension · genitive **iugī**
+**iugum** /ˈjuː.ɡum/ · *YOO-gum* — Latin for **yoke**: the bar that joins a pair so they pull as one.
 
-**Latin** *iugum, iugī* — from *iungō*, “to join, to yoke.”  
-Cognate with Greek *ζυγόν* (zugón) and English *yoke*.
-
-1. A **yoke**: the bar that joins a pair so they pull as one.
-2. A **pair** or **team** (oxen, horses).
-3. A **ridge**: the line where two slopes meet.
-4. *Transferred.* One static Go program that joins **Beads** (the issue tracker CLI, same as `bd`) and **SilverBullet** (the markdown wiki). The operator holds one file.
-
----
-
-One static Go program that includes **Beads** (issue tracker CLI) and **SilverBullet** (markdown wiki server).
+One static Go program that joins **Beads** (the issue tracker CLI, same as `bd`) and **SilverBullet** (the markdown wiki).
 
 ## North stars
 

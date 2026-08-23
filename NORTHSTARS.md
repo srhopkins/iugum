@@ -70,7 +70,7 @@ We keep these deviations on purpose.
 1. Product names and identifiers stay as written. Examples: iugum, Beads, SilverBullet, PromQL, LogQL, Go, Casbin, SQLite, uPlot, `bd`.
 2. Code examples stay as code. Do not rewrite code to STE.
 3. "Go" is the name of the programming language, not the verb.
-4. The Latin name entry in `README.md` is a name origin. Do not rewrite that entry.
+4. The name line in `README.md` may keep the Latin word "yoke". Do not add grammar tables.
 5. The policy table in `CONTRIBUTING.md` stays as a table. Tables help a person scan. The checker reads a table as one long word group.
 6. The Beads sections in `AGENTS.md` come from a tool. Do not rewrite those sections.
 7. Technical nouns live in `glossaries/iugum.yaml`. This checker uses that list.
