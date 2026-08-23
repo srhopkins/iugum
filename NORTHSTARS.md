@@ -70,12 +70,11 @@ We keep these deviations on purpose.
 1. Product names and identifiers stay as written. Examples: iugum, Beads, SilverBullet, PromQL, LogQL, Go, Casbin, SQLite, uPlot, `bd`.
 2. Code examples stay as code. Do not rewrite code to STE.
 3. "Go" is the name of the programming language, not the verb.
-4. The name line in `README.md` may keep the Latin word "yoke". Do not add grammar tables.
+4. The name line in `README.md` may keep the Latin word "yoke" and the industry word "harness". Do not add grammar tables.
 5. The policy table in `CONTRIBUTING.md` stays as a table. Tables help a person scan. The checker reads a table as one long word group.
 6. The Beads sections in `AGENTS.md` come from a tool. Do not rewrite those sections.
 7. Technical nouns live in `glossaries/iugum.yaml`. This checker uses that list.
 8. The name "Simplified Technical English" and file paths (`README.md`, `AGENTS.md`, `iugum.yaml`) stay as written. The checker flags those strings as unknown words.
 
 Use the CLI command `ste100 check` with `glossaries/iugum.yaml`.
-The package pin is in `~/.cursor/mcp.json`.
-The MCP server `user-ste100` was down. The CLI is the check method.
+The package is `asd-ste100-checker` on GitHub (`sourdough-bread/asd-ste100-checker`).

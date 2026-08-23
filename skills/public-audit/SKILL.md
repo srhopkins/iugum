@@ -23,15 +23,14 @@ scripts/public-audit.sh --staged --no-agent
 | Tool | What it catches | Result |
 |------|-----------------|--------|
 | [gitleaks](https://github.com/gitleaks/gitleaks) | Keys, tokens, PEM, `.pw` files | BLOCK |
-| `scripts/public-warn.patterns` via `rg` | Home paths, private email, LAN IPs | WARN |
+| `scripts/public-warn.patterns` via `rg` | Home paths, private email, LAN IPs | WARN (fix if it applies; never block the commit) |
 
 Do not rely on a prompt instead of these tools.
 
 ## Then judge leftovers
 
-If the script prints WARN, fix or drop those lines.
-Look for comments that name a person, a home path, or a private host.
-Those are not secrets. They still do not belong in the public tree.
+If the script prints WARN, fix the line when the hit is real.
+A false or needed hit must not stop the commit. The hook does not block on WARN.
 
 A secret that the tools missed is a BLOCK. Name the file. Do not print the secret.
 
