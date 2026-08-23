@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/srhopkins/iugum/adapter/observe/sqladapt"
 	"github.com/srhopkins/iugum/contract"
@@ -101,5 +103,29 @@ func TestE2EObserveIngestQueryLogsHTTP(t *testing.T) {
 	}
 	if len(sqladapt.TempMarksC) != 3 {
 		t.Fatalf("mark-line metadata missing")
+	}
+}
+
+func TestServeObserveStopsOnCancel(t *testing.T) {
+	a := observeE2EApp(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.ServeObserve(ctx, port, "127.0.0.1") }()
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeObserve did not return after cancel")
 	}
 }
