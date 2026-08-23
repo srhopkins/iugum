@@ -5,8 +5,10 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/srhopkins/iugum/app"
 	"github.com/srhopkins/iugum/config"
@@ -23,10 +25,11 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <beads|wiki|prepare-pr|skill>
+const usage = `Usage: iugum <beads|wiki|run|prepare-pr|skill>
 
   beads        work-graph slot (default: beads)
   wiki         notes-server slot (default: SilverBullet)
+  run          start jobs, file watch, and hook bus (HTTP listen is a stub)
   prepare-pr   write review files; do not push
   skill run    run a skill by name (prepare-pr)
 
@@ -64,6 +67,8 @@ func run(args []string) int {
 	ctx := context.Background()
 
 	switch args[0] {
+	case "run":
+		return runRuntime(ctx, a, cfg)
 	case "beads":
 		if err := a.RunTracker(ctx, args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
@@ -99,6 +104,56 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n%s", args[0], usage)
 		return 1
 	}
+}
+
+func runRuntime(ctx context.Context, a *app.App, cfg config.File) int {
+	for _, j := range cfg.Jobs {
+		if len(j.Workflow) > 0 {
+			a.Hooks.AddWorkflow(j.Name, j.Workflow)
+		}
+		spec := j.Spec
+		if spec == "" {
+			spec = "@triggered"
+		}
+		if err := a.Scheduler.Add(spec, j.Name, func(ctx context.Context, ev contract.Event) error {
+			return a.FireHook(ctx, contract.Event{Name: j.Name, Source: "cron", Path: ev.Path, Attrs: ev.Attrs})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "schedule: %v\n", err)
+			return 1
+		}
+	}
+	for _, h := range cfg.HookRoutes {
+		a.Hooks.On(h.On, h.Job)
+	}
+	for _, w := range cfg.Watch {
+		if w.Path == "" {
+			continue
+		}
+		if err := a.Watcher.Add(w.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "watch: %v\n", err)
+			return 1
+		}
+	}
+	if err := a.Scheduler.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "schedule: %v\n", err)
+		return 1
+	}
+	defer a.Scheduler.Stop()
+	if cfg.HookHTTP != "" {
+		if err := a.ListenHooksHTTP(ctx, cfg.HookHTTP); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}
+	go func() {
+		for ev := range a.Watcher.Events() {
+			_ = a.FireHook(ctx, ev)
+		}
+	}()
+	fmt.Fprintln(os.Stdout, "iugum run: jobs + watch. HTTP /hooks/{name} is reserved.")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+	return 0
 }
 
 func runPreparePR(ctx context.Context, a *app.App, args []string) int {

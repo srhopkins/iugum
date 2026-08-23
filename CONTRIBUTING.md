@@ -42,7 +42,7 @@ Those plugins break a single static program.
    Then edit the blank imports.
 
 3. **Registration compiles an other adapter in.**
-   In `init()`, call `plugin.RegisterTracker`, `RegisterWiki`, or `RegisterObserver`.
+   In `init()`, call `plugin.RegisterTracker`, `RegisterWiki`, `RegisterObserver`, or `RegisterMemory`.
    Then `import _ "your.module/adapter"` from your `main` or `defaults` package.
    iugum finds adapters by the name in the config file.
 
@@ -56,7 +56,7 @@ Those plugins break a single static program.
 
 5. **Casbin is the gate.**
    Package `policy` wraps [Casbin](https://casbin.org/) (an access-policy engine).
-   `app.App` calls `Gate.Enforce` before each tracker, wiki, and observe action.
+   `app.App` calls `Gate.Enforce` before each tracker, wiki, observe, and memory action.
    The embedded model permits `* / * / *`.
    That model is inert on purpose.
    When you add real rules, put a model and a policy file in config.
@@ -92,6 +92,18 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `observe` | `ingest` | metric/log write |
 | `observe` | `query` | metric/log read |
 | `ship` | `prepare` | `iugum prepare-pr` / `iugum skill run prepare-pr` |
+| `mem/{type}/ns/{path}` | `read` | recall, search, walk |
+| `mem/{type}/ns/{path}` | `write` | remember, ingest |
+| `mem/{type}/ns/{path}` | `attach` | attach a namespace to a row |
+| `mem/{type}/ns/{path}` | `slice` | copy bindings that match a filter |
+| `mem/{type}/ns/{path}` | `detach` | drop a binding |
+| `mem/{type}/ns/{path}` | `grant` | reserved for later policy |
+| `hook` | `fire` | local hook |
+| `hook` | `http` | reserved webhook listen |
+| `schedule` | `run` | cron or adhoc job |
+
+The default Casbin model allows all. Object uses `keyMatch`, so `mem/*/ns/steve/*` is a later deny/allow rule.
+Graph split words live in `glossaries/memory-graph.yaml` (same shape as the STE glossary).
 
 Add new rows here when you add commands.
 Use the same `obj`/`act` strings in tests.

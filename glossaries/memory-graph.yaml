@@ -1,0 +1,43 @@
+# Closed list for knowledge-graph split. Same idea as glossaries/iugum.yaml.
+# Add or remove a word. Do not invent a new extractor.
+# extractor: rules splits "LEFT <rel> RIGHT" on these rels only.
+# Later optional pass: Ollama + JSON schema (qwen3.5:4b / 9b), same list as gate.
+# Do not add GLiNER in-process (Python sidecar). Embeddings find nodes; they are not edges.
+
+name: memory-graph
+
+kinds:
+  - word: person
+    approved_meaning: A human.
+  - word: agent
+    approved_meaning: A running agent or harness session.
+  - word: asset
+    approved_meaning: Hardware, a model, or a binary.
+  - word: place
+    approved_meaning: A host, room, or namespace.
+  - word: project
+    approved_meaning: A repo or product.
+  - word: fact
+    approved_meaning: A prose memory that is not a node kind.
+
+rels:
+  - word: owns
+    approved_meaning: Possession or responsibility.
+  - word: hosts
+    approved_meaning: A machine runs or holds a thing.
+  - word: runs
+    approved_meaning: A process or host executes a thing.
+  - word: uses
+    approved_meaning: A consumer depends on a thing.
+  - word: grants
+    approved_meaning: Access given to a namespace or agent.
+  - word: blocks
+    approved_meaning: A ticket or policy stops other work.
+  - word: related
+    approved_meaning: A weak link when no better rel fits.
+    inflections:
+      - related-to
+  - word: located-in
+    approved_meaning: Physical or logical place.
+    inflections:
+      - in

@@ -8,6 +8,37 @@ actor: "" # empty = $IUGUM_ACTOR or OS user
 tracker: beads
 wiki: silverbullet
 observe: memory
+memory: sqlite
+data_dir: "" # empty = IUGUM_DATA or OS data dir
+
+# Optional vectors. Off = FTS5 + substring. Kind ollama uses nomic-embed-text.
+embeddings:
+  enabled: false
+  kind: off
+  url: ""
+  model: ""
+
+# Closed relation list. Add or remove a word. extractor: rules | off
+graph:
+  glossary: glossaries/memory-graph.yaml
+  extractor: rules
+
+# Jobs: cron spec, @every 1h, or @triggered (adhoc / hook).
+# workflow is a linear step list. Not a DAG.
+jobs:
+  - name: ingest-wiki
+    spec: "@triggered"
+    workflow: [mem.ingest]
+
+hooks:
+  - on: watch.changed
+    job: ingest-wiki
+
+watch:
+  - path: ./wiki
+
+# Empty = do not bind. Reserved later: POST /hooks/{name}
+hook_http: ""
 
 # Casbin (policy engine). Empty paths = embedded allow-all.
 # Point these at files when you want real deny rules.

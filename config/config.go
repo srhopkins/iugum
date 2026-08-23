@@ -13,9 +13,49 @@ type File struct {
 	Actor   string `yaml:"actor"`
 	Tracker string `yaml:"tracker"`
 	Wiki    string `yaml:"wiki"`
-	Observe string `yaml:"observe"`
-	Policy  Policy `yaml:"policy"`
-	Exec    Exec   `yaml:"exec"`
+	Observe    string     `yaml:"observe"`
+	Memory     string     `yaml:"memory"`
+	DataDir    string     `yaml:"data_dir"`
+	Embeddings Embeddings `yaml:"embeddings"`
+	Graph      Graph      `yaml:"graph"`
+	Policy     Policy      `yaml:"policy"`
+	Exec       Exec        `yaml:"exec"`
+	Jobs       []JobSpec   `yaml:"jobs"`
+	HookRoutes []HookRoute `yaml:"hooks"`
+	Watch      []WatchSpec `yaml:"watch"`
+	HookHTTP   string      `yaml:"hook_http"` // empty = stub, do not bind
+}
+
+// JobSpec is one cron or @triggered job. workflow is a linear step list.
+type JobSpec struct {
+	Name     string   `yaml:"name"`
+	Spec     string   `yaml:"spec"`
+	Workflow []string `yaml:"workflow"`
+}
+
+// HookRoute sends a hook name to a job.
+type HookRoute struct {
+	On  string `yaml:"on"`
+	Job string `yaml:"job"`
+}
+
+// WatchSpec is one folder for fsnotify.
+type WatchSpec struct {
+	Path string `yaml:"path"`
+}
+
+// Embeddings is the optional vector slot. Off = substring + FTS5 only.
+type Embeddings struct {
+	Enabled bool   `yaml:"enabled"`
+	Kind    string `yaml:"kind"` // off | ollama | openai
+	URL     string `yaml:"url"`
+	Model   string `yaml:"model"`
+}
+
+// Graph points at the relation glossary. extractor is off or rules.
+type Graph struct {
+	Glossary  string `yaml:"glossary"`
+	Extractor string `yaml:"extractor"`
 }
 
 // Policy points at Casbin files. Empty paths use the embedded allow-all model.
@@ -37,6 +77,11 @@ func Defaults() File {
 		Tracker: "beads",
 		Wiki:    "silverbullet",
 		Observe: "memory",
+		Memory:  "sqlite",
+		Graph: Graph{
+			Glossary:  "glossaries/memory-graph.yaml",
+			Extractor: "rules",
+		},
 	}
 }
 
@@ -72,6 +117,19 @@ func Load() (File, error) {
 	}
 	if cfg.Observe == "" {
 		cfg.Observe = "memory"
+	}
+	if cfg.Memory == "" {
+		cfg.Memory = "sqlite"
+	}
+	if cfg.Graph.Extractor == "" {
+		cfg.Graph.Extractor = "rules"
+	}
+	if cfg.Embeddings.Kind == "" {
+		if cfg.Embeddings.Enabled {
+			cfg.Embeddings.Kind = "ollama"
+		} else {
+			cfg.Embeddings.Kind = "off"
+		}
 	}
 	return cfg, nil
 }

@@ -36,6 +36,13 @@ A **plugin** is a compiled Go adapter (`plugin.Register…`).
 A **skill** is a folder with `SKILL.md` plus an optional command.
 Do not invent a third word (recipe, playbook) for those two.
 
+A **job** is one run (cron, adhoc, or hook). It is not a plugin.
+A **hook** is a named event that starts a job. Local `Fire` and later HTTP `POST /hooks/{name}` use the same event.
+A **watch** is OS file events (fsnotify) that emit `watch.changed`.
+A **workflow** is a linear list of jobs. Fail stops the rest. A DAG is later, via go-cron `After` / `OnSuccess`, not Airflow.
+A **step** is one stage in a workflow (FTS, embed, graph).
+FTS, embeddings, and the graph are **indexes** on the memory plugin. They are not plugins.
+
 PromQL is for metrics only.
 Log search uses LogQL, not PromQL.
 LogQL uses the same label braces, then a line match.
