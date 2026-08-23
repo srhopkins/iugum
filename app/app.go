@@ -73,6 +73,9 @@ func New(cfg config.File) (*App, error) {
 		"embed_kind": kind,
 		"embed_url":  cfg.Embeddings.URL,
 		"embed_model": cfg.Embeddings.Model,
+		"llm_kind":    cfg.Graph.LLM.Kind,
+		"llm_url":     cfg.Graph.LLM.URL,
+		"llm_model":   cfg.Graph.LLM.Model,
 	})
 	if err != nil {
 		return nil, err
