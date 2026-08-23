@@ -22,15 +22,21 @@ CGO_ENABLED=0 go build -o /Users/steve/bin/iugum .
 
 - **Edit:** `main.go`, docs, root `go.mod`, and `beads/cmd/bd` only when exporting `Execute` for in-process beads
 - **Do not edit:** the rest of `beads/`, or `silverbullet/` (upstream trees)
-- **Do not init** `.beads` in this repo
+- **Beads live here** — prefix `iugum`. Feature work stays in this tracker, not `~/projects`.
 - **No remote** — local git only until Steve adds one
 
 ## Layout
 
 ```
-main.go          — CLI dispatch, embed, wiki/beads wiring
-beads/           — Beads source (linked in-process)
-silverbullet/    — SilverBullet binary blob for embed
+contract/        — public interfaces (third parties import this)
+plugin/          — RegisterTracker / RegisterWiki / RegisterObserver
+policy/          — Casbin gate (allow-all until a policy file is set)
+app/             — composition root; every command hits the gate
+adapter/         — built-in + exec adapters
+defaults/        — blank-imports compiled-in adapters
+main.go          — CLI + embed SilverBullet
+beads/           — Beads source (in-process)
+silverbullet/    — SilverBullet binary blob
 ```
 
 When changing behavior, update `main.go` and these docs together.

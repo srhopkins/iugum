@@ -1,0 +1,26 @@
+# Copy to ./iugum.yaml or ~/.config/iugum/config.yaml
+# Or set IUGUM_CONFIG to an absolute path.
+
+actor: "" # empty = $IUGUM_ACTOR or OS user
+
+# Built-in names: beads, silverbullet, memory
+# External process that upholds the same contract: exec
+tracker: beads
+wiki: silverbullet
+observe: memory
+
+# Casbin (policy engine). Empty paths = embedded allow-all.
+# Point these at files when you want real deny rules.
+policy:
+  model: ""
+  policy: ""
+
+# Used only when a slot above is "exec".
+# Tracker exec: same CLI as bd.
+# Wiki exec: same flags as SilverBullet (-p PORT -L HOST SPACE).
+# Observe exec: verb on argv, JSON on stdin, JSON on stdout
+#   (ingest-metrics | query-metrics | ingest-logs | search-logs).
+exec:
+  tracker: []
+  wiki: []
+  observe: []
