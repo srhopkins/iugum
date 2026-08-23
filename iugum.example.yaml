@@ -16,7 +16,7 @@ data_dir: "" # empty = IUGUM_DATA or OS data dir
 # Optional vectors. Off = FTS5 + substring. Kind ollama uses nomic-embed-text.
 embeddings:
   enabled: false
-  vec: false # true = sqlite-vec vec0 KNN (needs enabled + embedder)
+  vec: false # true = sqlite-vec vec0 KNN (needs enabled + embedder). Built on linux/darwin/BSD/windows (vec.go). Other OS: vec_stub.go, cosine in Go.
   kind: off
   url: ""
   model: ""
