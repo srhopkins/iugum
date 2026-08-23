@@ -60,6 +60,7 @@ func init() {
 			Glossary:  gloss,
 			Extractor: cfg["extractor"],
 			LLM:       llmFrom(cfg),
+			Vec:       cfg["vec"] == "true" || cfg["vec"] == "1",
 		})
 	})
 }
@@ -71,6 +72,7 @@ type Store struct {
 	gloss     graphgloss.File
 	llm       graphgloss.LLMClient
 	extractor string
+	vec       vecIndex
 	mu        sync.Mutex
 }
 
@@ -80,6 +82,7 @@ type Opts struct {
 	Glossary  graphgloss.File
 	LLM       graphgloss.LLMClient
 	Extractor string // off | rules | llm
+	Vec       bool   // sqlite-vec vec0 KNN; requires embedder
 }
 
 func Open(path string, embedder contract.Embedder) (*Store, error) {
@@ -132,7 +135,10 @@ func OpenOpts(path string, opt Opts) (*Store, error) {
 	if opt.Glossary.Name == "" && len(opt.Glossary.Rels) == 0 {
 		opt.Glossary = graphgloss.Default()
 	}
-	return &Store{db: db, embedder: opt.Embedder, gloss: opt.Glossary, llm: opt.LLM, extractor: opt.Extractor}, nil
+	s := &Store{db: db, embedder: opt.Embedder, gloss: opt.Glossary, llm: opt.LLM, extractor: opt.Extractor}
+	s.vec.configure(opt.Vec, opt.Embedder != nil)
+	_ = s.vec.probe(db)
+	return s, nil
 }
 
 func ensureFTS(db *sql.DB) error {
@@ -215,6 +221,9 @@ func (s *Store) Remember(ctx context.Context, rec contract.MemoryRec) error {
 	_, err = s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO bindings(ns, memory_id, bind) VALUES(?,?, 'own')
 	`, ns, id)
+	if err == nil {
+		_ = s.vec.upsertBlob(s.db, id, blob)
+	}
 	return err
 }
 
@@ -263,6 +272,7 @@ func (s *Store) Forget(ctx context.Context, ns, key string) error {
 	var n int
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bindings WHERE memory_id=?`, id).Scan(&n)
 	if n == 0 {
+		s.vec.deleteMemory(s.db, id)
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM edges WHERE from_id=? OR to_id=?`, id, id)
 		_, err = s.db.ExecContext(ctx, `DELETE FROM memories WHERE id=?`, id)
 	}
@@ -417,6 +427,12 @@ func (s *Store) Search(ctx context.Context, q contract.MemoryQuery) ([]contract.
 			qvec = vecs[0]
 		}
 	}
+	vecScores := map[string]float64{}
+	if s.vec.active() && len(qvec) > 0 {
+		if vs, err := s.vec.vecScores(ctx, s.db, qvec, nss, q.Type, limit); err == nil {
+			vecScores = vs
+		}
+	}
 
 	var hits []contract.MemoryHit
 	seen := map[string]bool{}
@@ -433,9 +449,13 @@ func (s *Store) Search(ctx context.Context, q contract.MemoryQuery) ([]contract.
 		if fs, ok := ftsHits[r.key]; ok && fs > score {
 			score = fs
 		}
-		if len(qvec) > 0 && len(r.vec) == len(qvec) {
-			if c := cosine(qvec, r.vec); c > score {
-				score = c
+		if len(qvec) > 0 {
+			if vs, ok := vecScores[r.key]; ok && vs > score {
+				score = vs
+			} else if (!s.vec.active() || len(vecScores) == 0) && len(r.vec) == len(qvec) {
+				if c := cosine(qvec, r.vec); c > score {
+					score = c
+				}
 			}
 		}
 		if needle == "" {
@@ -625,6 +645,9 @@ func (s *Store) rememberLocked(ctx context.Context, rec contract.MemoryRec) erro
 	_, err = s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO bindings(ns, memory_id, bind) VALUES(?,?, 'own')
 	`, ns, id)
+	if err == nil {
+		_ = s.vec.upsertBlob(s.db, id, blob)
+	}
 	return err
 }
 

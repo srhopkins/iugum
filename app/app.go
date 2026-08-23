@@ -66,6 +66,10 @@ func New(cfg config.File) (*App, error) {
 	if memName == "" {
 		memName = "sqlite"
 	}
+	vec := "false"
+	if cfg.Embeddings.Enabled && cfg.Embeddings.Vec {
+		vec = "true"
+	}
 	mem, err := plugin.NewMemory(memName, map[string]string{
 		"data_dir":   data,
 		"glossary":   cfg.Graph.Glossary,
@@ -73,6 +77,7 @@ func New(cfg config.File) (*App, error) {
 		"embed_kind": kind,
 		"embed_url":  cfg.Embeddings.URL,
 		"embed_model": cfg.Embeddings.Model,
+		"vec":         vec,
 		"llm_kind":    cfg.Graph.LLM.Kind,
 		"llm_url":     cfg.Graph.LLM.URL,
 		"llm_model":   cfg.Graph.LLM.Model,

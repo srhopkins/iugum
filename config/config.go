@@ -53,6 +53,7 @@ type WatchSpec struct {
 // Embeddings is the optional vector slot. Off = substring + FTS5 only.
 type Embeddings struct {
 	Enabled bool   `yaml:"enabled"`
+	Vec     bool   `yaml:"vec"` // sqlite-vec vec0 KNN; default off
 	Kind    string `yaml:"kind"` // off | ollama | openai
 	URL     string `yaml:"url"`
 	Model   string `yaml:"model"`
@@ -65,9 +66,9 @@ type Graph struct {
 	LLM       GraphLLM `yaml:"llm"`
 }
 
-// GraphLLM configures chat extract when extractor is llm.
+// GraphLLM is the optional chat model for extractor llm.
 type GraphLLM struct {
-	Kind  string `yaml:"kind"`
+	Kind  string `yaml:"kind"` // ollama | openai
 	URL   string `yaml:"url"`
 	Model string `yaml:"model"`
 }
