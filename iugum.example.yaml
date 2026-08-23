@@ -3,8 +3,10 @@
 
 actor: "" # empty = $IUGUM_ACTOR or OS user
 
-# Built-in names: beads, silverbullet, memory
+# Built-in names: beads, silverbullet, memory, sqlite
 # External process that upholds the same contract: exec
+# observe: memory keeps the in-process store. observe: sqlite is observe.db.
+# iugum observe always uses sqlite even when this field is memory.
 tracker: beads
 wiki: silverbullet
 observe: memory
@@ -14,6 +16,7 @@ data_dir: "" # empty = IUGUM_DATA or OS data dir
 # Optional vectors. Off = FTS5 + substring. Kind ollama uses nomic-embed-text.
 embeddings:
   enabled: false
+  vec: false # true = sqlite-vec vec0 KNN (needs enabled + embedder)
   kind: off
   url: ""
   model: ""
