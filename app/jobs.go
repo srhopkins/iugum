@@ -13,3 +13,12 @@ func (a *App) registerExecJobs(jobs []config.JobSpec) {
 		a.Hooks.Register(j.Name, jobexec.Exec(j.Command))
 	}
 }
+
+func (a *App) registerHTTPJobs(jobs []config.JobSpec) {
+	for _, j := range jobs {
+		if j.Kind != "http" || j.URL == "" {
+			continue
+		}
+		a.Hooks.Register(j.Name, jobexec.HTTPPost(j.URL))
+	}
+}

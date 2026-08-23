@@ -36,6 +36,12 @@ jobs:
   #   spec: "@every 24h"
   #   command: [echo, backup-complete]
 
+  # kind http POSTs the event JSON to a URL when the job fires.
+  # - name: notify-slack
+  #   kind: http
+  #   spec: "@triggered"
+  #   url: https://example.com/hooks/notify
+
 hooks:
   - on: watch.changed
     job: ingest-wiki
