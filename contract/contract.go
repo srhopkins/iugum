@@ -37,6 +37,8 @@ type WikiOpts struct {
 }
 
 // Observer is the metrics+logs slot. Default: in-process memory until sqlite lands.
+// Agents query metrics with PromQL and logs with LogQL (see NORTHSTARS.md).
+// MetricQuery / LogQuery grow an Expr field when those parsers land.
 type Observer interface {
 	Name() string
 	IngestMetrics(ctx context.Context, samples []Sample) error

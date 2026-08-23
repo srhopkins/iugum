@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# iugum public-repo gate, then beads/factory pre-commit.
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 1
+"$root/scripts/public-audit.sh" --staged || exit 1
+beads_hook="$root/.beads/hooks/pre-commit"
+if [ -x "$beads_hook" ]; then
+  exec "$beads_hook" "$@"
+fi
+exit 0

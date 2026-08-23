@@ -1,39 +1,87 @@
 # Contributing to iugum
 
-iugum is a yoke: one static Go binary with opinionated defaults, and a small public contract so the yoke can hold other tools.
+iugum is a yoke.
+iugum is one static Go program with default adapters.
+iugum has a small public contract so the yoke can hold other tools.
 
-`CGO_ENABLED=0`. Do not add CGo. Do not use Go's `plugin.Open` (shared-object plugins). Those break a single static binary.
+Read [NORTHSTARS.md](NORTHSTARS.md) before you add a dependency or a query language.
+
+1. **Go or one file.** New work is Go, or the new work becomes part of this one `CGO_ENABLED=0` program. Do not add a sidecar stack.
+2. **Agent-known syntax.** Metrics: PromQL. Logs: LogQL. Tracker: `bd`. Wiki: SilverBullet. Do not make a local dialect.
+3. **Function first.** Keep the file small when you can. Do not stop a function to save bytes.
+
+After clone, run `scripts/install-hooks.sh`. Git does not install hooks for you.
+
+The pre-commit hook runs `scripts/public-audit.sh --staged`:
+
+- **Block:** [gitleaks](https://github.com/gitleaks/gitleaks) (keys, tokens, PEM, `.pw` files). Config: `.gitleaks.toml`.
+- **Warn:** `scripts/public-warn.patterns` (home paths, private email, LAN IPs).
+- **Agent:** residual pass only after a WARN, or when `IUGUM_AUDIT_AGENT=1`. The agent cannot waive a gitleaks block.
+
+Install gitleaks with `brew install gitleaks`. Agents: `skills/public-audit/SKILL.md`.
+
+`CGO_ENABLED=0`. Do not add CGo.
+Do not use Go `plugin.Open` (shared-object plugins).
+Those plugins break a single static program.
 
 ## Decisions
 
-1. **The contract is the only API.** Implement `contract.Tracker`, `contract.Wiki`, or `contract.Observer` in package `github.com/srhopkins/iugum/contract`. If a change does not fit those interfaces, propose an interface change first. Do not special-case a new backend in `main.go`.
+1. **The contract is the only API.**
+   Implement `contract.Tracker`, `contract.Wiki`, or `contract.Observer` in package `github.com/srhopkins/iugum/contract`.
+   If a change does not match those interfaces, propose an interface change first.
+   Do not special-case a new backend in `main.go`.
 
-2. **Defaults are compiled in.** This binary ships:
-   - tracker: **beads** (same CLI as `bd`)
-   - wiki: **SilverBullet** (embedded binary)
-   - observe: **memory** now; **sqlite + uPlot** is the planned default (`iugum-9n8`)
+2. **Defaults are compiled in.**
+   This program includes three defaults.
+   The tracker is **beads**. The CLI is the same as `bd`.
+   The wiki is **SilverBullet**. SilverBullet is an embedded program.
+   The observe slot is **memory** now.
+   The planned default is **sqlite + uPlot** (`iugum-9n8`).
 
-   A fork that wants a different compiled stack copies `defaults/defaults.go` and changes the blank imports.
+   A fork that wants a different compiled stack copies `defaults/defaults.go`.
+   Then edit the blank imports.
 
-3. **Registration is how you compile an alternative in.** In `init()`, call `plugin.RegisterTracker`, `RegisterWiki`, or `RegisterObserver`. Then `import _ "your.module/adapter"` from your `main` or `defaults` package. iugum looks adapters up by the name in the config file.
+3. **Registration compiles an other adapter in.**
+   In `init()`, call `plugin.RegisterTracker`, `RegisterWiki`, or `RegisterObserver`.
+   Then `import _ "your.module/adapter"` from your `main` or `defaults` package.
+   iugum finds adapters by the name in the config file.
 
-4. **Config is how you link something external.** File search order: `$IUGUM_CONFIG`, `./iugum.yaml`, `~/.config/iugum/config.yaml`. Set `tracker`, `wiki`, or `observe` to `exec` and fill `exec.<slot>` with a command. That process must uphold the same contract as the in-process adapter (see `iugum.example.yaml`). Config does not load arbitrary shared libraries.
+4. **Config links an external program.**
+   File search order: `$IUGUM_CONFIG`, `./iugum.yaml`, `~/.config/iugum/config.yaml`.
+   Put `tracker`, `wiki`, or `observe` to `exec`.
+   Fill `exec.<slot>` with a command.
+   That procedure must use the same contract as the in-process adapter.
+   See `iugum.example.yaml`.
+   Config does not load arbitrary shared libraries.
 
-5. **Casbin is the gate.** Package `policy` wraps [Casbin](https://casbin.org/) (an access-policy engine). `app.App` calls `Gate.Enforce` before every tracker, wiki, and observe action. The embedded model allows `* / * / *`. That is inert on purpose. When you add real rules, put a model and a policy file in config. Do not add a second permission check beside the gate. New features take a `sub, obj, act` and go through `App.Check`.
+5. **Casbin is the gate.**
+   Package `policy` wraps [Casbin](https://casbin.org/) (an access-policy engine).
+   `app.App` calls `Gate.Enforce` before each tracker, wiki, and observe action.
+   The embedded model permits `* / * / *`.
+   That model is inert on purpose.
+   When you add real rules, put a model and a policy file in config.
+   Do not add a second permission check adjacent to the gate.
+   New functions take a `sub, obj, act` and go through the App gate.
 
-6. **Vendored trees stay upstream-shaped.** Edit `beads/cmd/bd` only to export `Execute`. Do not patch SilverBullet. Adapter wiring lives under `adapter/`, `app/`, and `main.go`.
+6. **Vendored trees stay in the upstream form.**
+   Edit `beads/cmd/bd` only to export `Execute`.
+   Do not edit SilverBullet.
+   Adapter wiring lives under `adapter/`, `app/`, and `main.go`.
 
 ## Add an in-process adapter
 
 1. Create `adapter/<slot>/<name>/`.
 2. Implement the interface from `contract`.
-3. `init()` → `plugin.Register…("name", factory)`.
-4. Blank-import it from `defaults/defaults.go` if it belongs in this binary.
+3. In `init()`, call `plugin.Register…("name", factory)`.
+4. Add a blank import in `defaults/defaults.go` if the adapter belongs in this program.
 5. Document the name in `iugum.example.yaml`.
 
 ## Add an external adapter
 
-Ship a binary that speaks the exec contract for that slot. Users set `tracker: exec` (or wiki/observe) and `exec.tracker: ["your-bin"]`. No compile required. The contract still applies: same verbs, same JSON or CLI shape.
+Ship a program that uses the exec contract for that slot.
+Operators put `tracker: exec` (or wiki or observe) and `exec.tracker: ["your-bin"]`.
+No compile is required.
+The contract continues to apply: same verbs, same JSON or CLI form.
 
 ## Policy objects and actions (today)
 
@@ -43,8 +91,10 @@ Ship a binary that speaks the exec contract for that slot. Users set `tracker: e
 | `wiki` | `serve` | `iugum wiki …` |
 | `observe` | `ingest` | metric/log write |
 | `observe` | `query` | metric/log read |
+| `ship` | `prepare` | `iugum prepare-pr` / `iugum skill run prepare-pr` |
 
-Add new rows here when you add commands. Use the same `obj`/`act` strings in tests.
+Add new rows here when you add commands.
+Use the same `obj`/`act` strings in tests.
 
 ## Build
 

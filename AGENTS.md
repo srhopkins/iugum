@@ -1,6 +1,19 @@
 # iugum — agent context
 
-Single static Go binary (`CGO_ENABLED=0`) combining Beads CLI and SilverBullet wiki server.
+iugum is one static Go program (`CGO_ENABLED=0`).
+The program includes the Beads CLI and the SilverBullet wiki server.
+
+North stars: [NORTHSTARS.md](NORTHSTARS.md).
+New work is Go, or the new work becomes part of one program.
+Use languages that agents know.
+Function has priority. Program size is last.
+
+Observe search languages:
+- Metrics: **PromQL** (Prometheus query language). Example: `junction_c{gpu="mi50"}`.
+- Logs: **LogQL** (Grafana Loki). Example: `{stream="homelab"} |= "error"`.
+Do not make a local dialect.
+
+The Beads blocks below this layout are generated. Do not rewrite those blocks for STE.
 
 ## Commands (target behavior)
 
@@ -15,7 +28,7 @@ Wiki flags: `-p` / `--port` (default `3000`), `-L` / `--hostname`. No `serve` su
 ## Build
 
 ```bash
-CGO_ENABLED=0 go build -o /Users/steve/bin/iugum .
+CGO_ENABLED=0 go build -o iugum .
 ```
 
 ## Boundaries
@@ -23,7 +36,7 @@ CGO_ENABLED=0 go build -o /Users/steve/bin/iugum .
 - **Edit:** `main.go`, docs, root `go.mod`, and `beads/cmd/bd` only when exporting `Execute` for in-process beads
 - **Do not edit:** the rest of `beads/`, or `silverbullet/` (upstream trees)
 - **Beads live here** — prefix `iugum`. Feature work stays in this tracker, not `~/projects`.
-- **No remote** — local git only until Steve adds one
+- **Remote** `srhopkins/iugum` (private). Push only when Steve says so.
 
 ## Layout
 
