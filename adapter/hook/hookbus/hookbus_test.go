@@ -50,9 +50,15 @@ func TestWorkflowStopsOnError(t *testing.T) {
 }
 
 func TestListenHTTPStub(t *testing.T) {
-	err := New().ListenHTTP("127.0.0.1:0")
+	err := New().ListenHTTP("")
 	var stub contract.HTTPHookStub
 	if !errors.As(err, &stub) || stub.Path != "/hooks/{name}" {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestListenHTTPBinds(t *testing.T) {
+	if err := New().ListenHTTP("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
 	}
 }
