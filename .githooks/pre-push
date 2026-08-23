@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 1
+"$root/scripts/public-audit.sh" --all --no-agent || exit 1
+exec "$root/.beads/hooks/pre-push" "$@"

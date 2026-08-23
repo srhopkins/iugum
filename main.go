@@ -13,6 +13,7 @@ import (
 	"github.com/srhopkins/iugum/contract"
 	_ "github.com/srhopkins/iugum/defaults"
 	"github.com/srhopkins/iugum/embedbin"
+	"github.com/srhopkins/iugum/ship"
 )
 
 //go:embed silverbullet/silverbullet
@@ -22,15 +23,21 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <beads|wiki>
+const usage = `Usage: iugum <beads|wiki|prepare-pr|skill>
 
-  beads    work-graph slot (default: beads)
-  wiki     notes-server slot (default: SilverBullet)
+  beads        work-graph slot (default: beads)
+  wiki         notes-server slot (default: SilverBullet)
+  prepare-pr   write review files; do not push
+  skill run    run a skill by name (prepare-pr)
 
   iugum beads [bd args...]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
+  iugum prepare-pr [--repo DIR] [--base main] [--head BRANCH] [--title T] [--body-file F]
+  iugum skill run prepare-pr [same flags]
 
-  wiki defaults: port 3000, space ./wiki, listen 127.0.0.1
+  Body: stdin, or --body-file, or --body.
+  Empty origin: writes push.md + push.sh.
+  Origin has a branch: writes pr.md + create.sh.
   Every command passes Casbin (policy engine) first. Default model allows all.
 `
 
@@ -63,6 +70,18 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "prepare-pr":
+		return runPreparePR(ctx, a, args[1:])
+	case "skill":
+		if len(args) < 3 || args[1] != "run" {
+			fmt.Fprintln(os.Stderr, "Usage: iugum skill run <name> [flags]")
+			return 2
+		}
+		if args[2] != "prepare-pr" {
+			fmt.Fprintf(os.Stderr, "Unknown skill: %s\n", args[2])
+			return 2
+		}
+		return runPreparePR(ctx, a, args[3:])
 	case "wiki":
 		port, host, space, code, ok := parseWikiArgs(args[1:])
 		if !ok {
@@ -80,6 +99,84 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n%s", args[0], usage)
 		return 1
 	}
+}
+
+func runPreparePR(ctx context.Context, a *app.App, args []string) int {
+	if err := a.Check(ctx, "ship", "prepare"); err != nil {
+		fmt.Fprintln(os.Stderr, app.DenyMessage(err))
+		return 1
+	}
+	opts, code, ok := parsePrepareArgs(args)
+	if !ok {
+		return code
+	}
+	res, err := ship.Prepare(opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "prepare-pr: %v\n", err)
+		return 1
+	}
+	fmt.Printf("kind=%s\nmd=%s\nsh=%s\n", res.Kind, res.MD, res.SH)
+	return 0
+}
+
+func parsePrepareArgs(args []string) (opts ship.Opts, code int, ok bool) {
+	opts.Stdin = os.Stdin
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		need := func(flag string) (string, bool) {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "prepare-pr: %s requires a value\n", flag)
+				return "", false
+			}
+			i++
+			return args[i], true
+		}
+		switch {
+		case a == "--help" || a == "-h":
+			fmt.Fprint(os.Stdout, usage)
+			return opts, 0, false
+		case a == "--repo":
+			v, good := need(a)
+			if !good {
+				return opts, 2, false
+			}
+			opts.Repo = v
+		case a == "--base":
+			v, good := need(a)
+			if !good {
+				return opts, 2, false
+			}
+			opts.Base = v
+		case a == "--head":
+			v, good := need(a)
+			if !good {
+				return opts, 2, false
+			}
+			opts.Head = v
+		case a == "--title" || a == "-t":
+			v, good := need(a)
+			if !good {
+				return opts, 2, false
+			}
+			opts.Title = v
+		case a == "--body" || a == "-b":
+			v, good := need(a)
+			if !good {
+				return opts, 2, false
+			}
+			opts.Body = v
+		case a == "--body-file" || a == "-F":
+			v, good := need(a)
+			if !good {
+				return opts, 2, false
+			}
+			opts.BodyFile = v
+		default:
+			fmt.Fprintf(os.Stderr, "prepare-pr: unknown flag %s\n", a)
+			return opts, 2, false
+		}
+	}
+	return opts, 0, true
 }
 
 func parseWikiArgs(args []string) (port int, host, space string, code int, ok bool) {

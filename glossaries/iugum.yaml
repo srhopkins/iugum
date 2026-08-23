@@ -1,0 +1,287 @@
+# Project terms for the unofficial STE checker.
+# Not an ASD publication. Product names stay as written.
+
+name: iugum
+
+technical_nouns:
+  - word: iugum
+    part_of_speech: noun
+    approved_meaning: The one static Go program that joins tracker, wiki, and observe.
+  - word: Go
+    part_of_speech: noun
+    approved_meaning: The Go programming language.
+    inflections:
+      - Go
+  - word: Beads
+    part_of_speech: noun
+    approved_meaning: The issue tracker CLI. Same commands as bd.
+    inflections:
+      - beads
+      - Beads
+  - word: bd
+    part_of_speech: noun
+    approved_meaning: The Beads command name.
+  - word: SilverBullet
+    part_of_speech: noun
+    approved_meaning: The markdown wiki server that iugum embeds.
+  - word: PromQL
+    part_of_speech: noun
+    approved_meaning: Prometheus query language for metrics.
+  - word: LogQL
+    part_of_speech: noun
+    approved_meaning: Grafana Loki query language for logs.
+  - word: Prometheus
+    part_of_speech: noun
+    approved_meaning: The metrics system that defines PromQL.
+  - word: Grafana
+    part_of_speech: noun
+    approved_meaning: The vendor of Loki and LogQL.
+  - word: Loki
+    part_of_speech: noun
+    approved_meaning: The log system that defines LogQL.
+  - word: Casbin
+    part_of_speech: noun
+    approved_meaning: The access-policy engine that gates iugum commands.
+  - word: SQLite
+    part_of_speech: noun
+    approved_meaning: The file database planned for the observe slot.
+  - word: uPlot
+    part_of_speech: noun
+    approved_meaning: The chart library planned for the observe slot.
+  - word: wiki
+    part_of_speech: noun
+    approved_meaning: The notes-server slot in iugum.
+  - word: tracker
+    part_of_speech: noun
+    approved_meaning: The work-graph slot in iugum.
+  - word: observe
+    part_of_speech: noun
+    approved_meaning: The metrics and logs slot in iugum.
+  - word: adapter
+    part_of_speech: noun
+    approved_meaning: A module that implements one iugum contract slot.
+    inflections:
+      - adapters
+  - word: contract
+    part_of_speech: noun
+    approved_meaning: The public Go interfaces in package contract.
+  - word: binary
+    part_of_speech: noun
+    approved_meaning: One compiled program file.
+    inflections:
+      - binaries
+  - word: program
+    part_of_speech: noun
+    approved_meaning: The compiled iugum file.
+  - word: slot
+    part_of_speech: noun
+    approved_meaning: One replaceable function area (tracker, wiki, or observe).
+    inflections:
+      - slots
+  - word: agent
+    part_of_speech: noun
+    approved_meaning: A coding agent that operates iugum.
+    inflections:
+      - agents
+  - word: operator
+    part_of_speech: noun
+    approved_meaning: The person who installs or starts iugum.
+    inflections:
+      - operators
+  - word: metric
+    part_of_speech: noun
+    approved_meaning: A numeric time series (temperature, fan duty).
+    inflections:
+      - metrics
+  - word: query
+    part_of_speech: noun
+    approved_meaning: A search expression for metrics or logs.
+    inflections:
+      - queries
+  - word: dialect
+    part_of_speech: noun
+    approved_meaning: A house-made query language that agents do not know.
+  - word: dependency
+    part_of_speech: noun
+    approved_meaning: A Go module that this program includes.
+    inflections:
+      - dependencies
+  - word: CGo
+    part_of_speech: noun
+    approved_meaning: The Go interface to C libraries. Forbidden in iugum.
+  - word: YAML
+    part_of_speech: noun
+    approved_meaning: The config file format for iugum.
+
+  # Domain words the STE dictionary does not contain. Same referent only.
+  - file
+  - files
+  - syntax
+  - search
+  - language
+  - languages
+  - flag
+  - flags
+  - size
+  - star
+  - stars
+  - rule
+  - rules
+  - product
+  - static
+  - public
+  - observer
+  - memory
+  - stream
+  - label
+  - braces
+  - line
+  - document
+  - style
+  - command
+  - commands
+  - server
+  - issue
+  - markdown
+  - default
+  - defaults
+  - plugin
+  - plugins
+  - config
+  - model
+  - policy
+  - gate
+  - stack
+  - procedure
+  - form
+  - path
+  - paths
+  - identifier
+  - identifiers
+  - table
+  - tables
+  - block
+  - blocks
+  - glossary
+  - glossaries
+  - checker
+  - lemma
+  - translation
+  - deviation
+  - deviations
+  - option
+  - options
+  - CLI
+  - layer
+  - byte
+  - bytes
+  - backend
+  - import
+  - compile
+  - embed
+  - yoke
+  - bar
+  - ridge
+  - pair
+  - team
+  - wiki
+  - repo
+  - prefix
+  - slot
+  - north
+  - dictionary
+  - purpose
+  - claim
+  - code
+  - example
+  - examples
+  - vendor
+  - tree
+  - trees
+  - upstream
+  - wiring
+  - interface
+  - interfaces
+  - package
+  - module
+  - factory
+  - verb
+  - verbs
+  - JSON
+  - HTTP
+  - port
+  - hostname
+  - directory
+  - space
+  - subcommand
+  - library
+  - libraries
+  - permission
+  - action
+  - actions
+  - row
+  - rows
+  - string
+  - strings
+  - test
+  - tests
+  - request
+  - sidecar
+  - operator
+  - person
+  - priority
+  - volume
+  - speed
+  - function
+  - functions
+  - result
+  - results
+  - location
+  - locations
+  - section
+  - sections
+  - origin
+  - name
+  - names
+  - pin
+  - package
+  - list
+  - lists
+  - Latin
+  - English
+  - noun
+  - nouns
+  - text
+  - user
+  - tool
+  - entry
+  - group
+  - approval
+  - ASD
+  - STE
+  - yaml
+  - json
+
+technical_verbs:
+  - rewrite
+  - translate
+  - compile
+  - embed
+  - export
+  - import
+  - match
+  - propose
+  - operate
+  - filter
+  - select
+  - expand
+  - permit
+  - join
+  - yoke
+  - include
+  - start
+  - pass
+  - scan
+  - install
+  - get
+  - become

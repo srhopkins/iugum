@@ -1,0 +1,30 @@
+# Deterministic secret scan. Block on match.
+# Install: brew install gitleaks
+# Run: gitleaks protect --staged --config .gitleaks.toml
+#      gitleaks dir --config .gitleaks.toml --verbose
+
+title = "iugum"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Vendored upstream trees and lockfiles"
+paths = [
+    '''(^|/)beads/''',
+    '''(^|/)silverbullet/''',
+    '''go\.sum$''',
+]
+
+[[rules]]
+id = "iugum-password-file"
+description = "Password or key file name"
+regex = '''.'''
+path = '''(?i)(\.pw(\.txt)?|\.pem|\.p12|\.pfx|id_rsa|id_ed25519|credentials\.json|\.env)$'''
+tags = ["secret", "file"]
+
+[[rules]]
+id = "iugum-private-key-block"
+description = "PEM private key block"
+regex = '''-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----'''
+tags = ["secret", "key"]

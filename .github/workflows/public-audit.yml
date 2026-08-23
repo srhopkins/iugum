@@ -1,0 +1,21 @@
+name: public-audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          ver=8.24.0
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz" | tar -xz
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+      - name: Scan tree
+        run: gitleaks dir --no-banner --redact --config .gitleaks.toml --verbose
