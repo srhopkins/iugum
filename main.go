@@ -107,6 +107,8 @@ func run(args []string) int {
 		if !ok {
 			return code
 		}
+		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 		if err := a.ServeObserve(ctx, port, host); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
 			return 1

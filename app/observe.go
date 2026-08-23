@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -53,6 +54,9 @@ func (a *App) ServeObserve(ctx context.Context, port int, host string) error {
 	select {
 	case <-ctx.Done():
 		_ = srv.Shutdown(context.Background())
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil
+		}
 		return ctx.Err()
 	case err := <-errCh:
 		if err == http.ErrServerClosed {
