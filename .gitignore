@@ -1,0 +1,19 @@
+# Go
+*.exe
+*.dll
+*.so
+*.o
+*.a
+*.swp
+*.swo
+*.DS_Store
+bin/
+go-build/
+*.pb.go
+*.pb.gw.go
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
