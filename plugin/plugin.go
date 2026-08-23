@@ -14,6 +14,10 @@ type (
 	TrackerFactory  func(cfg map[string]string) (contract.Tracker, error)
 	WikiFactory     func(cfg map[string]string) (contract.Wiki, error)
 	ObserverFactory func(cfg map[string]string) (contract.Observer, error)
+	MemoryFactory     func(cfg map[string]string) (contract.Memory, error)
+	SchedulerFactory  func(cfg map[string]string) (contract.Scheduler, error)
+	HooksFactory      func(cfg map[string]string) (contract.Hooks, error)
+	WatcherFactory    func(cfg map[string]string) (contract.Watcher, error)
 )
 
 var (
@@ -21,6 +25,10 @@ var (
 	trackers  = map[string]TrackerFactory{}
 	wikis     = map[string]WikiFactory{}
 	observers = map[string]ObserverFactory{}
+	memories   = map[string]MemoryFactory{}
+	schedulers = map[string]SchedulerFactory{}
+	hooks      = map[string]HooksFactory{}
+	watchers   = map[string]WatcherFactory{}
 )
 
 func RegisterTracker(name string, f TrackerFactory) {
@@ -57,6 +65,70 @@ func NewWiki(name string, cfg map[string]string) (contract.Wiki, error) {
 	mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("iugum: unknown wiki %q (compile it in, or use wiki: exec)", name)
+	}
+	return f(cfg)
+}
+
+func RegisterMemory(name string, f MemoryFactory) {
+	mu.Lock()
+	defer mu.Unlock()
+	memories[name] = f
+}
+
+func NewMemory(name string, cfg map[string]string) (contract.Memory, error) {
+	mu.RLock()
+	f, ok := memories[name]
+	mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("iugum: unknown memory %q (compile it in, or use memory: exec)", name)
+	}
+	return f(cfg)
+}
+
+func RegisterScheduler(name string, f SchedulerFactory) {
+	mu.Lock()
+	defer mu.Unlock()
+	schedulers[name] = f
+}
+
+func NewScheduler(name string, cfg map[string]string) (contract.Scheduler, error) {
+	mu.RLock()
+	f, ok := schedulers[name]
+	mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("iugum: unknown scheduler %q", name)
+	}
+	return f(cfg)
+}
+
+func RegisterHooks(name string, f HooksFactory) {
+	mu.Lock()
+	defer mu.Unlock()
+	hooks[name] = f
+}
+
+func NewHooks(name string, cfg map[string]string) (contract.Hooks, error) {
+	mu.RLock()
+	f, ok := hooks[name]
+	mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("iugum: unknown hooks %q", name)
+	}
+	return f(cfg)
+}
+
+func RegisterWatcher(name string, f WatcherFactory) {
+	mu.Lock()
+	defer mu.Unlock()
+	watchers[name] = f
+}
+
+func NewWatcher(name string, cfg map[string]string) (contract.Watcher, error) {
+	mu.RLock()
+	f, ok := watchers[name]
+	mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("iugum: unknown watcher %q", name)
 	}
 	return f(cfg)
 }
