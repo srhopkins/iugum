@@ -8,9 +8,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/srhopkins/iugum/contract"
 )
+
+// httpJobTimeout is the client timeout when the job context has no deadline.
+var httpJobTimeout = 30 * time.Second
 
 type httpEventBody struct {
 	Event  string            `json:"event"`
@@ -41,7 +45,8 @@ func HTTPPost(url string) contract.JobFunc {
 			return fmt.Errorf("iugum: http job: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		client := &http.Client{Timeout: httpJobTimeout}
+		resp, err := client.Do(req)
 		if err != nil {
 			return fmt.Errorf("iugum: http job: %w", err)
 		}

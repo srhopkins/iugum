@@ -85,6 +85,24 @@ func TestHTTPPostRespectsContext(t *testing.T) {
 	}
 }
 
+func TestHTTPPostClientTimeout(t *testing.T) {
+	old := httpJobTimeout
+	httpJobTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { httpJobTimeout = old })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	fn := HTTPPost(srv.URL)
+	err := fn(context.Background(), contract.Event{Name: "stall"})
+	if err == nil {
+		t.Fatal("want client timeout")
+	}
+}
+
 func TestHTTPPostNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusBadRequest)
