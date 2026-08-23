@@ -3,8 +3,10 @@ package hookbus
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 
+	"github.com/srhopkins/iugum/adapter/hook/httpserve"
 	"github.com/srhopkins/iugum/contract"
 	"github.com/srhopkins/iugum/plugin"
 )
@@ -15,7 +17,7 @@ func init() {
 	})
 }
 
-// Bus routes hook names to jobs. ListenHTTP is a stub.
+// Bus routes hook names to jobs.
 type Bus struct {
 	mu     sync.Mutex
 	jobs   map[string]contract.JobFunc
@@ -69,8 +71,11 @@ func (b *Bus) job(name string) contract.JobFunc {
 }
 
 func (b *Bus) ListenHTTP(addr string) error {
-	_ = addr
-	return contract.HTTPHookStub{Path: "/hooks/{name}"}
+	if addr == "" {
+		return contract.HTTPHookStub{Path: "/hooks/{name}"}
+	}
+	secret := os.Getenv("IUGUM_HOOK_SECRET")
+	return httpserve.Start(addr, secret, b.Fire)
 }
 
 // AddWorkflow registers a linear pipeline. Not a DAG. Fail stops the rest.
