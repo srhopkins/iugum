@@ -1,8 +1,8 @@
 # Contributing to iugum
 
-iugum is a yoke.
+iugum is a harness.
 iugum is one static Go program with default adapters.
-iugum has a small public contract so the yoke can hold other tools.
+iugum has a small public contract so the harness can hold other tools.
 
 Read [NORTHSTARS.md](NORTHSTARS.md) before you add a dependency or a query language.
 
@@ -15,7 +15,7 @@ After clone, run `scripts/install-hooks.sh`. Git does not install hooks for you.
 The pre-commit hook runs `scripts/public-audit.sh --staged`:
 
 - **Block:** [gitleaks](https://github.com/gitleaks/gitleaks) (keys, tokens, PEM, `.pw` files). Config: `.gitleaks.toml`.
-- **Warn:** `scripts/public-warn.patterns` (home paths, private email, LAN IPs).
+- **Warn:** `scripts/public-warn.patterns` (home paths, private email, LAN IPs). Fix the hit when it applies. Do not block the commit.
 - **Agent:** residual pass only after a WARN, or when `IUGUM_AUDIT_AGENT=1`. The agent cannot waive a gitleaks block.
 
 Install gitleaks with `brew install gitleaks`. Agents: `skills/public-audit/SKILL.md`.

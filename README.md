@@ -1,8 +1,8 @@
 # iugum
 
-**iugum** /ˈjuː.ɡum/ · *YOO-gum* — Latin for **yoke**: the bar that joins a pair so they pull as one.
+**iugum** /ˈjuː.ɡum/ · *YOO-gum* — Latin **yoke**: the bar that joins a pair so they pull as one. It is the joining piece of the **harness**.
 
-One static Go program that joins **Beads** (the issue tracker CLI, same as `bd`) and **SilverBullet** (the markdown wiki).
+This program is a harness (the industry word for the frame that holds tools and agents). It joins **Beads** (the issue tracker CLI, same as `bd`) and **SilverBullet** (the markdown wiki) in one static Go file.
 
 ## North stars
 
