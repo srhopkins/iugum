@@ -41,6 +41,8 @@ CGO_ENABLED=0 go build -o iugum .
 
 `CGO_ENABLED=0` makes a static program with no C libraries.
 
+Optional nearest-neighbor search (`embeddings.vec: true`) uses **sqlite-vec** (`modernc.org/sqlite/vec`) on linux, darwin, freebsd, netbsd, openbsd, and windows (`vec.go`). Other platforms compile `vec_stub.go` and keep cosine search in Go. Vec stays off unless embeddings are on and the vec0 probe succeeds.
+
 ## Usage
 
 Show help.
@@ -90,6 +92,7 @@ iugum observe [--port N] [--hostname ADDR]
 
 Default listen is `127.0.0.1:3848`. This port is not SilverBullet (`:3737`).
 Temperatures graph in °C. Mark lines sit at 50 / 100 / 105 °C.
+Ctrl+C or SIGTERM stops the server.
 
 ## Adapters
 
