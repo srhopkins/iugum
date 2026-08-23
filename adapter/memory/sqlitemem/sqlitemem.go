@@ -592,6 +592,9 @@ func (s *Store) Ingest(ctx context.Context, ns, text string) ([]contract.MemoryE
 			return nil, err
 		}
 	}
+	if err := s.mergeGraphNodesLocked(ctx, ns); err != nil {
+		return nil, err
+	}
 	return edges, nil
 }
 
