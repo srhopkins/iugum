@@ -48,6 +48,9 @@ func (o *Observer) QueryMetrics(_ context.Context, q contract.MetricQuery) ([]co
 		if q.Name != "" && s.Name != q.Name {
 			continue
 		}
+		if !labelsMatch(q.Labels, s.Labels) {
+			continue
+		}
 		if q.StartUS != 0 && s.TimeUS < q.StartUS {
 			continue
 		}
@@ -104,4 +107,16 @@ func (o *Observer) SearchLogs(_ context.Context, q contract.LogQuery) ([]contrac
 		}
 	}
 	return out, nil
+}
+
+func labelsMatch(want, have map[string]string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	for k, v := range want {
+		if have == nil || have[k] != v {
+			return false
+		}
+	}
+	return true
 }

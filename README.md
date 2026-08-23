@@ -8,8 +8,8 @@ Current defaults:
 
 - **Tracker — Beads.** Issue graph and CLI. Same commands as `bd`.
 - **Wiki — SilverBullet.** Markdown wiki server, embedded in this file.
-- **Metrics — memory observe.** Ingest and query time series. PromQL is the query language. SQLite is the planned store.
-- **Logs — memory observe.** Ingest and search log lines. LogQL is the query language. Same store as metrics.
+- **Metrics — observe.** `iugum observe` serves sqlite + uPlot. PromQL is the query language. Config `observe: memory` stays for tests.
+- **Logs — observe.** Same sqlite file (`observe.db`). LogQL is the query language. FTS5 word search.
 - **Policy — Casbin.** Every command hits the gate first. The default model allows all.
 - **Memory — SQLite.** Facts, FTS5 word search, optional embeddings, namespaces, and a glossary graph. Tickets stay on Dolt.
 - **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`.
@@ -79,6 +79,17 @@ There is no `serve` subcommand.
 The `wiki` command starts the server.
 
 If port `3000` is in use, pass `--port`.
+
+### Observe
+
+This starts the metrics and logs server (sqlite file + embedded graphs).
+
+```bash
+iugum observe [--port N] [--hostname ADDR]
+```
+
+Default listen is `127.0.0.1:3848`. This port is not SilverBullet (`:3737`).
+Temperatures graph in °C. Mark lines sit at 50 / 100 / 105 °C.
 
 ## Adapters
 
