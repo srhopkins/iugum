@@ -23,7 +23,7 @@ type File struct {
 	Jobs       []JobSpec   `yaml:"jobs"`
 	HookRoutes []HookRoute `yaml:"hooks"`
 	Watch      []WatchSpec `yaml:"watch"`
-	HookHTTP   string      `yaml:"hook_http"` // empty = stub, do not bind
+	HookHTTP   string      `yaml:"hook_http"` // empty = do not bind
 }
 
 // JobSpec is one cron or @triggered job. workflow is a linear step list.
