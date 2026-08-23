@@ -1,0 +1,3 @@
+# AO factory profile
+profile: ao
+test: "CGO_ENABLED=0 go build -o /tmp/iugum-check ."
