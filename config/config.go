@@ -27,12 +27,16 @@ type File struct {
 }
 
 // JobSpec is one cron or @triggered job. workflow is a linear step list.
+// after + on wire go-cron AddDependencyByName (OnSuccess, OnFailure, …).
 type JobSpec struct {
 	Name     string   `yaml:"name"`
 	Spec     string   `yaml:"spec"`
-	Kind     string   `yaml:"kind"` // empty | func | exec
+	Kind     string   `yaml:"kind"` // empty | func | exec | http
 	Command  []string `yaml:"command"`
+	URL      string   `yaml:"url"`
 	Workflow []string `yaml:"workflow"`
+	After    []string `yaml:"after"`
+	On       string   `yaml:"on"` // success | failure | skipped | complete
 }
 
 // HookRoute sends a hook name to a job.
@@ -54,10 +58,18 @@ type Embeddings struct {
 	Model   string `yaml:"model"`
 }
 
-// Graph points at the relation glossary. extractor is off or rules.
+// Graph points at the relation glossary. extractor is off, rules, or llm.
 type Graph struct {
-	Glossary  string `yaml:"glossary"`
-	Extractor string `yaml:"extractor"`
+	Glossary  string   `yaml:"glossary"`
+	Extractor string   `yaml:"extractor"`
+	LLM       GraphLLM `yaml:"llm"`
+}
+
+// GraphLLM configures chat extract when extractor is llm.
+type GraphLLM struct {
+	Kind  string `yaml:"kind"`
+	URL   string `yaml:"url"`
+	Model string `yaml:"model"`
 }
 
 // Policy points at Casbin files. Empty paths use the embedded allow-all model.
