@@ -43,7 +43,8 @@ hooks:
 watch:
   - path: ./wiki
 
-# Empty = do not bind. Reserved later: POST /hooks/{name}
+# Empty = do not bind. Set an addr to listen for POST /hooks/{name}.
+# HMAC-SHA256 uses IUGUM_HOOK_SECRET (GitHub X-Hub-Signature-256).
 hook_http: ""
 
 # Casbin (policy engine). Empty paths = embedded allow-all.

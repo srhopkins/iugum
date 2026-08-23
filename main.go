@@ -29,7 +29,7 @@ const usage = `Usage: iugum <beads|wiki|run|prepare-pr|skill>
 
   beads        work-graph slot (default: beads)
   wiki         notes-server slot (default: SilverBullet)
-  run          start jobs, file watch, and hook bus (HTTP listen is a stub)
+  run          start jobs, file watch, and optional HTTP POST /hooks/{name}
   prepare-pr   write review files; do not push
   skill run    run a skill by name (prepare-pr)
 
@@ -149,7 +149,11 @@ func runRuntime(ctx context.Context, a *app.App, cfg config.File) int {
 			_ = a.FireHook(ctx, ev)
 		}
 	}()
-	fmt.Fprintln(os.Stdout, "iugum run: jobs + watch. HTTP /hooks/{name} is reserved.")
+	if cfg.HookHTTP != "" {
+		fmt.Fprintf(os.Stdout, "iugum run: jobs + watch. HTTP POST /hooks/{name} on %s\n", cfg.HookHTTP)
+	} else {
+		fmt.Fprintln(os.Stdout, "iugum run: jobs + watch. HTTP listen off (set hook_http to bind).")
+	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig

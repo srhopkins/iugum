@@ -99,7 +99,7 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `mem/{type}/ns/{path}` | `detach` | drop a binding |
 | `mem/{type}/ns/{path}` | `grant` | reserved for later policy |
 | `hook` | `fire` | local hook |
-| `hook` | `http` | reserved webhook listen |
+| `hook` | `http` | POST /hooks/{name} when hook_http is set |
 | `schedule` | `run` | cron or adhoc job |
 
 The default Casbin model allows all. Object uses `keyMatch`, so `mem/*/ns/steve/*` is a later deny/allow rule.

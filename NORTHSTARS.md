@@ -37,7 +37,7 @@ A **skill** is a folder with `SKILL.md` plus an optional command.
 Do not invent a third word (recipe, playbook) for those two.
 
 A **job** is one run (cron, adhoc, or hook). It is not a plugin.
-A **hook** is a named event that starts a job. Local `Fire` and later HTTP `POST /hooks/{name}` use the same event.
+A **hook** is a named event that starts a job. Local `Fire` and HTTP `POST /hooks/{name}` use the same event.
 A **watch** is OS file events (fsnotify) that emit `watch.changed`.
 A **workflow** is a linear list of jobs. Fail stops the rest. A DAG is later, via go-cron `After` / `OnSuccess`, not Airflow.
 A **step** is one stage in a workflow (FTS, embed, graph).

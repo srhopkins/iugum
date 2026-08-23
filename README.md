@@ -12,7 +12,7 @@ Current defaults:
 - **Logs — memory observe.** Ingest and search log lines. LogQL is the query language. Same store as metrics.
 - **Policy — Casbin.** Every command hits the gate first. The default model allows all.
 - **Memory — SQLite.** Facts, FTS5 word search, optional embeddings, namespaces, and a glossary graph. Tickets stay on Dolt.
-- **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. File watch uses fsnotify. HTTP `/hooks/{name}` is reserved (no listen yet).
+- **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`.
 - **Ship — prepare-pr.** Writes a review markdown file and a script. Does not push. First push or `gh pr create`.
 
 More slots can join the same file. The contract stays the same.
