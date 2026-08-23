@@ -2,7 +2,18 @@
 
 **iugum** /ˈjuː.ɡum/ · *YOO-gum* — Latin **yoke**: the bar that joins a pair so they pull as one. It is the joining piece of the **harness**.
 
-This program is a harness (the industry word for the frame that holds tools and agents). It joins **Beads** (the issue tracker CLI, same as `bd`) and **SilverBullet** (the markdown wiki) in one static Go file.
+This program is a harness. It is one static Go file. Slots are replaceable. Defaults are opinionated. A config file can point a slot at another adapter or at `exec`.
+
+Current defaults:
+
+- **Tracker — Beads.** Issue graph and CLI. Same commands as `bd`.
+- **Wiki — SilverBullet.** Markdown wiki server, embedded in this file.
+- **Metrics — memory observe.** Ingest and query time series. PromQL is the query language. SQLite is the planned store.
+- **Logs — memory observe.** Ingest and search log lines. LogQL is the query language. Same store as metrics.
+- **Policy — Casbin.** Every command hits the gate first. The default model allows all.
+- **Ship — prepare-pr.** Writes a review markdown file and a script. Does not push. First push or `gh pr create`.
+
+More slots can join the same file. The contract stays the same.
 
 ## North stars
 
@@ -69,12 +80,7 @@ If port `3000` is in use, pass `--port`.
 
 ## Adapters
 
-Built-in slots: beads, SilverBullet, in-memory observe.
-A config file can put a slot to `exec` (an external program that uses the same contract).
-Casbin (policy engine) runs before each slot.
-The default policy permits all.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [iugum.example.yaml](iugum.example.yaml).
+How to swap a default: [CONTRIBUTING.md](CONTRIBUTING.md) and [iugum.example.yaml](iugum.example.yaml).
 
 After clone, run `scripts/install-hooks.sh`. The hook blocks secrets ([gitleaks](https://github.com/gitleaks/gitleaks)) and warns on personal paths.
 
