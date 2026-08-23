@@ -51,8 +51,7 @@ The person layer translates.
 The person layer does not replace these languages.
 
 The memory observer filters by name, stream, words, and time.
-PromQL and LogQL are the search syntax for agents.
-Use that syntax when the observe slot expands.
+`iugum observe` uses sqlite. PromQL and LogQL are the search syntax.
 See `iugum-9n8` — "observe: SQLite + uPlot metrics and logs in one binary".
 
 ## 3. Function first, then program size and speed

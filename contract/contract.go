@@ -120,9 +120,8 @@ type Embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-// Observer is the metrics+logs slot. Default: in-process memory until sqlite lands.
+// Observer is the metrics+logs slot. Default config is memory; iugum observe uses sqlite.
 // Agents query metrics with PromQL and logs with LogQL (see NORTHSTARS.md).
-// MetricQuery / LogQuery grow an Expr field when those parsers land.
 type Observer interface {
 	Name() string
 	IngestMetrics(ctx context.Context, samples []Sample) error
@@ -141,10 +140,13 @@ type Sample struct {
 }
 
 // MetricQuery is a time range + name filter.
+// Expr is a PromQL subset: name or name{label="v"}. The sqlite adapter parses it.
 type MetricQuery struct {
-	Name     string
-	StartUS  int64
-	EndUS    int64
+	Name      string
+	Labels    map[string]string
+	Expr      string
+	StartUS   int64
+	EndUS     int64
 	MaxPoints int
 }
 
@@ -165,9 +167,11 @@ type Log struct {
 }
 
 // LogQuery is a text + stream filter.
+// Expr is a LogQL subset: {stream="x"} or {stream="x"} |= "word".
 type LogQuery struct {
 	Stream  string
 	Text    string
+	Expr    string
 	StartUS int64
 	EndUS   int64
 	Limit   int
@@ -185,8 +189,8 @@ func (d Denied) Error() string {
 // Event is one hook payload. Local Fire and later HTTP POST /hooks/{name} use this.
 // HTTP body later: {event, delivery_id, ts, data}. HMAC-SHA256 over the raw body.
 type Event struct {
-	Name   string            // hook name: watch.changed, cron.tick, http.ingest
-	Source string            // watch | cron | hook | http
+	Name   string // hook name: watch.changed, cron.tick, http.ingest
+	Source string // watch | cron | hook | http
 	Path   string
 	Attrs  map[string]string
 }

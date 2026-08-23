@@ -35,8 +35,8 @@ Those plugins break a single static program.
    This program includes three defaults.
    The tracker is **beads**. The CLI is the same as `bd`.
    The wiki is **SilverBullet**. SilverBullet is an embedded program.
-   The observe slot is **memory** now.
-   The planned default is **sqlite + uPlot** (`iugum-9n8`).
+   The observe slot in config is **memory** (in-process).
+   `iugum observe` uses **sqlite + uPlot** (`observe: sqlite` selects that store for App).
 
    A fork that wants a different compiled stack copies `defaults/defaults.go`.
    Then edit the blank imports.
@@ -91,6 +91,7 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `wiki` | `serve` | `iugum wiki …` |
 | `observe` | `ingest` | metric/log write |
 | `observe` | `query` | metric/log read |
+| `observe` | `serve` | `iugum observe …` |
 | `ship` | `prepare` | `iugum prepare-pr` / `iugum skill run prepare-pr` |
 | `mem/{type}/ns/{path}` | `read` | recall, search, walk |
 | `mem/{type}/ns/{path}` | `write` | remember, ingest |

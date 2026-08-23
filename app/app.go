@@ -14,11 +14,11 @@ import (
 
 // App is the composition root. Every public action goes through Gate first.
 type App struct {
-	Actor    string
-	Gate     contract.Policy
-	Tracker  contract.Tracker
-	Wiki     contract.Wiki
-	Observer contract.Observer
+	Actor     string
+	Gate      contract.Policy
+	Tracker   contract.Tracker
+	Wiki      contract.Wiki
+	Observer  contract.Observer
 	Memory    contract.Memory
 	Scheduler contract.Scheduler
 	Hooks     contract.Hooks
@@ -50,11 +50,12 @@ func New(cfg config.File) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	ob, err := plugin.NewObserver(cfg.Observe, ocfg)
+	data, err := dirs.ResolveData(cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
-	data, err := dirs.ResolveData(cfg.DataDir)
+	ocfg["data_dir"] = data
+	ob, err := plugin.NewObserver(cfg.Observe, ocfg)
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +72,11 @@ func New(cfg config.File) (*App, error) {
 		vec = "true"
 	}
 	mem, err := plugin.NewMemory(memName, map[string]string{
-		"data_dir":   data,
-		"glossary":   cfg.Graph.Glossary,
-		"extractor":  cfg.Graph.Extractor,
-		"embed_kind": kind,
-		"embed_url":  cfg.Embeddings.URL,
+		"data_dir":    data,
+		"glossary":    cfg.Graph.Glossary,
+		"extractor":   cfg.Graph.Extractor,
+		"embed_kind":  kind,
+		"embed_url":   cfg.Embeddings.URL,
 		"embed_model": cfg.Embeddings.Model,
 		"vec":         vec,
 		"llm_kind":    cfg.Graph.LLM.Kind,

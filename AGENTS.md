@@ -22,8 +22,10 @@ The Beads blocks below this layout are generated. Do not rewrite those blocks fo
 | `iugum --help` | Top-level usage |
 | `iugum beads …` | In-process Beads — identical to `bd`, not `go run` |
 | `iugum wiki [space-dir]` | Embedded SilverBullet; default space `./wiki` |
+| `iugum observe` | sqlite metrics+logs + uPlot UI; default `127.0.0.1:3848` |
 
 Wiki flags: `-p` / `--port` (default `3000`), `-L` / `--hostname`. No `serve` subcommand.
+Observe flags: `--port` (default `3848`), `--hostname`. Do not bind SilverBullet `:3737`.
 
 ## Build
 

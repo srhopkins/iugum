@@ -25,16 +25,18 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <beads|wiki|run|prepare-pr|skill>
+const usage = `Usage: iugum <beads|wiki|observe|run|prepare-pr|skill>
 
   beads        work-graph slot (default: beads)
   wiki         notes-server slot (default: SilverBullet)
+  observe      metrics+logs store and graph UI (sqlite + uPlot)
   run          start jobs, file watch, and optional HTTP POST /hooks/{name}
   prepare-pr   write review files; do not push
   skill run    run a skill by name (prepare-pr)
 
   iugum beads [bd args...]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
+  iugum observe [--port N] [--hostname ADDR]
   iugum prepare-pr [--repo DIR] [--base main] [--head BRANCH] [--title T] [--body-file F]
   iugum skill run prepare-pr [same flags]
 
@@ -97,6 +99,16 @@ func run(args []string) int {
 			if ee, ok := err.(interface{ ExitCode() int }); ok {
 				return ee.ExitCode()
 			}
+			return 1
+		}
+		return 0
+	case "observe":
+		port, host, code, ok := parseObserveArgs(args[1:])
+		if !ok {
+			return code
+		}
+		if err := a.ServeObserve(ctx, port, host); err != nil {
+			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
 			return 1
 		}
 		return 0
@@ -284,4 +296,56 @@ func parseWikiArgs(args []string) (port int, host, space string, code int, ok bo
 		}
 	}
 	return port, host, space, 0, true
+}
+
+func parseObserveArgs(args []string) (port int, host string, code int, ok bool) {
+	port = 3848
+	host = "127.0.0.1"
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--help" || a == "-h":
+			fmt.Fprint(os.Stdout, usage)
+			return 0, "", 0, false
+		case a == "--port" || a == "-p":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "observe: --port requires a value")
+				return 0, "", 2, false
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				fmt.Fprintf(os.Stderr, "observe: invalid port %q\n", args[i])
+				return 0, "", 2, false
+			}
+			port = n
+		case strings.HasPrefix(a, "--port="):
+			n, err := strconv.Atoi(strings.TrimPrefix(a, "--port="))
+			if err != nil || n <= 0 || n > 65535 {
+				fmt.Fprintf(os.Stderr, "observe: invalid port %q\n", a)
+				return 0, "", 2, false
+			}
+			port = n
+		case a == "--hostname" || a == "-L":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "observe: --hostname requires a value")
+				return 0, "", 2, false
+			}
+			i++
+			host = args[i]
+		case strings.HasPrefix(a, "--hostname="):
+			host = strings.TrimPrefix(a, "--hostname=")
+			if host == "" {
+				fmt.Fprintln(os.Stderr, "observe: --hostname requires a value")
+				return 0, "", 2, false
+			}
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(os.Stderr, "observe: unknown flag %s\n", a)
+			return 0, "", 2, false
+		default:
+			fmt.Fprintf(os.Stderr, "observe: extra argument %s\n", a)
+			return 0, "", 2, false
+		}
+	}
+	return port, host, 0, true
 }

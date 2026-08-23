@@ -1,5 +1,8 @@
 # Go
 /iugum
+
+# Observe UI
+web/observe/node_modules/
 *.exe
 *.dll
 *.so
