@@ -30,6 +30,8 @@ type File struct {
 type JobSpec struct {
 	Name     string   `yaml:"name"`
 	Spec     string   `yaml:"spec"`
+	Kind     string   `yaml:"kind"` // empty | func | exec
+	Command  []string `yaml:"command"`
 	Workflow []string `yaml:"workflow"`
 }
 

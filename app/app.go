@@ -115,6 +115,7 @@ func New(cfg config.File) (*App, error) {
 		_, err := a.Ingest(ctx, "default", text)
 		return err
 	})
+	a.registerExecJobs(cfg.Jobs)
 	return a, nil
 }
 
