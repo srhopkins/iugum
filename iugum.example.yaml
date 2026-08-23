@@ -30,6 +30,12 @@ jobs:
     spec: "@triggered"
     workflow: [mem.ingest]
 
+  # kind exec runs a local command when the job fires (cron or hook).
+  # - name: backup-notes
+  #   kind: exec
+  #   spec: "@every 24h"
+  #   command: [echo, backup-complete]
+
 hooks:
   - on: watch.changed
     job: ingest-wiki
