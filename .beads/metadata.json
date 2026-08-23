@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "iugum",
+  "project_id": "a234c0d4-8421-4717-805c-99b07e3b6eb4"
+}

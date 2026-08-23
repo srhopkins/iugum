@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Global commit-msg: bead DoD + namespaced audit (factory repos only).
+set -euo pipefail
+
+MSG_FILE="${1:-}"
+SUBJECT="$(head -1 "$MSG_FILE" 2>/dev/null || true)"
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${AO_FACTORY_ROOT:-}" ]]; then
+  AO_FACTORY_ROOT="$(git config --global --get ao.factoryRoot 2>/dev/null || true)"
+fi
+if [[ -z "${AO_FACTORY_ROOT:-}" ]]; then
+  AO_FACTORY_ROOT="$(cd "$HOOK_DIR/../.." && pwd)"
+fi
+if [[ -d "$AO_FACTORY_ROOT/scripts/factory" ]]; then
+  FACTORY="$AO_FACTORY_ROOT/scripts/factory"
+else
+  FACTORY="$AO_FACTORY_ROOT/tools/factory"
+fi
+# shellcheck source=/dev/null
+source "$FACTORY/lib.sh"
+
+REPO_ROOT="$(resolve_repo_root)"
+if ! is_factory_repo "$REPO_ROOT"; then
+  exit 0
+fi
+
+export AO_FACTORY_ROOT
+"$FACTORY/check-all.sh" --subject "$SUBJECT"
