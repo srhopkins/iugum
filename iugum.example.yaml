@@ -30,10 +30,23 @@ graph:
 
 # Jobs: cron spec, @every 1h, or @triggered (adhoc / hook).
 # workflow is a linear step list. Not a DAG.
+# Optional DAG: after runs when named jobs finish (go-cron OnSuccess, etc.).
 jobs:
   - name: ingest-wiki
     spec: "@triggered"
     workflow: [mem.ingest]
+
+  # Step B runs only after step A succeeds (@triggered + after, not workflow).
+  # - name: step-a
+  #   kind: exec
+  #   spec: "@triggered"
+  #   command: [echo, step-a-done]
+  # - name: step-b
+  #   kind: exec
+  #   spec: "@triggered"
+  #   after: [step-a]
+  #   on: success
+  #   command: [echo, step-b-done]
 
   # kind exec runs a local command when the job fires (cron or hook).
   # - name: backup-notes

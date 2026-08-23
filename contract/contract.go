@@ -198,6 +198,9 @@ type JobFunc func(ctx context.Context, ev Event) error
 type Scheduler interface {
 	Name() string
 	Add(spec, jobName string, fn JobFunc) error
+	// AddAfter wires child to run when parent finishes with the given outcome.
+	// on is success, failure, skipped, or complete (maps to go-cron TriggerCondition).
+	AddAfter(childName, parentName, on string) error
 	Trigger(jobName string) error
 	Start() error
 	Stop() error

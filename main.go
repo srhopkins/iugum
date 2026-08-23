@@ -107,20 +107,9 @@ func run(args []string) int {
 }
 
 func runRuntime(ctx context.Context, a *app.App, cfg config.File) int {
-	for _, j := range cfg.Jobs {
-		if len(j.Workflow) > 0 {
-			a.Hooks.AddWorkflow(j.Name, j.Workflow)
-		}
-		spec := j.Spec
-		if spec == "" {
-			spec = "@triggered"
-		}
-		if err := a.Scheduler.Add(spec, j.Name, func(ctx context.Context, ev contract.Event) error {
-			return a.FireHook(ctx, contract.Event{Name: j.Name, Source: "cron", Path: ev.Path, Attrs: ev.Attrs})
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "schedule: %v\n", err)
-			return 1
-		}
+	if err := app.RegisterJobs(a, cfg.Jobs); err != nil {
+		fmt.Fprintf(os.Stderr, "schedule: %v\n", err)
+		return 1
 	}
 	for _, h := range cfg.HookRoutes {
 		a.Hooks.On(h.On, h.Job)
