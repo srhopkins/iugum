@@ -18,10 +18,15 @@ embeddings:
   url: ""
   model: ""
 
-# Closed relation list. Add or remove a word. extractor: rules | off
+# Closed relation list. Add or remove a word. extractor: rules | llm | off
 graph:
   glossary: glossaries/memory-graph.yaml
   extractor: rules
+  # Optional chat extract when extractor is llm. Same glossary gate as rules.
+  # llm:
+  #   kind: ollama
+  #   url: http://127.0.0.1:11434/api/chat
+  #   model: qwen3.5:4b
 
 # Jobs: cron spec, @every 1h, or @triggered (adhoc / hook).
 # workflow is a linear step list. Not a DAG.

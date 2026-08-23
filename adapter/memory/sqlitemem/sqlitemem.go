@@ -29,6 +29,21 @@ func embedderFrom(cfg map[string]string) contract.Embedder {
 	return embedhttp.Client{Kind: kind, URL: cfg["embed_url"], Model: cfg["embed_model"]}
 }
 
+func llmFrom(cfg map[string]string) graphgloss.LLMClient {
+	kind := cfg["llm_kind"]
+	if kind == "" {
+		kind = "ollama"
+	}
+	url := cfg["llm_url"]
+	if url == "" {
+		if u := cfg["embed_url"]; u != "" {
+			url = strings.Replace(u, "/api/embed", "/api/chat", 1)
+			url = strings.Replace(url, "/v1/embeddings", "/v1/chat/completions", 1)
+		}
+	}
+	return graphgloss.LLMClient{Kind: kind, URL: url, Model: cfg["llm_model"]}
+}
+
 func init() {
 	plugin.RegisterMemory("sqlite", func(cfg map[string]string) (contract.Memory, error) {
 		dir := cfg["data_dir"]
@@ -44,6 +59,7 @@ func init() {
 			Embedder:  emb,
 			Glossary:  gloss,
 			Extractor: cfg["extractor"],
+			LLM:       llmFrom(cfg),
 		})
 	})
 }
@@ -53,6 +69,7 @@ type Store struct {
 	db        *sql.DB
 	embedder  contract.Embedder
 	gloss     graphgloss.File
+	llm       graphgloss.LLMClient
 	extractor string
 	mu        sync.Mutex
 }
@@ -61,7 +78,8 @@ type Store struct {
 type Opts struct {
 	Embedder  contract.Embedder
 	Glossary  graphgloss.File
-	Extractor string // off | rules
+	LLM       graphgloss.LLMClient
+	Extractor string // off | rules | llm
 }
 
 func Open(path string, embedder contract.Embedder) (*Store, error) {
@@ -114,7 +132,7 @@ func OpenOpts(path string, opt Opts) (*Store, error) {
 	if opt.Glossary.Name == "" && len(opt.Glossary.Rels) == 0 {
 		opt.Glossary = graphgloss.Default()
 	}
-	return &Store{db: db, embedder: opt.Embedder, gloss: opt.Glossary, extractor: opt.Extractor}, nil
+	return &Store{db: db, embedder: opt.Embedder, gloss: opt.Glossary, llm: opt.LLM, extractor: opt.Extractor}, nil
 }
 
 func ensureFTS(db *sql.DB) error {
@@ -559,7 +577,16 @@ func (s *Store) Ingest(ctx context.Context, ns, text string) ([]contract.MemoryE
 	if s.extractor == "off" {
 		return nil, nil
 	}
-	edges := s.gloss.Extract(text)
+	var edges []contract.MemoryEdge
+	var err error
+	if s.extractor == "llm" {
+		edges, err = s.gloss.ExtractLLM(ctx, s.llm, text)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		edges = s.gloss.Extract(text)
+	}
 	for _, e := range edges {
 		if err := s.linkLocked(ctx, ns, e); err != nil {
 			return nil, err
