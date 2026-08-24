@@ -146,8 +146,10 @@ Examples:
 			}
 		}()
 
-		if err := ensureDirectMode("remember requires direct database access"); err != nil {
-			return HandleError("%v", err)
+		if memoryHook == nil {
+			if err := ensureDirectMode("remember requires direct database access"); err != nil {
+				return HandleError("%v", err)
+			}
 		}
 
 		insight := args[0]
@@ -240,8 +242,10 @@ Examples:
 			}
 		}()
 
-		if err := ensureDirectMode("memories requires direct database access"); err != nil {
-			return HandleError("%v", err)
+		if memoryHook == nil {
+			if err := ensureDirectMode("memories requires direct database access"); err != nil {
+				return HandleError("%v", err)
+			}
 		}
 
 		var search string
@@ -311,8 +315,10 @@ Examples:
 			}
 		}()
 
-		if err := ensureDirectMode("forget requires direct database access"); err != nil {
-			return HandleError("%v", err)
+		if memoryHook == nil {
+			if err := ensureDirectMode("forget requires direct database access"); err != nil {
+				return HandleError("%v", err)
+			}
 		}
 
 		key := args[0]
@@ -372,8 +378,10 @@ Examples:
 			}
 		}()
 
-		if err := ensureDirectMode("recall requires direct database access"); err != nil {
-			return HandleError("%v", err)
+		if memoryHook == nil {
+			if err := ensureDirectMode("recall requires direct database access"); err != nil {
+				return HandleError("%v", err)
+			}
 		}
 
 		key := args[0]

@@ -37,9 +37,18 @@ Full text and STE deviations: [NORTHSTARS.md](NORTHSTARS.md).
 
 ```bash
 CGO_ENABLED=0 go build -o iugum .
+scripts/install.sh
 ```
 
 `CGO_ENABLED=0` makes a static program with no C libraries.
+
+Install puts the binary at `~/.local/bin/iugum` and `~/bin/iugum`.
+`~/.local/bin/bd` is a shim: `remember` / `recall` / `forget` / `memories` go to iugum SQLite.
+All other `bd` commands go to Homebrew Beads (CGO + embedded Dolt).
+`bd prime` runs Homebrew first, then prints the SQLite memory list.
+
+Config: `~/.config/iugum/config.yaml` (or `./iugum.yaml`, or `IUGUM_CONFIG`).
+Data: `~/Library/Application Support/iugum` (`memory.db`, `observe.db`). Override with `data_dir` or `IUGUM_DATA`.
 
 Optional nearest-neighbor search (`embeddings.vec: true`) uses **sqlite-vec** (`modernc.org/sqlite/vec`) on linux, darwin, freebsd, netbsd, openbsd, and windows (`vec.go`). Other platforms compile `vec_stub.go` and keep cosine search in Go. Vec stays off unless embeddings are on and the vec0 probe succeeds.
 

@@ -805,11 +805,15 @@ var rootCmd = &cobra.Command{
 			"human",
 			"init",
 			"merge",
+			"memories", // MemoryHook (iugum SQLite) needs no Dolt
 			"metrics", // config-only: status/on/off/example never touch the DB
 			"onboard",
 			"powershell",
 			"prime",
 			"quickstart",
+			"recall",  // MemoryHook
+			"remember",
+			"forget",
 			metrics.SendMetricsSubcommand,
 			"setup",
 			"version",
@@ -845,6 +849,14 @@ var rootCmd = &cobra.Command{
 		// that happen to share names (e.g., "bd backup init" vs "bd init").
 		if slices.Contains(noDbCommands, cmdName) && !isSubcommand {
 			skipsStoreInit = true
+		}
+		// iugum sets BD_NAME so the cobra root is "iugum", not "bd".
+		// That makes remember look like a nested command and skip the list above.
+		if memoryHook != nil {
+			switch cmdName {
+			case "remember", "recall", "forget", "memories":
+				skipsStoreInit = true
+			}
 		}
 
 		// Skip for root command with no subcommand (just shows help)
