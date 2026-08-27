@@ -1,0 +1,276 @@
+--- a/cmd/bd/memory.go
++++ b/cmd/bd/memory.go
+@@ -16,9 +16,78 @@
+ // memoryPrefix is prepended (after kvPrefix) to all memory keys.
+ const memoryPrefix = kvkeys.MemoryPrefix
+ 
++// MemoryHook redirects remember/recall/forget/memories away from Dolt kv.memory.
++// iugum sets this to contract.Memory (SQLite).
++type MemoryHook interface {
++	Remember(key, value string) error
++	Recall(key string) (value string, ok bool, err error)
++	Forget(key string) error
++	List(query string) (map[string]string, error) // empty query = all
++}
++
++var memoryHook MemoryHook
++
++// SetMemoryHook installs an external memory backend. Nil restores Dolt kv.
++func SetMemoryHook(h MemoryHook) { memoryHook = h }
++
+ // memoryKeyFlag allows explicit key override for bd remember.
+ var memoryKeyFlag string
+ 
++func memoryGet(key string) (string, bool, error) {
++	if memoryHook != nil {
++		return memoryHook.Recall(key)
++	}
++	storageKey := kvPrefix + memoryPrefix + key
++	value, err := store.GetConfig(rootCtx, storageKey)
++	return value, value != "", err
++}
++
++func memorySet(key, value string) error {
++	if memoryHook != nil {
++		return memoryHook.Remember(key, value)
++	}
++	storageKey := kvPrefix + memoryPrefix + key
++	return store.SetConfig(rootCtx, storageKey, value)
++}
++
++func memoryDelete(key string) error {
++	if memoryHook != nil {
++		return memoryHook.Forget(key)
++	}
++	storageKey := kvPrefix + memoryPrefix + key
++	return store.DeleteConfig(rootCtx, storageKey)
++}
++
++func memoryList(search string) (map[string]string, error) {
++	if memoryHook != nil {
++		return memoryHook.List(search)
++	}
++	allConfig, err := store.GetAllConfig(rootCtx)
++	if err != nil {
++		return nil, err
++	}
++	fullPrefix := kvkeys.MemoryConfigKeyPrefix
++	memories := make(map[string]string)
++	for k, v := range allConfig {
++		if strings.HasPrefix(k, fullPrefix) {
++			userKey := strings.TrimPrefix(k, fullPrefix)
++			memories[userKey] = v
++		}
++	}
++	search = strings.ToLower(search)
++	if search != "" {
++		filtered := make(map[string]string)
++		for k, v := range memories {
++			if strings.Contains(strings.ToLower(k), search) ||
++				strings.Contains(strings.ToLower(v), search) {
++				filtered[k] = v
++			}
++		}
++		memories = filtered
++	}
++	return memories, nil
++}
++
+ // slugify converts a string to a URL-friendly slug for use as a memory key.
+ // Takes the first ~8 words, lowercases, replaces non-alphanumeric with hyphens.
+ func slugify(s string) string {
+@@ -91,7 +160,7 @@
+ 	SilenceUsage:  true,
+ 	SilenceErrors: true,
+ 	RunE: func(cmd *cobra.Command, args []string) error {
+-		if usesProxiedServer() {
++		if memoryHook == nil && usesProxiedServer() {
+ 			return HandleErrorRespectJSON("remember is not supported in proxied-server mode")
+ 		}
+ 		CheckReadonly("remember")
+@@ -103,8 +172,10 @@
+ 			}
+ 		}()
+ 
+-		if err := ensureDirectMode("remember requires direct database access"); err != nil {
+-			return HandleError("%v", err)
++		if memoryHook == nil {
++			if err := ensureDirectMode("remember requires direct database access"); err != nil {
++				return HandleError("%v", err)
++			}
+ 		}
+ 
+ 		insight := args[0]
+@@ -137,11 +208,7 @@
+ 			return HandleErrorRespectJSON("could not generate key from content; use --key to specify one")
+ 		}
+ 
+-		storageKey := kvPrefix + memoryPrefix + key
+-
+-		ctx := rootCtx
+-
+-		existing, _ := store.GetConfig(ctx, storageKey)
++		existing, _, _ := memoryGet(key)
+ 		verb := "Remembered"
+ 		if existing != "" {
+ 			verb = "Updated"
+@@ -179,7 +246,7 @@
+ 				key, insight, key)
+ 		}
+ 
+-		if err := store.SetConfig(ctx, storageKey, insight); err != nil {
++		if err := memorySet(key, insight); err != nil {
+ 			return HandleErrorRespectJSON("storing memory: %v", err)
+ 		}
+ 		commandDidWrite.Store(true)
+@@ -211,7 +278,7 @@
+ 	SilenceUsage:  true,
+ 	SilenceErrors: true,
+ 	RunE: func(cmd *cobra.Command, args []string) error {
+-		if usesProxiedServer() {
++		if memoryHook == nil && usesProxiedServer() {
+ 			return HandleErrorRespectJSON("memories is not supported in proxied-server mode")
+ 		}
+ 		evt := metrics.NewCommandEvent("memories")
+@@ -221,39 +288,19 @@
+ 			}
+ 		}()
+ 
+-		if err := ensureDirectMode("memories requires direct database access"); err != nil {
+-			return HandleError("%v", err)
+-		}
+-
+-		ctx := rootCtx
+-		allConfig, err := store.GetAllConfig(ctx)
+-		if err != nil {
+-			return HandleErrorRespectJSON("listing memories: %v", err)
+-		}
+-
+-		// Filter for kv.memory.* keys
+-		fullPrefix := kvkeys.MemoryConfigKeyPrefix
+-		memories := make(map[string]string)
+-		for k, v := range allConfig {
+-			if strings.HasPrefix(k, fullPrefix) {
+-				userKey := strings.TrimPrefix(k, fullPrefix)
+-				memories[userKey] = v
++		if memoryHook == nil {
++			if err := ensureDirectMode("memories requires direct database access"); err != nil {
++				return HandleError("%v", err)
+ 			}
+ 		}
+ 
+ 		var search string
+ 		if len(args) > 0 {
+-			search = strings.ToLower(args[0])
++			search = args[0]
+ 		}
+-		if search != "" {
+-			filtered := make(map[string]string)
+-			for k, v := range memories {
+-				if strings.Contains(strings.ToLower(k), search) ||
+-					strings.Contains(strings.ToLower(v), search) {
+-					filtered[k] = v
+-				}
+-			}
+-			memories = filtered
++		memories, err := memoryList(search)
++		if err != nil {
++			return HandleErrorRespectJSON("listing memories: %v", err)
+ 		}
+ 
+ 		if jsonOutput {
+@@ -305,7 +352,7 @@
+ 	SilenceUsage:  true,
+ 	SilenceErrors: true,
+ 	RunE: func(cmd *cobra.Command, args []string) error {
+-		if usesProxiedServer() {
++		if memoryHook == nil && usesProxiedServer() {
+ 			return HandleErrorRespectJSON("forget is not supported in proxied-server mode")
+ 		}
+ 		CheckReadonly("forget")
+@@ -317,17 +364,18 @@
+ 			}
+ 		}()
+ 
+-		if err := ensureDirectMode("forget requires direct database access"); err != nil {
+-			return HandleError("%v", err)
++		if memoryHook == nil {
++			if err := ensureDirectMode("forget requires direct database access"); err != nil {
++				return HandleError("%v", err)
++			}
+ 		}
+ 
+ 		key := args[0]
+-		storageKey := kvPrefix + memoryPrefix + key
+-
+-		ctx := rootCtx
+-
+-		existing, _ := store.GetConfig(ctx, storageKey)
+-		if existing == "" {
++		existing, ok, err := memoryGet(key)
++		if err != nil {
++			return HandleErrorRespectJSON("recalling memory: %v", err)
++		}
++		if !ok || existing == "" {
+ 			if jsonOutput {
+ 				if jerr := outputJSON(map[string]string{
+ 					"key":   key,
+@@ -341,7 +389,7 @@
+ 			return SilentExit()
+ 		}
+ 
+-		if err := store.DeleteConfig(ctx, storageKey); err != nil {
++		if err := memoryDelete(key); err != nil {
+ 			return HandleErrorRespectJSON("forgetting memory: %v", err)
+ 		}
+ 		commandDidWrite.Store(true)
+@@ -371,7 +419,7 @@
+ 	SilenceUsage:  true,
+ 	SilenceErrors: true,
+ 	RunE: func(cmd *cobra.Command, args []string) error {
+-		if usesProxiedServer() {
++		if memoryHook == nil && usesProxiedServer() {
+ 			return HandleErrorRespectJSON("recall is not supported in proxied-server mode")
+ 		}
+ 		evt := metrics.NewCommandEvent("recall")
+@@ -381,15 +429,14 @@
+ 			}
+ 		}()
+ 
+-		if err := ensureDirectMode("recall requires direct database access"); err != nil {
+-			return HandleError("%v", err)
++		if memoryHook == nil {
++			if err := ensureDirectMode("recall requires direct database access"); err != nil {
++				return HandleError("%v", err)
++			}
+ 		}
+ 
+ 		key := args[0]
+-		storageKey := kvPrefix + memoryPrefix + key
+-
+-		ctx := rootCtx
+-		value, err := store.GetConfig(ctx, storageKey)
++		value, ok, err := memoryGet(key)
+ 		if err != nil {
+ 			return HandleErrorRespectJSON("recalling memory: %v", err)
+ 		}
+@@ -398,16 +445,16 @@
+ 			if jerr := outputJSON(map[string]interface{}{
+ 				"key":   key,
+ 				"value": value,
+-				"found": value != "",
++				"found": ok && value != "",
+ 			}); jerr != nil {
+ 				return jerr
+ 			}
+-			if value == "" {
++			if !ok || value == "" {
+ 				return SilentExit()
+ 			}
+ 			return nil
+ 		}
+-		if value == "" {
++		if !ok || value == "" {
+ 			fmt.Fprintf(os.Stderr, "No memory with key %q\n", key)
+ 			return SilentExit()
+ 		}

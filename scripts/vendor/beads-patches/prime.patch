@@ -1,0 +1,17 @@
+--- a/cmd/bd/prime.go
++++ b/cmd/bd/prime.go
+@@ -424,6 +424,14 @@
+ // formatMemoriesForPrime queries memories from the k/v store and formats them for injection.
+ // Returns empty string if no memories or if store is unavailable.
+ func formatMemoriesForPrime(compact bool) string {
++	if memoryHook != nil {
++		memories, err := memoryHook.List("")
++		if err != nil || len(memories) == 0 {
++			return ""
++		}
++		maxCount, maxChars := primeMemoryCaps()
++		return renderPrimeMemories(memories, compact, maxCount, maxChars)
++	}
+ 	// Try to initialize store if not already active (prime may run before other commands)
+ 	if store == nil {
+ 		timeout := primeStoreTimeout()
