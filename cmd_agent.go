@@ -14,15 +14,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const agentUsage = `Usage: iugum agent <init|up|down|status|ls>
+const agentUsage = `Usage: iugum agent <init|up|down|status|ls|tui|acp|checkpoint>
 
   init <name>    create agent.yaml, home/, data/, probes, and starter policy
   up <name>      create the agent network and start its container
   down <name>    stop and remove the container and network
   status <name>  report whether the agent container is running
   ls             list agent directories and their status
+  tui <name>     attach an interactive OpenCode terminal
+  acp <name>     bridge OpenCode ACP over stdin and stdout
+  checkpoint <name>
+                 checkpoint and commit the agent memory database
 
-  up/down flags: --engine docker|podman|auto, --dry-run
+  up/down flags:  --engine docker|podman|auto, --dry-run
+  tui/acp flags:  --dry-run
 `
 
 const starterAgentPolicy = `# Casbin policy: subject, object, action, effect
@@ -48,6 +53,10 @@ func runAgentIO(ctx context.Context, a *app.App, args []string, stdout, stderr i
 		return runAgentStatus(ctx, a, args[1:], stdout, stderr)
 	case "ls":
 		return runAgentList(ctx, a, args[1:], stdout, stderr)
+	case "tui", "acp":
+		return runAgentAttach(ctx, a, args[0], args[1:], stdout, stderr)
+	case "checkpoint":
+		return runAgentCheckpoint(ctx, a, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "agent: unknown subcommand %s\n\n%s", args[0], agentUsage)
 		return 2
@@ -283,6 +292,140 @@ func agentRunning(engine, name string) bool {
 	cmd := exec.Command(engine, "inspect", "--format", "{{.State.Running}}", name)
 	out, err := cmd.Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func agentAttachArgv(engine, name, verb string) []string {
+	if verb == "tui" {
+		return []string{engine, "exec", "-it", name, "opencode"}
+	}
+	return []string{engine, "exec", "-i", name, "opencode", "acp"}
+}
+
+func runAgentAttach(ctx context.Context, a *app.App, verb string, args []string, stdout, stderr io.Writer) int {
+	o, ok := parseAgentLifecycleArgs(verb, args, stderr)
+	if !ok {
+		return 2
+	}
+	if o.Engine != "" {
+		fmt.Fprintf(stderr, "agent %s: --engine is not supported\n", verb)
+		return 2
+	}
+	if err := a.Check(ctx, "agent", verb); err != nil {
+		fmt.Fprintln(stderr, app.DenyMessage(err))
+		return 1
+	}
+	_, cfg, err := loadNamedAgent(o.Name)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent %s: %v\n", verb, err)
+		return 1
+	}
+	engine, err := resolveEngine("", "", o.DryRun)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent %s: %v\n", verb, err)
+		return 2
+	}
+	argv := agentAttachArgv(engine, cfg.Name, verb)
+	if o.DryRun {
+		fmt.Fprintln(stdout, strings.Join(argv, " "))
+		return 0
+	}
+	if !agentRunning(engine, cfg.Name) {
+		fmt.Fprintf(stderr, "agent %s: %s is not running\n", verb, cfg.Name)
+		return 1
+	}
+	return execArgv(argv, false)
+}
+
+func runAgentCheckpoint(ctx context.Context, a *app.App, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 || !validAgentName(args[0]) {
+		fmt.Fprintln(stderr, "Usage: iugum agent checkpoint <name>")
+		return 2
+	}
+	if err := a.Check(ctx, "agent", "checkpoint"); err != nil {
+		fmt.Fprintln(stderr, app.DenyMessage(err))
+		return 1
+	}
+	root, _, err := loadNamedAgent(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "agent checkpoint: %v\n", err)
+		return 1
+	}
+	if err := checkpointAgentMemory(root, args[0], "sqlite3", stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "agent checkpoint: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func checkpointAgentMemory(agentRoot, name, sqliteBin string, stdout, stderr io.Writer) error {
+	memoryPath := filepath.Join(agentRoot, "home", "memory.db")
+	if _, err := os.Stat(memoryPath); errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(stdout, "agent checkpoint: %s has no memory database; skipped\n", name)
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	checkpoint := exec.Command(sqliteBin, memoryPath, "PRAGMA wal_checkpoint(TRUNCATE);")
+	checkpoint.Stdout = io.Discard
+	checkpoint.Stderr = stderr
+	if err := checkpoint.Run(); err != nil {
+		return fmt.Errorf("sqlite3: %w", err)
+	}
+
+	repoRoot, err := gitOutput(filepath.Dir(agentRoot), "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("find enclosing git repo: %w", err)
+	}
+	repoRoot, err = filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		return fmt.Errorf("resolve git repo: %w", err)
+	}
+	resolvedMemory, err := filepath.EvalSymlinks(memoryPath)
+	if err != nil {
+		return fmt.Errorf("resolve memory database: %w", err)
+	}
+	relMemory, err := filepath.Rel(repoRoot, resolvedMemory)
+	if err != nil || relMemory == ".." || strings.HasPrefix(relMemory, ".."+string(os.PathSeparator)) {
+		return errors.New("memory database is outside the enclosing git repo")
+	}
+	if err := runAgentCommand(repoRoot, stderr, "git", "add", "--", relMemory); err != nil {
+		return fmt.Errorf("git add: %w", err)
+	}
+
+	changed := exec.Command("git", "diff", "--cached", "--quiet", "--", relMemory)
+	changed.Dir = repoRoot
+	if err := changed.Run(); err == nil {
+		fmt.Fprintf(stdout, "agent checkpoint: %s memory has no changes to commit\n", name)
+		return nil
+	} else {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return fmt.Errorf("git diff: %w", err)
+		}
+	}
+
+	message := fmt.Sprintf("checkpoint %s agent memory", name)
+	if err := runAgentCommand(repoRoot, stderr, "git", "commit", "--only", "-m", message, "--", relMemory); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+	fmt.Fprintf(stdout, "agent checkpoint: committed %s\n", relMemory)
+	return nil
+}
+
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func runAgentCommand(dir string, stderr io.Writer, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Stdout = stderr
+	cmd.Stderr = stderr
+	return cmd.Run()
 }
 
 func runAgentStatus(ctx context.Context, a *app.App, args []string, stdout, stderr io.Writer) int {
