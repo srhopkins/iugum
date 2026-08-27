@@ -20,7 +20,9 @@ The pre-commit hook runs `scripts/public-audit.sh --staged`:
 
 Install gitleaks with `brew install gitleaks`. Agents: `skills/public-audit/SKILL.md`.
 
-`CGO_ENABLED=0`. Do not add CGo.
+`CGO_ENABLED=0` is the target. Do not add new CGo.
+CGo is permitted in two places only: the tracker's embedded Dolt store (`beads/`, needs ICU) and the sqlite-vec path.
+The Dolt CGo is a deliberate, temporary deviation (see NORTHSTARS.md star 1). A Go-native store replaces it later.
 Do not use Go `plugin.Open` (shared-object plugins).
 Those plugins break a single static program.
 
@@ -64,7 +66,7 @@ Those plugins break a single static program.
    New functions take a `sub, obj, act` and go through the App gate.
 
 6. **Vendored trees stay in the upstream form.**
-   Edit `beads/cmd/bd` only to export `Execute`.
+   Edit `beads/cmd/bd` only to export `Execute` and to keep the memory hook. The patch set is in `scripts/vendor/beads-patches/`; re-vendor with `scripts/vendor-beads.sh <version>` (see `docs/beads-vendor.md`).
    Do not edit SilverBullet.
    Adapter wiring lives under `adapter/`, `app/`, and `main.go`.
 
@@ -119,7 +121,11 @@ Use the same `obj`/`act` strings in tests.
 ## Build
 
 ```bash
-CGO_ENABLED=0 go build -o iugum .
+scripts/build.sh --cgo      # default: CGO_ENABLED=1, embedded Dolt works (needs ICU)
+scripts/build.sh --static   # CGO_ENABLED=0, static program, beads needs server mode
 ```
+
+ICU: macOS `brew install icu4c`; Debian/Ubuntu `apt-get install libicu-dev g++ pkg-config`.
+`CGO_ENABLED=0 go build -o iugum .` must keep compiling.
 
 Run `iugum --help` and `iugum beads --help` before you open a pull request.
