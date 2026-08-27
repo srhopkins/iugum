@@ -25,10 +25,11 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <up|container|net|beads|wiki|observe|run|prepare-pr|skill>
+const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|prepare-pr|skill>
 
   up           start wiki, observe, jobs/hooks/watch, and code-server in one process
   container    build or stop the iugum image (docker or podman)
+  agent        scaffold and manage per-agent homes
   beads        work-graph slot (default: beads)
   wiki         notes-server slot (default: SilverBullet)
   observe      metrics+logs store and graph UI (sqlite + uPlot)
@@ -41,6 +42,7 @@ const usage = `Usage: iugum <up|container|net|beads|wiki|observe|run|prepare-pr|
   iugum up --container [--image IMG] [--engine docker|podman|auto] [--name N] [--detach] [--dry-run]
   iugum container build [--with LIST] [--tag T] [--engine E] [--dry-run]
   iugum container stop [--name N] [--engine E] [--dry-run]
+  iugum agent init <name>
   iugum beads [bd args...]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
   iugum observe [--port N] [--hostname ADDR]
@@ -81,6 +83,8 @@ func run(args []string) int {
 		return runUp(ctx, a, cfg, args[1:])
 	case "container":
 		return runContainer(ctx, a, cfg, args[1:])
+	case "agent":
+		return runAgent(ctx, a, args[1:])
 	case "run":
 		return runRuntime(ctx, a, cfg)
 	case "beads":
