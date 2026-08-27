@@ -26,7 +26,7 @@ type Observer struct {
 
 func New() *Observer { return &Observer{} }
 
-func (Observer) Name() string { return "memory" }
+func (*Observer) Name() string { return "memory" }
 
 func (o *Observer) IngestMetrics(_ context.Context, samples []contract.Sample) error {
 	o.mu.Lock()

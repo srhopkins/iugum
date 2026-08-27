@@ -258,7 +258,7 @@ func ensureLogFTS(db *sql.DB) error {
 	return nil
 }
 
-func (Store) Name() string { return "sqlite" }
+func (*Store) Name() string { return "sqlite" }
 
 func (s *Store) Close() error {
 	err1 := s.metrics.Close()
