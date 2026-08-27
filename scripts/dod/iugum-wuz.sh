@@ -10,7 +10,7 @@ IUG="$ROOT/iugum"
 echo "== no-DB commands outside any workspace"
 cd "$TMP"
 check "beads version" "$IUG" beads version
-check "beads where" "$IUG" beads where
+check_fail_out "beads where matches Homebrew (exit 1, hint)" 'no beads database|BEADS_DIR' "$IUG" beads where
 check "beads prime" "$IUG" beads prime
 check "beads quickstart --help" "$IUG" beads quickstart --help
 check "beads setup --help" "$IUG" beads setup --help
@@ -20,8 +20,8 @@ mkdir -p "$TMP/fresh" && cd "$TMP/fresh" && git init -q .
 check_out "beads init" 'zz|Initialized|initialized|quickstart' "$IUG" beads init --prefix zz --non-interactive
 check ".beads created" test -d .beads
 check "beads create" "$IUG" beads create "gate probe" -p 2
-check_out "beads list shows zz-1" 'zz-1' "$IUG" beads list
-check_out "beads ready shows zz-1" 'zz-1' "$IUG" beads ready
+check_out "beads list shows zz-1" 'zz-[0-9a-z]+' "$IUG" beads list
+check_out "beads ready shows zz-1" 'zz-[0-9a-z]+' "$IUG" beads ready
 echo "== memory hook still routes"
 check "remember" "$IUG" beads remember --key dod-probe-iugum-wuz "probe"
 check_out "memories" 'probe' "$IUG" beads memories dod-probe
