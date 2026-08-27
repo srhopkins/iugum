@@ -15,7 +15,7 @@ var sqlCmd = &cobra.Command{
 	Use:     "sql <query>",
 	GroupID: "maint",
 	Short:   "Execute raw SQL against the beads database",
-	Long: `Execute a raw SQL query against the underlying database (SQLite or Dolt).
+	Long: `Execute a raw SQL query against the underlying database (Dolt).
 
 Useful for debugging, maintenance, and working around bugs in higher-level commands.
 
@@ -46,6 +46,10 @@ WARNING: Direct database access bypasses the storage layer. Use with caution.`,
 		}
 		query := args[0]
 		csvOutput, _ := cmd.Flags().GetBool("csv")
+
+		if usesProxiedServer() {
+			return runSQLProxiedServer(rootCtx, query, csvOutput)
+		}
 
 		if store == nil {
 			return HandleErrorRespectJSON("no database connection available (%s)", diagHint())

@@ -17,6 +17,16 @@ The public contract must stay the same.
 
 Do not add a program that the operator must install adjacent to iugum.
 
+**Deviation (2026-08): CGO for the tracker.**
+The Beads tracker stores issues in embedded Dolt (a Go SQL database).
+That store needs CGO and the ICU C library.
+The default build is `scripts/build.sh --cgo`.
+This CGO dependency is a deliberate, temporary deviation from star 1.
+Function first (star 3): `iugum beads` must open the same database as `bd` today.
+A Go-native store replaces the Dolt store later.
+Then the default build returns to `CGO_ENABLED=0`.
+`scripts/build.sh --static` keeps the static program buildable now.
+
 ## 2. Agent-known syntax, not a local dialect
 
 Agents select tools that the agents know.

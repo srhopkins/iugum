@@ -23,6 +23,7 @@ import (
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/templates/agents"
@@ -38,10 +39,10 @@ var initCmd = &cobra.Command{
 	SilenceErrors: true,
 	Short:         "Initialize bd in the current directory",
 	Long: `Initialize bd in the current directory by creating a .beads/ directory
-and Dolt database. Optionally specify a custom issue prefix.
+and its storage (a Dolt database by default). Optionally specify a custom issue prefix.
 
-Dolt is the default (and only supported) storage backend. The legacy SQLite
-backend has been removed. Use --backend=sqlite to see migration instructions.
+Dolt is the default and only supported storage backend, with full version
+control (history, branching, sync).
 
 Use --database to specify an existing server database name, overriding the
 default prefix-based naming. This is useful when an external tool (e.g. an orchestrator)
@@ -100,7 +101,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// --force is a deprecated alias for --reinit-local. They share
 		// semantics for the local data-safety guard; both refuse remote
 		// divergence unless --discard-remote is also passed. See
-		// docs/adr/0002-init-safety-invariants.md.
+		// engdocs/adr/0002-init-safety-invariants.md.
 		if force && !reinitLocal {
 			fmt.Fprintf(os.Stderr, "%s --force is deprecated; use --reinit-local instead.\n", ui.RenderWarn("DeprecationWarning:"))
 			fmt.Fprintf(os.Stderr, "  See 'bd help init-safety' for the init flag surface.\n\n")
@@ -113,13 +114,19 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		serverConfigPath, _ := cmd.Flags().GetString("proxied-server-config-path")
 		serverLogPath, _ := cmd.Flags().GetString("proxied-server-log-path")
 		serverRootPath, _ := cmd.Flags().GetString("proxied-server-root-path")
+		serverProxyPort, _ := cmd.Flags().GetInt("proxied-server-port")
+		serverProxyIdleTimeout, _ := cmd.Flags().GetDuration("proxied-server-idle-timeout")
+		idleTimeoutSet := cmd.Flags().Changed("proxied-server-idle-timeout")
 		externalHost, _ := cmd.Flags().GetString("proxied-server-external-host")
 		externalPort, _ := cmd.Flags().GetInt("proxied-server-external-port")
 		externalSocketPath, _ := cmd.Flags().GetString("proxied-server-external-socket-path")
 		externalUser, _ := cmd.Flags().GetString("proxied-server-external-user")
 		externalTLS, _ := cmd.Flags().GetBool("proxied-server-external-tls")
+		externalTLSCACertPath, _ := cmd.Flags().GetString("proxied-server-external-tls-ca-cert-path")
 		externalTLSCertPath, _ := cmd.Flags().GetString("proxied-server-external-tls-cert-path")
 		externalTLSKeyPath, _ := cmd.Flags().GetString("proxied-server-external-tls-key-path")
+		externalTLSServerName, _ := cmd.Flags().GetString("proxied-server-external-tls-server-name")
+		externalTLSSkipVerify, _ := cmd.Flags().GetBool("proxied-server-external-tls-skip-verify")
 		externalKeepAlive, _ := cmd.Flags().GetDuration("proxied-server-external-keep-alive")
 		if os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
 			initProxiedServer = true
@@ -132,12 +139,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}()
 
-		if initProxiedServer {
-			// Proxied-server mode has no local Dolt init lifecycle yet. When it
-			// is implemented, that path must mark any local .dolt/ it creates or
-			// acknowledges with doltserver.MarkDoltDirCompatible.
-			return fmt.Errorf("--proxied-server is not yet implemented")
-		}
 		if initProxiedServer && initServerMode {
 			return fmt.Errorf("--server and --proxied-server are mutually exclusive")
 		}
@@ -180,10 +181,30 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				return fmt.Errorf("--proxied-server-root-path %v", err)
 			}
 		}
+		if serverProxyPort != 0 {
+			if !initProxiedServer {
+				return fmt.Errorf("--proxied-server-port requires --proxied-server")
+			}
+			if serverProxyPort < 1 || serverProxyPort > 65535 {
+				return fmt.Errorf("--proxied-server-port must be between 1 and 65535, got %d", serverProxyPort)
+			}
+		}
+		if idleTimeoutSet {
+			if !initProxiedServer {
+				return fmt.Errorf("--proxied-server-idle-timeout requires --proxied-server")
+			}
+			if serverProxyIdleTimeout < 0 {
+				return fmt.Errorf("--proxied-server-idle-timeout must be 0 (never) or a positive duration, got %s", serverProxyIdleTimeout)
+			}
+			if serverProxyIdleTimeout == 0 {
+				serverProxyIdleTimeout = proxy.IdleTimeoutNever
+			}
+		}
 
 		externalProvided := externalHost != "" || externalPort != 0 || externalSocketPath != "" ||
 			externalUser != "" ||
-			externalTLS || externalTLSCertPath != "" || externalTLSKeyPath != "" || externalKeepAlive != 0
+			externalTLS || externalTLSCACertPath != "" || externalTLSCertPath != "" || externalTLSKeyPath != "" ||
+			externalTLSServerName != "" || externalTLSSkipVerify || externalKeepAlive != 0
 		if externalProvided && !initProxiedServer {
 			return fmt.Errorf("--proxied-server-external-* flags require --proxied-server")
 		}
@@ -201,8 +222,11 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				Socket:          externalSocketPath,
 				User:            externalUser,
 				TLSRequired:     externalTLS,
+				TLSCACert:       externalTLSCACertPath,
 				TLSCert:         externalTLSCertPath,
 				TLSKey:          externalTLSKeyPath,
+				TLSServerName:   externalTLSServerName,
+				TLSSkipVerify:   externalTLSSkipVerify,
 				KeepAlivePeriod: externalKeepAlive,
 			}
 			if err := cfg.Validate(); err != nil {
@@ -211,22 +235,21 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			externalConfig = &cfg
 		}
 
-		// Handle --backend flag: "dolt" is the only supported backend.
-		// "sqlite" is accepted for backward compatibility but prints a
-		// deprecation notice and exits with an error.
-		if backendFlag == "sqlite" {
-			fmt.Fprintf(os.Stderr, "%s The SQLite backend has been removed.\n\n", ui.RenderWarn("⚠ DEPRECATED:"))
-			fmt.Fprintf(os.Stderr, "Dolt is now the default (and only) storage backend for beads.\n")
-			fmt.Fprintf(os.Stderr, "To initialize with Dolt:\n")
-			fmt.Fprintf(os.Stderr, "  bd init\n\n")
-			fmt.Fprintf(os.Stderr, "To import issues from an existing JSONL export:\n")
-			fmt.Fprintf(os.Stderr, "  bd init --from-jsonl\n\n")
-			fmt.Fprintf(os.Stderr, "See: https://github.com/gastownhall/beads/blob/main/docs/DOLT.md\n")
-			return fmt.Errorf("--backend=sqlite is no longer supported")
-		} else if backendFlag != "" && backendFlag != "dolt" {
-			return fmt.Errorf("unknown backend %q: only \"dolt\" is supported", backendFlag)
+		// Backend selection: Dolt is the only supported backend.
+		if !configfile.IsSupportedBackend(backendFlag) {
+			switch backendFlag {
+			case configfile.BackendPostgres, configfile.BackendMySQL:
+				return fmt.Errorf("storage backend %q is no longer supported: %s; the supported backend is \"dolt\" (default)", backendFlag, configfile.RemovedBackendRationale)
+			case configfile.BackendSQLite:
+				return fmt.Errorf("storage backend %q is no longer supported: %s; the supported backend is \"dolt\" (default)", backendFlag, configfile.RemovedSQLiteRationale)
+			}
+			return fmt.Errorf("unknown backend %q: the supported backend is \"dolt\" (default)", backendFlag)
 		}
-
+		for _, legacyFlag := range removedBackendInitFlags {
+			if cmd.Flags().Changed(legacyFlag.name) {
+				return fmt.Errorf("--%s belonged to %s: %s; use --backend=dolt (the default)", legacyFlag.name, legacyFlag.origin, legacyFlag.rationale)
+			}
+		}
 		// Validate --database format early, before any side effects.
 		if database != "" {
 			if err := dolt.ValidateDatabaseName(database); err != nil {
@@ -256,7 +279,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			return fmt.Errorf("--team requires interactive prompts and cannot be used with --non-interactive")
 		}
 
-		// Dolt is the only supported backend
+		// Dolt is the only supported backend.
 		backend := configfile.BackendDolt
 
 		// Also treat BEADS_DOLT_SERVER_MODE=1 env var as --server.
@@ -284,25 +307,27 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 
 		if initProxiedServer {
 			if err := runInitProxiedServer(cmd, rootCtx, initProxiedServerInput{
-				prefix:            prefix,
-				database:          database,
-				roleFlag:          roleFlag,
-				initRemote:        initRemote,
-				initRemoteChanged: initRemoteChanged,
-				destroyToken:      destroyToken,
-				serverConfigPath:  serverConfigPath,
-				serverLogPath:     serverLogPath,
-				serverRootPath:    serverRootPath,
-				externalConfig:    externalConfig,
-				quiet:             quiet,
-				stealth:           stealth,
-				skipHooks:         skipHooks,
-				skipAgents:        skipAgents,
-				reinitLocal:       reinitLocal,
-				contributor:       contributor,
-				team:              team,
-				fromJSONL:         fromJSONL,
-				nonInteractive:    nonInteractive,
+				prefix:                 prefix,
+				database:               database,
+				roleFlag:               roleFlag,
+				initRemote:             initRemote,
+				initRemoteChanged:      initRemoteChanged,
+				destroyToken:           destroyToken,
+				serverConfigPath:       serverConfigPath,
+				serverLogPath:          serverLogPath,
+				serverRootPath:         serverRootPath,
+				serverProxyPort:        serverProxyPort,
+				serverProxyIdleTimeout: serverProxyIdleTimeout,
+				externalConfig:         externalConfig,
+				quiet:                  quiet,
+				stealth:                stealth,
+				skipHooks:              skipHooks,
+				skipAgents:             skipAgents,
+				reinitLocal:            reinitLocal,
+				contributor:            contributor,
+				team:                   team,
+				fromJSONL:              fromJSONL,
+				nonInteractive:         nonInteractive,
 			}); err != nil {
 				return err
 			}
@@ -381,7 +406,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// --reinit-local both bypass this local-only guard; they do NOT
 		// authorize cross-boundary operations on remote history (see
 		// CheckRemoteSafety at cmd/bd/init_safety.go and
-		// docs/adr/0002-init-safety-invariants.md).
+		// engdocs/adr/0002-init-safety-invariants.md).
 		if !reinitLocal {
 			if err := checkExistingBeadsData(prefix); err != nil {
 				// --init-if-missing makes init idempotent, but ONLY for the
@@ -439,7 +464,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				} else {
 					// Non-interactive (piped input, AI agent, etc.)
 					//
-					// ADR invariant (docs/adr/0002-init-safety-invariants.md):
+					// ADR invariant (engdocs/adr/0002-init-safety-invariants.md):
 					// runtime error text must not echo a complete destructive
 					// invocation. See 'bd help init-safety' for the token
 					// format. This closes the 58f5989bf failure class where
@@ -618,8 +643,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		}
 
 		// Always create local .beads/ when using default location (CWD/.beads).
-		// The local directory is needed for metadata.json, config.yaml, .gitignore,
-		// interactions.jsonl, and hooks — regardless of where dolt data lives.
+		// The local directory is needed for metadata.json, config.yaml,
+		// .gitignore, and hooks — regardless of where dolt data lives.
 		// Only skip when BEADS_DIR explicitly points outside the project.
 		//
 		// Previous logic only created .beads/ when the dolt data dir was a
@@ -708,15 +733,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				}
 			}
 
-			// Ensure interactions.jsonl exists (append-only agent audit log)
-			interactionsPath := filepath.Join(beadsDir, "interactions.jsonl")
-			if _, err := os.Stat(interactionsPath); os.IsNotExist(err) {
-				// nolint:gosec // G306: JSONL file needs to be readable by other tools
-				if err := os.WriteFile(interactionsPath, []byte{}, 0644); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to create interactions.jsonl: %v\n", err)
-					// Non-fatal - continue anyway
-				}
-			}
 		}
 
 		// Ensure git is initialized — bd requires git for role config, sync branches,
@@ -1024,7 +1040,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				if bootstrappedFromRemote {
 					// Leave the workspace in the same finalized state the
 					// bd bootstrap sync path produces (GH#3201) so
-					// `BD_ALLOW_REMOTE_MIGRATE=1 bd migrate` and
+					// `bd migrate --force` (or BD_ALLOW_REMOTE_MIGRATE=1) and
 					// `bd dolt push` can open the cloned database.
 					fcfg := initTimeCloneConfig(initServerMode, serverHost, serverPort, serverSocket, serverUser, dbName)
 					if ferr := finalizeSyncedBootstrap(beadsDir, syncURL, fcfg, dbName); ferr != nil {
@@ -1564,8 +1580,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
-		// Auto-setup Claude hooks and Codex project integration. Skip in stealth
-		// mode or when agents are skipped.
+		// Auto-setup Claude hooks, Codex, and Cursor project integration. Skip in
+		// stealth mode or when agents are skipped.
 		if !stealth && !skipAgents && !isBareGitRepo() {
 			if err := setup.InstallClaudeProject(stealth); err != nil {
 				if !quiet {
@@ -1576,6 +1592,12 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			if err := setup.InstallCodexProject(); err != nil {
 				if !quiet {
 					fmt.Fprintf(os.Stderr, "Warning: failed to setup Codex integration: %v\n", err)
+				}
+				// Non-fatal - continue with init
+			}
+			if err := setup.InstallCursorProject(); err != nil {
+				if !quiet {
+					fmt.Fprintf(os.Stderr, "Warning: failed to setup Cursor integration: %v\n", err)
 				}
 				// Non-fatal - continue with init
 			}
@@ -1604,8 +1626,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 					claudeMdCmd := exec.Command("git", "add", "CLAUDE.md")
 					_ = claudeMdCmd.Run()
 				}
-				// Also stage Codex project integration files if created by setup
-				for _, path := range []string{".agents", ".codex"} {
+				// Also stage Codex and Cursor project integration files if created
+				// by setup. Cursor project hooks/rules are meant to be committed
+				// (a no-op git add if .cursor/ is gitignored in this repo).
+				for _, path := range []string{".agents", ".codex", ".cursor"} {
 					if _, statErr := os.Stat(path); statErr == nil {
 						codexCmd := exec.Command("git", "add", path)
 						_ = codexCmd.Run()
@@ -1616,10 +1640,11 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 					giCmd := exec.Command("git", "add", ".gitignore")
 					_ = giCmd.Run()
 				}
-				// Hooks installed by this init can call back into bd. Skip them
-				// for the bootstrap commit to avoid self-deadlocking while init
-				// still owns the embedded Dolt lock.
-				commitArgs := []string{"commit", "--no-verify", "-m", "bd init: initialize beads issue tracking"}
+				// Hooks installed by this init can call back into bd. Skip all
+				// of them for the bootstrap commit to avoid self-deadlocking
+				// while init still owns the embedded Dolt lock. --no-verify
+				// alone does not skip prepare-commit-msg.
+				commitArgs := []string{"-c", "core.hooksPath=", "commit", "--no-verify", "-m", "bd init: initialize beads issue tracking"}
 				commitCmd := exec.Command("git", commitArgs...)
 				if commitOut, commitErr := commitCmd.CombinedOutput(); commitErr != nil {
 					if !quiet && !strings.Contains(string(commitOut), "nothing to commit") {
@@ -1734,7 +1759,7 @@ func init() {
 	initCmd.Flags().Bool("stealth", false, "Enable stealth mode: global gitattributes and gitignore, no local repo tracking")
 	initCmd.Flags().Bool("setup-exclude", false, "Configure .git/info/exclude to keep beads files local (for forks)")
 	initCmd.Flags().Bool("skip-hooks", false, "Skip git hooks installation")
-	initCmd.Flags().Bool("skip-agents", false, "Skip AGENTS.md and Claude/Codex setup generation")
+	initCmd.Flags().Bool("skip-agents", false, "Skip AGENTS.md and Claude/Codex/Cursor setup generation")
 	initCmd.Flags().Bool("force", false, "Deprecated alias for --reinit-local. Bypasses only the LOCAL data-safety guard; does NOT authorize remote divergence (see 'bd help init-safety').")
 	initCmd.Flags().Bool("reinit-local", false, "Re-initialize local .beads/ over existing local data. Does NOT authorize remote divergence; see --discard-remote.")
 	initCmd.Flags().Bool("discard-remote", false, "Authorize discarding the configured remote's Dolt history when re-initializing. Requires --destroy-token in non-interactive mode; see 'bd help init-safety'.")
@@ -1750,8 +1775,16 @@ func init() {
 	initCmd.Flags().Bool("non-interactive", false, "Skip all interactive prompts (auto-detected in CI or non-TTY environments)")
 	initCmd.Flags().String("role", "", "Set beads role without prompting: \"maintainer\" or \"contributor\"")
 
-	// Backend selection (dolt is the only supported backend; sqlite accepted for deprecation notice)
-	initCmd.Flags().String("backend", "", "Storage backend (default: dolt). --backend=sqlite prints deprecation notice.")
+	// Backend selection: Dolt is the default and only supported backend.
+	initCmd.Flags().String("backend", "", "Storage backend: dolt (default). Removed backends (postgres, mysql, sqlite) print migration guidance.")
+	// Keep the short-lived removed-backend flags as hidden parser tombstones. A
+	// legacy invocation can then reach the backend rollback guidance instead of
+	// failing early with an opaque "unknown flag" error. The current backend rejects
+	// these flags explicitly above; they are never consumed as connection data.
+	for _, legacyFlag := range removedBackendInitFlags {
+		initCmd.Flags().String(legacyFlag.name, "", legacyFlag.usage)
+		_ = initCmd.Flags().MarkHidden(legacyFlag.name)
+	}
 
 	// Dolt server connection flags
 	initCmd.Flags().Bool("server", false, "Use external dolt sql-server instead of embedded engine")
@@ -1763,20 +1796,38 @@ func init() {
 	initCmd.Flags().Bool("shared-server", false, "Enable shared Dolt server mode (all projects share one server at ~/.beads/shared-server/)")
 	initCmd.Flags().Bool("external", false, "Server is externally managed (skip server startup); use with --shared-server or --server")
 	initCmd.Flags().Bool("debug", false, "Run the managed Dolt sql-server with --loglevel=debug and CPU profiling (--prof cpu). Persisted to config.yaml as dolt.debug. No effect on externally-managed servers.")
-	initCmd.Flags().Bool("proxied-server", false, "[EXPERIMENTAL] Use a per-workspace proxied dolt sql-server (proxy + child dolt) rooted at .beads/proxieddb")
+	initCmd.Flags().Bool("proxied-server", false, "[EXPERIMENTAL] Use a per-workspace proxied dolt sql-server (proxy + child dolt) rooted at .beads/dolt")
 	initCmd.Flags().String("proxied-server-config-path", "", "[EXPERIMENTAL] Absolute path to an existing dolt sql-server YAML config (proxied-server mode only). When set, bd uses this file instead of auto-generating one. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-log-path", "", "[EXPERIMENTAL] Absolute path to the proxied dolt sql-server log file (proxied-server mode only). Default: <beadsDir>/proxieddb/server.log. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-root-path", "", "[EXPERIMENTAL] Absolute directory holding the proxied dolt sql-server's lockfiles, pidfiles, and child .dolt repository (proxied-server mode only). Default: <beadsDir>/proxieddb. May not exist yet — bd will create it. Relative paths are rejected.")
+	initCmd.Flags().String("proxied-server-log-path", "", "[EXPERIMENTAL] Absolute path to the proxied dolt sql-server log file (proxied-server mode only). Default: <beadsDir>/dolt/server.log. Relative paths are rejected.")
+	initCmd.Flags().String("proxied-server-root-path", "", "[EXPERIMENTAL] Absolute directory holding the proxied dolt sql-server's lockfiles, pidfiles, and child .dolt repository (proxied-server mode only). Default: <beadsDir>/dolt. May not exist yet — bd will create it. Relative paths are rejected.")
+	initCmd.Flags().Int("proxied-server-port", 0, "[EXPERIMENTAL] Fixed TCP port for the proxy's loopback listener (proxied-server mode only). Default 0 = an OS-assigned free port. Startup fails if the port is already in use.")
+	initCmd.Flags().Duration("proxied-server-idle-timeout", 0, "[EXPERIMENTAL] Idle duration after which the proxy shuts down its loopback listener and backend (proxied-server mode only). Omit for the built-in default (30s); 0 keeps the proxy and backend alive indefinitely; a positive value sets the window.")
 	initCmd.Flags().String("proxied-server-external-host", "", "[EXPERIMENTAL] Hostname or IP of an externally-managed dolt sql-server the proxy should front (proxied-server mode only). Mutually exclusive with --proxied-server-external-socket-path.")
 	initCmd.Flags().Int("proxied-server-external-port", 0, "[EXPERIMENTAL] TCP port of the externally-managed dolt sql-server (proxied-server mode only). Required when --proxied-server-external-host is set.")
 	initCmd.Flags().String("proxied-server-external-socket-path", "", "[EXPERIMENTAL] Absolute unix socket path of the externally-managed dolt sql-server (proxied-server mode only). Mutually exclusive with --proxied-server-external-host. Relative paths are rejected.")
 	initCmd.Flags().String("proxied-server-external-user", "", "[EXPERIMENTAL] MySQL user for the externally-managed dolt sql-server (proxied-server mode only). Defaults to \"root\" when empty. Password is read at runtime from $BEADS_PROXIED_SERVER_EXTERNAL_PASSWORD and is never persisted to disk.")
 	initCmd.Flags().Bool("proxied-server-external-tls", false, "[EXPERIMENTAL] Require TLS when connecting to the externally-managed dolt sql-server (proxied-server mode only).")
+	initCmd.Flags().String("proxied-server-external-tls-ca-cert-path", "", "[EXPERIMENTAL] Absolute path to a CA certificate (PEM) used to verify the externally-managed dolt sql-server. Empty uses the system trust store. Relative paths are rejected.")
 	initCmd.Flags().String("proxied-server-external-tls-cert-path", "", "[EXPERIMENTAL] Absolute path to a client TLS certificate (for mTLS to the externally-managed dolt sql-server). Must be paired with --proxied-server-external-tls-key-path. Relative paths are rejected.")
 	initCmd.Flags().String("proxied-server-external-tls-key-path", "", "[EXPERIMENTAL] Absolute path to the client TLS private key (for mTLS to the externally-managed dolt sql-server). Must be paired with --proxied-server-external-tls-cert-path. Relative paths are rejected.")
+	initCmd.Flags().String("proxied-server-external-tls-server-name", "", "[EXPERIMENTAL] Server name to verify in the external dolt sql-server's TLS certificate. Defaults to the external host. Required with a unix socket unless --proxied-server-external-tls-skip-verify is set.")
+	initCmd.Flags().Bool("proxied-server-external-tls-skip-verify", false, "[EXPERIMENTAL] Skip TLS certificate verification for the external dolt sql-server. Insecure; testing only.")
 	initCmd.Flags().Duration("proxied-server-external-keep-alive", 0, "[EXPERIMENTAL] TCP keepalive period for the proxy→external connection. Zero uses the package default (30s).")
 
 	rootCmd.AddCommand(initCmd)
+}
+
+var removedBackendInitFlags = []struct {
+	name      string
+	usage     string
+	origin    string
+	rationale string
+}{
+	{name: "pg-url", usage: "Legacy PostgreSQL connection URL (removed backend compatibility only)", origin: "the removed PostgreSQL/MySQL initialization paths", rationale: configfile.RemovedBackendRationale},
+	{name: "pg-schema", usage: "Legacy PostgreSQL schema (removed backend compatibility only)", origin: "the removed PostgreSQL/MySQL initialization paths", rationale: configfile.RemovedBackendRationale},
+	{name: "mysql-url", usage: "Legacy MySQL connection URL (removed backend compatibility only)", origin: "the removed PostgreSQL/MySQL initialization paths", rationale: configfile.RemovedBackendRationale},
+	{name: "mysql-database", usage: "Legacy MySQL database (removed backend compatibility only)", origin: "the removed PostgreSQL/MySQL initialization paths", rationale: configfile.RemovedBackendRationale},
+	{name: "sqlite-path", usage: "Legacy SQLite database file (removed backend compatibility only)", origin: "the removed SQLite initialization path", rationale: configfile.RemovedSQLiteRationale},
 }
 
 // migrateOldDatabases detects and migrates old database files to beads.db
@@ -1867,13 +1918,32 @@ func alreadyInitialized(format string, args ...any) error {
 // A returned error that matches errWorkspaceAlreadyInitialized means a database
 // already exists (the benign, idempotent-skip case); any other error is
 // operational and must not be treated as success.
+
 func checkExistingBeadsDataAt(beadsDir string, prefix string) error {
 	// Check if .beads directory exists
 	if _, err := os.Stat(beadsDir); os.IsNotExist(err) {
 		return nil // No .beads directory, safe to init
 	}
 
-	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
+	// metadata.json is authoritative for the configured backend, so resolve it once
+	// and dispatch. Removed-backend tombstones are marked by metadata
+	// alone — there is no local Dolt directory to inspect — so a plain
+	// `bd init` (which defaults to Dolt) must not silently repoint a live SQL
+	// workspace to a fresh embedded Dolt DB and orphan its issues. --reinit-local
+	// /--force bypass this (handled by the caller). Invalid metadata must fail closed:
+	// without an explicit reinitialization request, init may not overwrite the only
+	// marker for an external or otherwise nonlocal database.
+	cfg, cfgErr := configfile.Load(beadsDir)
+	if cfgErr != nil {
+		return fmt.Errorf("failed to load %s: %w; refusing to reinitialize automatically (restore the metadata or use --reinit-local after safeguarding existing data)", configfile.ConfigPath(beadsDir), cfgErr)
+	}
+	if cfg != nil {
+		if guardErr := validateConfiguredBackend(cfg); guardErr != nil {
+			return guardErr
+		}
+	}
+
+	if cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
 		if cfg.IsDoltProxiedServerMode() {
 			proxiedRoot, rootErr := resolveProxiedServerRootPath(beadsDir)
 			if rootErr != nil {
