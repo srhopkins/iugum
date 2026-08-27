@@ -1,0 +1,12 @@
+.git
+.claude
+.beads/embeddeddolt
+web/observe/node_modules
+**/node_modules
+*.test
+iugum
+Dockerfile
+.dockerignore
+silverbullet/silverbullet
+silverbullet/target
+silverbullet/node_modules

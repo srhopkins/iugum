@@ -42,6 +42,8 @@ scripts/install.sh
 
 `CGO_ENABLED=0` makes a static program with no C libraries.
 
+Container image (`docker build -t iugum .`, with `WITH=` to pick agent CLIs): [docs/container.md](docs/container.md).
+
 Install puts the binary at `~/.local/bin/iugum` and `~/bin/iugum`.
 `~/.local/bin/bd` runs `iugum beads`. Every `bd` command is iugum.
 

@@ -41,7 +41,7 @@ EOF
 )"
 
 set +e
-cursor-agent -p "$prompt" --max-turns 2 <"$diff_txt"
+cursor-agent -p "$prompt" --output-format text --trust <"$diff_txt"
 ac=$?
 set -e
 if [[ $ac -ne 0 ]]; then
