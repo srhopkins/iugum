@@ -143,3 +143,47 @@ func TestValidAgentName(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "scout")
+	cfg := AgentFile{
+		Name:  "scout",
+		Image: "example:v1",
+		Mounts: []AgentMount{
+			{Source: "./home", Target: "/home/iugum", RO: true},
+		},
+		Network:    AgentNetwork{Name: "scout", Mode: "open"},
+		Privileges: &AgentPrivilege{CapAdd: []string{"NET_ADMIN", "SYS_PTRACE"}},
+		Startup:    AgentStartup{Restart: "unless-stopped", Env: []string{"SSH_AUTH_SOCK"}},
+	}
+	argv := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	for _, want := range []string{
+		"docker run -d",
+		"--network iugum-agent-scout",
+		"--restart unless-stopped",
+		"--user 1000:1000",
+		"/home/iugum:ro",
+		"-e SSH_AUTH_SOCK",
+		"--cap-add NET_ADMIN",
+		"--cap-add SYS_PTRACE",
+		"example:v1",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv %q lacks %q", argv, want)
+		}
+	}
+	if strings.Contains(argv, " --rm") {
+		t.Fatalf("long-lived agent argv contains --rm: %s", argv)
+	}
+}
+
+func TestAgentNetworkNameIncludesAgentName(t *testing.T) {
+	cfg := AgentFile{Name: "worker", Network: AgentNetwork{Name: "worker"}}
+	if got, want := agentNetworkName(cfg), "iugum-agent-worker"; got != want {
+		t.Fatalf("agentNetworkName() = %q, want %q", got, want)
+	}
+	cfg.Network.Name = "private"
+	if got, want := agentNetworkName(cfg), "iugum-agent-worker-private"; got != want {
+		t.Fatalf("custom agentNetworkName() = %q, want %q", got, want)
+	}
+}
