@@ -108,6 +108,10 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `container` | `run` | `iugum up --container` |
 | `container` | `build` | `iugum container build` |
 | `container` | `stop` | `iugum container stop` |
+| `agent` | `run` | `iugum agent up` |
+| `agent` | `stop` | `iugum agent down` |
+| `agent` | `status` | `iugum agent status` |
+| `agent` | `ls` | `iugum agent ls` |
 | `net` | `plan` | `iugum net plan` (render rules, no change) |
 | `net` | `apply` | `iugum net apply [--dry-run]`, `iugum up` at start |
 | `net` | `show` | `iugum net show` (live ruleset) |
