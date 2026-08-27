@@ -89,3 +89,14 @@ exec:
   tracker: []
   wiki: []
   observe: []
+
+# iugum up: one process runs wiki, observe, jobs/hooks/watch, and code-server.
+# iugum up --container runs the same inside the iugum image with docker or podman.
+container:
+  engine: auto # docker | podman | auto (first found on PATH)
+  image: iugum:latest
+  name: iugum
+  mounts: [] # extra -v HOST:CTR. The workspace and data dir mount always.
+  ports: [] # -p HOST:CTR. Empty = 3000:3000, 3848:3848, 8080:8080
+  env: [] # extra -e KEY=VALUE
+  code_server: true # false = do not start code-server on the host or in the image
