@@ -38,6 +38,28 @@ It removes the network when no container still uses it.
 Network mode `locked` is reserved for future network enforcement.
 Lifecycle commands reject it until that enforcement exists.
 
+## OpenCode access
+
+```text
+iugum agent tui scout
+iugum agent acp scout
+```
+
+`tui` runs `opencode` in the agent container with an interactive terminal.
+`acp` runs `opencode acp` as an Agent Client Protocol (ACP) JSON-RPC bridge.
+The ACP bridge uses stdin and stdout directly and does not allocate a terminal.
+Use `--dry-run` to print either container command without running it.
+
+Both commands require the agent container to be running.
+They use Docker or Podman from the current environment.
+
+## Memory checkpoint
+
+`iugum agent checkpoint scout` checkpoints `scout/home/memory.db` with host-side `sqlite3`.
+It stages only that database and commits it in the enclosing agent-homes git repo.
+It never stages the SQLite `-wal` or `-shm` files.
+The command succeeds without a commit when the database is missing or unchanged.
+
 ## agent.yaml
 
 `agent.yaml` is the single source of truth for one agent.

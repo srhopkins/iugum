@@ -46,6 +46,8 @@ const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|prepa
   iugum agent up|down <name> [--engine E] [--dry-run]
   iugum agent status <name>
   iugum agent ls
+  iugum agent tui|acp <name> [--dry-run]
+  iugum agent checkpoint <name>
   iugum beads [bd args...]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
   iugum observe [--port N] [--hostname ADDR]

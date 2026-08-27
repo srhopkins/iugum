@@ -187,3 +187,82 @@ func TestAgentNetworkNameIncludesAgentName(t *testing.T) {
 		t.Fatalf("custom agentNetworkName() = %q, want %q", got, want)
 	}
 }
+
+func TestAgentAttachArgvTTYModes(t *testing.T) {
+	tui := agentAttachArgv("docker", "scout", "tui")
+	if got, want := strings.Join(tui, " "), "docker exec -it scout opencode"; got != want {
+		t.Fatalf("tui argv = %q, want %q", got, want)
+	}
+
+	acp := agentAttachArgv("podman", "scout", "acp")
+	if got, want := strings.Join(acp, " "), "podman exec -i scout opencode acp"; got != want {
+		t.Fatalf("acp argv = %q, want %q", got, want)
+	}
+	if strings.Contains(strings.Join(acp, " "), "-it") || strings.Contains(strings.Join(acp, " "), "--tty") {
+		t.Fatalf("ACP argv allocates a tty: %v", acp)
+	}
+}
+
+func TestCheckpointAgentMemoryStagesOnlyDatabase(t *testing.T) {
+	repo := t.TempDir()
+	runGitTestCommand(t, repo, "init", "-q")
+	runGitTestCommand(t, repo, "config", "user.email", "agent-test@example.invalid")
+	runGitTestCommand(t, repo, "config", "user.name", "Agent Test")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*-wal\n*-shm\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTestCommand(t, repo, "add", ".gitignore")
+	runGitTestCommand(t, repo, "commit", "-qm", "init")
+
+	agentRoot := filepath.Join(repo, "scout")
+	home := filepath.Join(agentRoot, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(home, "memory.db"):     "database",
+		filepath.Join(home, "memory.db-wal"): "wal",
+		filepath.Join(home, "memory.db-shm"): "shm",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sqlite := filepath.Join(t.TempDir(), "sqlite3")
+	if err := os.WriteFile(sqlite, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := checkpointAgentMemory(agentRoot, "scout", sqlite, &stdout, &stderr); err != nil {
+		t.Fatalf("checkpointAgentMemory() error = %v; stderr = %s", err, stderr.String())
+	}
+	tracked := strings.Fields(runGitTestCommand(t, repo, "ls-files"))
+	if got, want := strings.Join(tracked, " "), ".gitignore scout/home/memory.db"; got != want {
+		t.Fatalf("tracked files = %q, want %q", got, want)
+	}
+	if subject := strings.TrimSpace(runGitTestCommand(t, repo, "log", "-1", "--format=%s")); subject != "checkpoint scout agent memory" {
+		t.Fatalf("checkpoint commit subject = %q", subject)
+	}
+}
+
+func TestCheckpointAgentMemorySkipsMissingDatabase(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := checkpointAgentMemory(t.TempDir(), "empty", "sqlite3", &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "skipped") {
+		t.Fatalf("missing database output = %q", stdout.String())
+	}
+}
+
+func runGitTestCommand(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}

@@ -112,6 +112,9 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `agent` | `stop` | `iugum agent down` |
 | `agent` | `status` | `iugum agent status` |
 | `agent` | `ls` | `iugum agent ls` |
+| `agent` | `tui` | `iugum agent tui` |
+| `agent` | `acp` | `iugum agent acp` |
+| `agent` | `checkpoint` | `iugum agent checkpoint` |
 | `net` | `plan` | `iugum net plan` (render rules, no change) |
 | `net` | `apply` | `iugum net apply [--dry-run]`, `iugum up` at start |
 | `net` | `show` | `iugum net show` (live ruleset) |
