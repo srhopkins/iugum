@@ -10,14 +10,14 @@ import (
 
 // File is iugum.yaml. Missing file = built-in defaults.
 type File struct {
-	Actor   string `yaml:"actor"`
-	Tracker string `yaml:"tracker"`
-	Wiki    string `yaml:"wiki"`
-	Observe    string     `yaml:"observe"`
-	Memory     string     `yaml:"memory"`
-	DataDir    string     `yaml:"data_dir"`
-	Embeddings Embeddings `yaml:"embeddings"`
-	Graph      Graph      `yaml:"graph"`
+	Actor      string      `yaml:"actor"`
+	Tracker    string      `yaml:"tracker"`
+	Wiki       string      `yaml:"wiki"`
+	Observe    string      `yaml:"observe"`
+	Memory     string      `yaml:"memory"`
+	DataDir    string      `yaml:"data_dir"`
+	Embeddings Embeddings  `yaml:"embeddings"`
+	Graph      Graph       `yaml:"graph"`
 	Policy     Policy      `yaml:"policy"`
 	Exec       Exec        `yaml:"exec"`
 	Jobs       []JobSpec   `yaml:"jobs"`
@@ -25,6 +25,7 @@ type File struct {
 	Watch      []WatchSpec `yaml:"watch"`
 	HookHTTP   string      `yaml:"hook_http"` // empty = do not bind
 	Container  Container   `yaml:"container"`
+	Network    Network     `yaml:"network"`
 }
 
 // JobSpec is one cron or @triggered job. workflow is a linear step list.
@@ -54,7 +55,7 @@ type WatchSpec struct {
 // Embeddings is the optional vector slot. Off = substring + FTS5 only.
 type Embeddings struct {
 	Enabled bool   `yaml:"enabled"`
-	Vec     bool   `yaml:"vec"` // sqlite-vec vec0 KNN; default off
+	Vec     bool   `yaml:"vec"`  // sqlite-vec vec0 KNN; default off
 	Kind    string `yaml:"kind"` // off | ollama | openai
 	URL     string `yaml:"url"`
 	Model   string `yaml:"model"`
@@ -83,9 +84,9 @@ type Policy struct {
 // Exec is the external-linkage slot. Used when tracker/wiki/observe is "exec".
 // The command must uphold the same contract as the in-process adapter.
 type Exec struct {
-	Tracker  []string `yaml:"tracker"`
-	Wiki     []string `yaml:"wiki"`
-	Observe  []string `yaml:"observe"`
+	Tracker []string `yaml:"tracker"`
+	Wiki    []string `yaml:"wiki"`
+	Observe []string `yaml:"observe"`
 }
 
 func Defaults() File {
@@ -173,4 +174,29 @@ type Container struct {
 	Ports      []string `yaml:"ports"`       // -p entries; default 3000, 3848, 8080
 	Env        []string `yaml:"env"`         // extra -e KEY=VALUE entries
 	CodeServer *bool    `yaml:"code_server"` // false = never start code-server
+}
+
+// Network is the top-level network: block. Absent block = backend off.
+// backend: auto | iptables | nftables | off. auto picks nftables when nft is on PATH.
+type Network struct {
+	Backend string     `yaml:"backend"`
+	Default NetDefault `yaml:"default"`
+	Rules   []NetRule  `yaml:"rules"`
+}
+
+// NetDefault is the chain policy per direction: allow | deny.
+type NetDefault struct {
+	In  string `yaml:"in"`
+	Out string `yaml:"out"`
+}
+
+// NetRule is one firewall rule in iugum.yaml.
+type NetRule struct {
+	Name   string `yaml:"name"`
+	Dir    string `yaml:"dir"`    // in | out
+	Proto  string `yaml:"proto"`  // tcp | udp | icmp | all
+	Port   int    `yaml:"port"`   // tcp/udp only
+	Src    string `yaml:"src"`    // IP or CIDR; empty = any
+	Dst    string `yaml:"dst"`    // IP or CIDR; empty = any
+	Action string `yaml:"action"` // allow | deny
 }

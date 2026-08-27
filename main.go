@@ -25,13 +25,14 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <up|container|beads|wiki|observe|run|prepare-pr|skill>
+const usage = `Usage: iugum <up|container|net|beads|wiki|observe|run|prepare-pr|skill>
 
   up           start wiki, observe, jobs/hooks/watch, and code-server in one process
   container    build or stop the iugum image (docker or podman)
   beads        work-graph slot (default: beads)
   wiki         notes-server slot (default: SilverBullet)
   observe      metrics+logs store and graph UI (sqlite + uPlot)
+  net          network policy: plan | apply [--dry-run] | show (iptables or nftables)
   run          start jobs, file watch, and optional HTTP POST /hooks/{name}
   prepare-pr   write review files; do not push
   skill run    run a skill by name (prepare-pr)
@@ -43,6 +44,7 @@ const usage = `Usage: iugum <up|container|beads|wiki|observe|run|prepare-pr|skil
   iugum beads [bd args...]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
   iugum observe [--port N] [--hostname ADDR]
+  iugum net plan | apply [--dry-run] | show
   iugum prepare-pr [--repo DIR] [--base main] [--head BRANCH] [--title T] [--body-file F]
   iugum skill run prepare-pr [same flags]
 
@@ -87,6 +89,8 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "net":
+		return runNet(ctx, a, args[1:])
 	case "prepare-pr":
 		return runPreparePR(ctx, a, args[1:])
 	case "skill":

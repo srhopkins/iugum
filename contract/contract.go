@@ -271,3 +271,38 @@ type HTTPHookStub struct {
 func (e HTTPHookStub) Error() string {
 	return "iugum: hook HTTP listen is a stub; reserved path " + e.Path
 }
+
+// Net is the network-policy slot. Default backends: iptables, nftables.
+// Plan renders commands and has no side effect. Apply changes the host firewall.
+// Show reads the live ruleset.
+type Net interface {
+	Name() string
+	Plan(ctx context.Context, rules NetRules) ([]string, error)
+	Apply(ctx context.Context, rules NetRules) error
+	Show(ctx context.Context) (string, error)
+}
+
+// NetRule is one firewall rule.
+// Dir is in or out. Proto is tcp, udp, icmp, or all. Action is allow or deny.
+// Port applies to tcp and udp only. Src and Dst are IPs or CIDRs; empty = any.
+type NetRule struct {
+	Name   string
+	Dir    string
+	Proto  string
+	Port   int
+	Src    string
+	Dst    string
+	Action string
+}
+
+// NetDefault is the chain policy when no rule matches. Values: allow or deny.
+type NetDefault struct {
+	In  string
+	Out string
+}
+
+// NetRules is the full rule set that a Net adapter renders.
+type NetRules struct {
+	Default NetDefault
+	Rules   []NetRule
+}
