@@ -106,6 +106,9 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `container` | `run` | `iugum up --container` |
 | `container` | `build` | `iugum container build` |
 | `container` | `stop` | `iugum container stop` |
+| `net` | `plan` | `iugum net plan` (render rules, no change) |
+| `net` | `apply` | `iugum net apply [--dry-run]`, `iugum up` at start |
+| `net` | `show` | `iugum net show` (live ruleset) |
 
 The default Casbin model allows all. Object uses `keyMatch`, so `mem/*/ns/steve/*` is a later deny/allow rule.
 Graph split words live in `glossaries/memory-graph.yaml` (same shape as the STE glossary).

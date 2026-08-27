@@ -23,6 +23,8 @@ type App struct {
 	Scheduler contract.Scheduler
 	Hooks     contract.Hooks
 	Watcher   contract.Watcher
+	Net       contract.Net // nil when network.backend is off
+	NetRules  contract.NetRules
 }
 
 func New(cfg config.File) (*App, error) {
@@ -124,6 +126,9 @@ func New(cfg config.File) (*App, error) {
 		_, err := a.Ingest(ctx, "default", text)
 		return err
 	})
+	if err := a.wireNet(cfg.Network); err != nil {
+		return nil, err
+	}
 	a.registerExecJobs(cfg.Jobs)
 	a.registerHTTPJobs(cfg.Jobs)
 	a.bindBeadsMemory()

@@ -213,7 +213,11 @@ func runUpHost(ctx context.Context, a *app.App, cfg config.File, o upOpts) int {
 		fmt.Fprintln(os.Stderr, app.DenyMessage(err))
 		return 1
 	}
-	// TODO(iugum-qps): call a.ApplyNet(ctx) here when merged
+	// Network policy runs before any port binds. Backend off = no work.
+	if err := a.ApplyNet(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, app.DenyMessage(err))
+		return 1
+	}
 	host := o.Host
 	wikiPort, err := pickPort(host, o.WikiPort)
 	if err != nil {
