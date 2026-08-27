@@ -1,6 +1,7 @@
 # iugum — agent context
 
-iugum is one static Go program (`CGO_ENABLED=0`).
+iugum is one Go program. The target is static (`CGO_ENABLED=0`).
+Today the default build is CGO for the Beads embedded Dolt store (temporary, see NORTHSTARS.md star 1).
 The program includes the Beads CLI and the SilverBullet wiki server.
 
 North stars: [NORTHSTARS.md](NORTHSTARS.md).
@@ -30,13 +31,18 @@ Observe flags: `--port` (default `3848`), `--hostname`. Do not bind SilverBullet
 ## Build
 
 ```bash
-CGO_ENABLED=0 go build -o iugum .
+scripts/build.sh --cgo      # default: CGO_ENABLED=1 + ICU flags; iugum beads opens embedded Dolt
+scripts/build.sh --static   # CGO_ENABLED=0; static; beads needs server mode
 ```
+
+Manual CGO form on macOS: `CGO_ENABLED=1 CGO_CPPFLAGS="-I$(brew --prefix icu4c)/include" CGO_LDFLAGS="-L$(brew --prefix icu4c)/lib" go build -o iugum .`
+Linux needs `libicu-dev g++ pkg-config`.
+`CGO_ENABLED=0 go build -o iugum .` must keep compiling.
 
 ## Boundaries
 
 - **Edit:** `main.go`, docs, root `go.mod`, and `beads/cmd/bd` only when exporting `Execute` for in-process beads
-- **Do not edit:** the rest of `beads/`, or `silverbullet/` (upstream trees)
+- **Do not edit:** the rest of `beads/`, or `silverbullet/` (upstream trees). The `beads/` patch set and re-vendor command live in `docs/beads-vendor.md` (`scripts/vendor-beads.sh <version>`)
 - **Beads live here** — prefix `iugum`. Feature work stays in this tracker, not `~/projects`.
 - **Remote** `srhopkins/iugum` (private). Push only when Steve says so.
 

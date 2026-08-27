@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Build the current tree and put iugum on PATH. Does not overwrite config.
+#
+#   scripts/install.sh            CGO build (embedded Dolt works). Default.
+#   scripts/install.sh --static   CGO_ENABLED=0 static build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-CGO_ENABLED=0 go build -o iugum .
+scripts/build.sh "${1:---cgo}"
 
 mkdir -p "$HOME/.local/bin" "$HOME/bin"
 cp -f iugum "$HOME/.local/bin/iugum"

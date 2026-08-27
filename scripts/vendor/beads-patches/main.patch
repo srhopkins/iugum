@@ -1,0 +1,43 @@
+--- a/cmd/bd/main.go
++++ b/cmd/bd/main.go
+@@ -868,11 +868,15 @@
+ 			"human",
+ 			"init",
+ 			"merge",
+-			"metrics", // config-only: status/on/off/example never touch the DB
++			"memories", // MemoryHook (iugum SQLite) needs no Dolt
++			"metrics",  // config-only: status/on/off/example never touch the DB
+ 			"onboard",
+ 			"powershell",
+ 			"prime",
+ 			"quickstart",
++			"recall", // MemoryHook
++			"remember",
++			"forget",
+ 			metrics.SendMetricsSubcommand,
+ 			"setup",
+ 			"version",
+@@ -913,6 +917,14 @@
+ 		if slices.Contains(noDbCommands, cmdName) && !isSubcommand {
+ 			skipsStoreInit = true
+ 		}
++		// iugum sets BD_NAME so the cobra root is "iugum", not "bd".
++		// That makes remember look like a nested command and skip the list above.
++		if memoryHook != nil {
++			switch cmdName {
++			case "remember", "recall", "forget", "memories":
++				skipsStoreInit = true
++			}
++		}
+ 
+ 		// Skip for root command with no subcommand (just shows help)
+ 		if cmd.Parent() == nil && cmdName == cmd.Use {
+@@ -1663,7 +1675,7 @@
+ 	return nil
+ }
+ 
+-func main() {
++func Execute() {
+ 	// BD_NAME overrides the binary name in help text (e.g. BD_NAME=ops makes
+ 	// "ops --help" show "ops" instead of "bd"). Useful for multi-instance
+ 	// setups where wrapper scripts set BEADS_DIR for routing.

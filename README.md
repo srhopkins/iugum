@@ -36,11 +36,26 @@ Full text and STE deviations: [NORTHSTARS.md](NORTHSTARS.md).
 ## Build and install
 
 ```bash
-CGO_ENABLED=0 go build -o iugum .
-scripts/install.sh
+scripts/build.sh --cgo      # default: CGO_ENABLED=1, embedded Dolt works
+scripts/build.sh --static   # CGO_ENABLED=0, static program
+scripts/install.sh          # builds (--cgo) and installs
 ```
 
-`CGO_ENABLED=0` makes a static program with no C libraries.
+The CGO build opens the Beads embedded Dolt database (`iugum beads list`).
+It links ICU (Unicode C library). Install ICU first:
+
+- macOS: `brew install icu4c` (the script finds the keg-only prefix).
+- Debian/Ubuntu: `sudo apt-get install libicu-dev g++ pkg-config`.
+- Fedora: `sudo dnf install libicu-devel gcc-c++`.
+
+Manual form: `CGO_ENABLED=1 CGO_CPPFLAGS="-I$(brew --prefix icu4c)/include" CGO_LDFLAGS="-L$(brew --prefix icu4c)/lib" go build -o iugum .`
+
+Bare `go vet ./...` and `go test ./...` compile the same C code.
+One-time macOS setup so they find ICU: `go env -w CGO_CPPFLAGS="-I$(brew --prefix icu4c)/include" CGO_LDFLAGS="-L$(brew --prefix icu4c)/lib"`.
+
+`--static` (`CGO_ENABLED=0`) makes a static program with no C libraries.
+In that build `iugum beads` needs Dolt server mode (`bd init --server`).
+CGO here is a deliberate, temporary deviation. See [NORTHSTARS.md](NORTHSTARS.md) star 1.
 
 Install puts the binary at `~/.local/bin/iugum` and `~/bin/iugum`.
 `~/.local/bin/bd` runs `iugum beads`. Every `bd` command is iugum.
@@ -111,5 +126,5 @@ After clone, run `scripts/install-hooks.sh`. The hook blocks secrets ([gitleaks]
 
 Install: copy `iugum` onto your `PATH`.
 Vendored upstream trees: `beads/`, `silverbullet/`.
-You can export `Execute` from `beads/cmd/bd` only.
+`beads/` carries a small patch set (package rename, `Execute` export, memory hook). See `docs/beads-vendor.md`. Re-vendor with `scripts/vendor-beads.sh <version>`.
 Feature beads live in this repo (prefix `iugum`).

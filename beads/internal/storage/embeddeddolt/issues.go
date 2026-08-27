@@ -34,6 +34,26 @@ func (s *EmbeddedDoltStore) ClaimReadyIssue(ctx context.Context, filter types.Wo
 	return claimed, err
 }
 
+// UnclaimIssue atomically unclaims an issue by clearing the assignee
+// and resetting status to "open". Records an "unclaimed" event.
+// Delegates SQL work to issueops; EmbeddedDolt auto-commits the transaction.
+func (s *EmbeddedDoltStore) UnclaimIssue(ctx context.Context, id string, actor string, force bool) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.UnclaimIssueInTx(ctx, tx, id, actor, force)
+	})
+}
+
+// UnclaimIssueIfAssignee releases a claim only while the issue is still assigned
+// to expectedAssignee (compare-and-swap, the inverse of ClaimIssue). Returns
+// storage.ErrAssigneeMismatch, leaving the issue untouched, when the current
+// assignee differs. Delegates SQL work to issueops; EmbeddedDolt auto-commits
+// the transaction.
+func (s *EmbeddedDoltStore) UnclaimIssueIfAssignee(ctx context.Context, id string, actor string, expectedAssignee string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.UnclaimIssueIfAssigneeInTx(ctx, tx, id, actor, expectedAssignee)
+	})
+}
+
 // UpdateIssue updates fields on an issue.
 // Delegates SQL work to issueops; EmbeddedDolt auto-commits the transaction.
 func (s *EmbeddedDoltStore) UpdateIssue(ctx context.Context, id string, updates map[string]interface{}, actor string) error {
