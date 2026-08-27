@@ -5,6 +5,8 @@ package defaults
 import (
 	_ "github.com/srhopkins/iugum/adapter/hook/hookbus"
 	_ "github.com/srhopkins/iugum/adapter/memory/sqlitemem"
+	_ "github.com/srhopkins/iugum/adapter/net/iptables"
+	_ "github.com/srhopkins/iugum/adapter/net/nftables"
 	_ "github.com/srhopkins/iugum/adapter/observe/execadapt"
 	_ "github.com/srhopkins/iugum/adapter/observe/memadapt"
 	_ "github.com/srhopkins/iugum/adapter/observe/sqladapt"

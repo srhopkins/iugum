@@ -89,3 +89,31 @@ exec:
   tracker: []
   wiki: []
   observe: []
+
+# Network policy (iugum net plan | apply | show). Absent block = off.
+# backend: auto | iptables | nftables | off. auto = nftables when nft is on PATH, else iptables.
+# default: chain policy per direction when no rule matches (allow | deny).
+# rules: dir in|out, proto tcp|udp|icmp|all, port (tcp/udp), src/dst IP or CIDR, action allow|deny.
+# apply needs linux + CAP_NET_ADMIN. plan and apply --dry-run only print.
+network:
+  backend: off
+  default:
+    in: deny
+    out: allow
+  rules:
+    - name: wiki-in
+      dir: in
+      proto: tcp
+      port: 3000
+      src: 203.0.113.0/24
+      action: allow
+    - name: observe-in
+      dir: in
+      proto: tcp
+      port: 3848
+      action: allow
+    - name: no-smtp-out
+      dir: out
+      proto: tcp
+      port: 25
+      action: deny

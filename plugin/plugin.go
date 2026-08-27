@@ -142,3 +142,24 @@ func NewObserver(name string, cfg map[string]string) (contract.Observer, error) 
 	}
 	return f(cfg)
 }
+
+// NetFactory builds a contract.Net adapter from a flat config map.
+type NetFactory func(cfg map[string]string) (contract.Net, error)
+
+var nets = map[string]NetFactory{}
+
+func RegisterNet(name string, f NetFactory) {
+	mu.Lock()
+	defer mu.Unlock()
+	nets[name] = f
+}
+
+func NewNet(name string, cfg map[string]string) (contract.Net, error) {
+	mu.RLock()
+	f, ok := nets[name]
+	mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("iugum: unknown net backend %q (use iptables, nftables, auto, or off)", name)
+	}
+	return f(cfg)
+}
