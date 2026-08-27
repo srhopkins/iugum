@@ -19,14 +19,15 @@ Example: schema 54 code reads `issues.lease_expires_at`; schema 55 moved that co
 
 ## Local patches
 
-The vendored tree has four changes from upstream. Everything else is upstream form.
+The vendored tree has five changes from upstream. Everything else is upstream form.
 
 1. **Package rename.** Every `beads/cmd/bd/*.go` file says `package bdcmd` instead of `package main`.
    Reason: iugum imports the CLI as a library. Only the top-level `cmd/bd` directory changes. Sub-packages (`doctor`, `protocol`, `setup`) stay as they are.
 2. **`Execute` export** (`scripts/vendor/beads-patches/main.patch`).
    `func main()` in `beads/cmd/bd/main.go` becomes `func Execute()`.
    `adapter/tracker/beadsadapt` calls it.
-   The same patch adds `memories`, `recall`, `remember`, `forget` to the no-database command list, and skips the Dolt store open for those commands when a memory hook is set.
+   The same patch adds `memories`, `recall`, `remember`, `forget` to the no-database command list.
+   It also changes the subcommand check in the root `PersistentPreRunE`. Upstream compares the parent command name with the literal `"bd"`. iugum sets `BD_NAME=iugum`, which renames the root command, so every top-level command looked nested and the no-database list never applied (`bd init` failed with "no beads database found"). The patch checks `cmd.Parent().HasParent()` instead.
 3. **Memory hook** (`scripts/vendor/beads-patches/memory.patch`).
    `beads/cmd/bd/memory.go` gets `MemoryHook`, `SetMemoryHook`, and `memoryGet` / `memorySet` / `memoryDelete` / `memoryList`.
    The `remember`, `recall`, `forget`, `memories` commands call these helpers.
@@ -66,7 +67,7 @@ Upstream moved the code the patch touches.
 
 ```sh
 UP=$(go env GOMODCACHE)/github.com/steveyegge/beads@<version>
-f=memory   # or main, prime
+f=memory   # or main, prime, where
 diff -u <(sed '1s/^package main$/package bdcmd/' "$UP/cmd/bd/$f.go") "beads/cmd/bd/$f.go" \
   | sed "1s#.*#--- a/cmd/bd/$f.go#;2s#.*#+++ b/cmd/bd/$f.go#" > "scripts/vendor/beads-patches/$f.patch"
 ```
