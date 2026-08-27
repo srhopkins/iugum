@@ -24,6 +24,7 @@ type File struct {
 	HookRoutes []HookRoute `yaml:"hooks"`
 	Watch      []WatchSpec `yaml:"watch"`
 	HookHTTP   string      `yaml:"hook_http"` // empty = do not bind
+	Container  Container   `yaml:"container"`
 }
 
 // JobSpec is one cron or @triggered job. workflow is a linear step list.
@@ -160,4 +161,16 @@ func Actor(cfg File) string {
 		return u.Username
 	}
 	return "local"
+}
+
+// Container is the `iugum up --container` block. Empty fields use the defaults below.
+// CodeServer nil or true = start code-server when the binary is on PATH.
+type Container struct {
+	Engine     string   `yaml:"engine"`      // docker | podman | auto (default auto)
+	Image      string   `yaml:"image"`       // default iugum:latest
+	Name       string   `yaml:"name"`        // default iugum
+	Mounts     []string `yaml:"mounts"`      // extra -v HOST:CTR entries
+	Ports      []string `yaml:"ports"`       // -p entries; default 3000, 3848, 8080
+	Env        []string `yaml:"env"`         // extra -e KEY=VALUE entries
+	CodeServer *bool    `yaml:"code_server"` // false = never start code-server
 }
