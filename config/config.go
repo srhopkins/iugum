@@ -24,6 +24,7 @@ type File struct {
 	HookRoutes []HookRoute `yaml:"hooks"`
 	Watch      []WatchSpec `yaml:"watch"`
 	HookHTTP   string      `yaml:"hook_http"` // empty = do not bind
+	Network    Network     `yaml:"network"`
 }
 
 // JobSpec is one cron or @triggered job. workflow is a linear step list.
@@ -160,4 +161,29 @@ func Actor(cfg File) string {
 		return u.Username
 	}
 	return "local"
+}
+
+// Network is the top-level network: block. Absent block = backend off.
+// backend: auto | iptables | nftables | off. auto picks nftables when nft is on PATH.
+type Network struct {
+	Backend string     `yaml:"backend"`
+	Default NetDefault `yaml:"default"`
+	Rules   []NetRule  `yaml:"rules"`
+}
+
+// NetDefault is the chain policy per direction: allow | deny.
+type NetDefault struct {
+	In  string `yaml:"in"`
+	Out string `yaml:"out"`
+}
+
+// NetRule is one firewall rule in iugum.yaml.
+type NetRule struct {
+	Name   string `yaml:"name"`
+	Dir    string `yaml:"dir"`    // in | out
+	Proto  string `yaml:"proto"`  // tcp | udp | icmp | all
+	Port   int    `yaml:"port"`   // tcp/udp only
+	Src    string `yaml:"src"`    // IP or CIDR; empty = any
+	Dst    string `yaml:"dst"`    // IP or CIDR; empty = any
+	Action string `yaml:"action"` // allow | deny
 }
