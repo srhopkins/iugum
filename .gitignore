@@ -24,3 +24,6 @@ go-build/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Go test binaries
+*.test

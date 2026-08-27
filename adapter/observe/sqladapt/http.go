@@ -16,8 +16,20 @@ import (
 // TempMarksC are horizontal graph lines: fan floor, VBIOS crit, emergency.
 var TempMarksC = []float64{50, 100, 105}
 
+// HandlerOptions is optional observe HTTP config.
+type HandlerOptions struct {
+	// DataDir is the iugum data root (observe-metrics.db and observe-logs.db live here). Dashboards go in
+	// DataDir/dashboards. Empty means embed-only (no save).
+	DataDir string
+}
+
 // Handler serves the embedded UI plus ingest and query.
 func Handler(ob contract.Observer) http.Handler {
+	return NewHandler(ob, HandlerOptions{})
+}
+
+// NewHandler is Handler with a data dir for on-disk dashboards.
+func NewHandler(ob contract.Observer, opt HandlerOptions) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /ingest/metrics", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -100,6 +112,9 @@ func Handler(ob contract.Observer) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"logs": logs})
 	})
+	RegisterPromHTTP(mux, ob)
+	RegisterLokiHTTP(mux, ob)
+	registerDashboardHTTP(mux, opt.DataDir)
 	mux.HandleFunc("GET /meta.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(Meta())

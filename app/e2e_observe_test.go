@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -103,6 +105,65 @@ func TestE2EObserveIngestQueryLogsHTTP(t *testing.T) {
 	}
 	if len(sqladapt.TempMarksC) != 3 {
 		t.Fatalf("mark-line metadata missing")
+	}
+
+	rangeSeries, err := a.QueryMetricRange(ctx, contract.MetricRangeQuery{
+		Expr:    "junction_c",
+		StartUS: now - 1,
+		EndUS:   now + 1,
+		StepUS:  1,
+	})
+	if err != nil || len(rangeSeries) != 1 {
+		t.Fatalf("range metrics %+v err=%v", rangeSeries, err)
+	}
+	rangeLogs, err := a.SearchLogRange(ctx, contract.LogRangeQuery{
+		Expr: `{stream="homelab"} |= "junction"`,
+	})
+	if err != nil || len(rangeLogs) != 1 {
+		t.Fatalf("range logs %+v err=%v", rangeLogs, err)
+	}
+}
+
+func TestQueryMetricRangeDenied(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.conf")
+	pol := filepath.Join(dir, "policy.csv")
+	if err := os.WriteFile(model, []byte(`[request_definition]
+r = sub, obj, act
+[policy_definition]
+p = sub, obj, act, eft
+[policy_effect]
+e = some(where (p.eft == allow))
+[matchers]
+m = (p.sub == "*" || p.sub == r.sub) && (p.obj == "*" || p.obj == r.obj || keyMatch(r.obj, p.obj)) && (p.act == "*" || p.act == r.act)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pol, []byte("p, *, tracker, *, allow\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := e2eConfig(t)
+	cfg.Observe = "sqlite"
+	cfg.Policy.Model = model
+	cfg.Policy.Policy = pol
+	a := newE2EApp(t, cfg)
+	_, err := a.QueryMetricRange(context.Background(), contract.MetricRangeQuery{Expr: "cpu_c"})
+	if err == nil {
+		t.Fatal("want policy deny")
+	}
+	if _, ok := err.(contract.Denied); !ok {
+		t.Fatalf("want Denied, got %T: %v", err, err)
+	}
+	_, err = a.SearchLogRange(context.Background(), contract.LogRangeQuery{Expr: `{stream="x"}`})
+	if _, ok := err.(contract.Denied); !ok {
+		t.Fatalf("want Denied on logs, got %T: %v", err, err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/query", bytes.NewReader([]byte("query=cpu_c")))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	a.ObserveHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("prom query status %d %s", rr.Code, rr.Body.String())
 	}
 }
 

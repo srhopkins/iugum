@@ -22,7 +22,8 @@ func init() {
 }
 
 // Observer is an external helper. Protocol: argv verb, JSON stdin, JSON stdout.
-// Verbs: ingest-metrics, query-metrics, ingest-logs, search-logs.
+// Verbs: ingest-metrics, query-metrics, query-metric-range,
+// ingest-logs, search-logs, search-log-range.
 type Observer struct{ cmd []string }
 
 func (Observer) Name() string { return "exec" }
@@ -39,6 +40,14 @@ func (o Observer) QueryMetrics(ctx context.Context, q contract.MetricQuery) ([]c
 	return out, nil
 }
 
+func (o Observer) QueryMetricRange(ctx context.Context, q contract.MetricRangeQuery) ([]contract.Series, error) {
+	var out []contract.Series
+	if err := o.call(ctx, "query-metric-range", q, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (o Observer) IngestLogs(ctx context.Context, recs []contract.Log) error {
 	return o.call(ctx, "ingest-logs", recs, nil)
 }
@@ -46,6 +55,14 @@ func (o Observer) IngestLogs(ctx context.Context, recs []contract.Log) error {
 func (o Observer) SearchLogs(ctx context.Context, q contract.LogQuery) ([]contract.Log, error) {
 	var out []contract.Log
 	if err := o.call(ctx, "search-logs", q, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (o Observer) SearchLogRange(ctx context.Context, q contract.LogRangeQuery) ([]contract.Log, error) {
+	var out []contract.Log
+	if err := o.call(ctx, "search-log-range", q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
