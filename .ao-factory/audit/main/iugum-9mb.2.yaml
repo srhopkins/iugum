@@ -1,0 +1,8 @@
+bead: iugum-9mb.2
+namespace: main
+search_query: "Dockerfile ARG OPENCODE VERSION pin sqlite3 runtime package"
+candidates: []
+associated_issues: none
+duplicate_issues: none
+checked_at: 2026-08-27T23:27:08Z
+written_by: ayo-related-set
