@@ -9,6 +9,7 @@
 #                       0 makes a static program with no C libraries.
 #   GO_VERSION          Go toolchain tag for the builder stage.
 #   CODE_SERVER_VERSION code-server release to install when WITH has code-server.
+#   OPENCODE_VERSION    opencode-ai npm package version when WITH has opencode.
 #
 # Examples:
 #   docker build -t iugum .
@@ -20,6 +21,7 @@
 
 ARG GO_VERSION=1.26.5
 ARG CODE_SERVER_VERSION=4.134.0
+ARG OPENCODE_VERSION=1.18.23
 ARG SILVERBULLET_VERSION=2.10.0
 
 # --- silverbullet -----------------------------------------------------------
@@ -73,13 +75,15 @@ FROM debian:13-slim
 ARG WITH=all
 ARG CGO_ENABLED=1
 ARG CODE_SERVER_VERSION
+ARG OPENCODE_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Base packages. libicu76 is the ICU runtime that a CGO build links against.
 # It is small and always installed, so one runtime stage serves both builds.
+# sqlite3 is needed for agent checkpoint WAL work inside the container.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends \
+    apt-get install -y --no-install-recommends sqlite3 \
         ca-certificates curl git jq less libicu76 procps ripgrep tzdata; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 
@@ -116,11 +120,11 @@ RUN set -eux; \
     mkdir -p /workspace /data; \
     chown 1000:1000 /workspace /data
 
-# npm CLIs.
+# npm CLIs. opencode is pinned via OPENCODE_VERSION (npm semver, no v prefix).
 RUN set -eu; \
     if grep -qx claude   /etc/iugum-with; then npm i -g @anthropic-ai/claude-code; fi; \
     if grep -qx codex    /etc/iugum-with; then npm i -g @openai/codex; fi; \
-    if grep -qx opencode /etc/iugum-with; then npm i -g opencode-ai; fi; \
+    if grep -qx opencode /etc/iugum-with; then npm i -g "opencode-ai@${OPENCODE_VERSION}"; fi; \
     if grep -qxE 'claude|codex|opencode' /etc/iugum-with; then \
       npm cache clean --force; rm -rf /root/.npm; \
     fi
@@ -155,7 +159,8 @@ LABEL org.opencontainers.image.source="https://github.com/srhopkins/iugum" \
       org.opencontainers.image.description="iugum with agent CLIs selected by the WITH build arg" \
       iugum.with="${WITH}" \
       iugum.cgo="${CGO_ENABLED}" \
-      iugum.code_server_version="${CODE_SERVER_VERSION}"
+      iugum.code_server_version="${CODE_SERVER_VERSION}" \
+      iugum.opencode_version="${OPENCODE_VERSION}"
 
 ENV IUGUM_DATA=/data \
     HOME=/home/iugum \
