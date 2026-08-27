@@ -102,6 +102,10 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `hook` | `fire` | local hook |
 | `hook` | `http` | POST /hooks/{name} when hook_http is set |
 | `schedule` | `run` | cron or adhoc job |
+| `service` | `serve` | `iugum up` host mode start |
+| `container` | `run` | `iugum up --container` |
+| `container` | `build` | `iugum container build` |
+| `container` | `stop` | `iugum container stop` |
 
 The default Casbin model allows all. Object uses `keyMatch`, so `mem/*/ns/steve/*` is a later deny/allow rule.
 Graph split words live in `glossaries/memory-graph.yaml` (same shape as the STE glossary).
