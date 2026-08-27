@@ -78,13 +78,33 @@ docker run --rm -p 8080:8080 -v "$PWD:/workspace" --entrypoint code-server iugum
 
 Mounted files must be writable by uid 1000, or pass `--user "$(id -u):$(id -g)"`.
 
+## iugum up
+
+`iugum up` is the one-command form of the table above.
+
+```bash
+# Host: start wiki (3000), observe (3848), jobs/hooks/watch, and code-server (8080) in one process.
+iugum up
+
+# Container: same services inside the image. Mounts $PWD at /workspace and the data dir at /data.
+iugum up --container [--image iugum:latest] [--engine docker|podman|auto] [--detach]
+
+# Print the engine command and stop.
+iugum up --container --dry-run
+
+# Build the image from this repo with only the CLIs you want.
+iugum container build --with claude,code-server
+```
+
+Before any port binds, `iugum up` applies the `network:` block through `iugum net apply` (see `iugum.example.yaml`). Every step passes the Casbin gate: `service/serve`, `container/run`, `container/build`, `net/apply`.
+
 ## Host or container
 
 Both run the same program.
 
 | | Host | Container |
 |-|------|-----------|
-| Install | `CGO_ENABLED=0 go build -o iugum .` then `scripts/install.sh` | `docker build -t iugum .` |
+| Install | `scripts/build.sh --cgo` then `scripts/install.sh` | `docker build -t iugum .` or `iugum container build` |
 | Data dir | `~/Library/Application Support/iugum` or `IUGUM_DATA` | `/data` (`IUGUM_DATA`) |
 | Agent CLIs | Whatever you install on the host | Only the `WITH` items |
 | Embedded Dolt | Needs a CGO build on the host | `CGO_ENABLED=1` (default) |
