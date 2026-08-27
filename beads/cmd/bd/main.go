@@ -898,7 +898,11 @@ var rootCmd = &cobra.Command{
 
 		// Check both the command name and parent command name for subcommands
 		cmdName := cmd.Name()
-		isSubcommand := cmd.Parent() != nil && cmd.Parent().Name() != "bd"
+		// A command is a subcommand when its parent is not the root command.
+		// Compare against the root, not the literal "bd": BD_NAME renames the
+		// root (iugum sets BD_NAME=iugum), and a name compare then marks every
+		// top-level command as nested and skips the noDbCommands list.
+		isSubcommand := cmd.Parent() != nil && cmd.Parent().HasParent()
 		skipsStoreInit := false
 		if cmd.Parent() != nil {
 			parentName := cmd.Parent().Name()
@@ -916,14 +920,6 @@ var rootCmd = &cobra.Command{
 		// that happen to share names (e.g., "bd backup init" vs "bd init").
 		if slices.Contains(noDbCommands, cmdName) && !isSubcommand {
 			skipsStoreInit = true
-		}
-		// iugum sets BD_NAME so the cobra root is "iugum", not "bd".
-		// That makes remember look like a nested command and skip the list above.
-		if memoryHook != nil {
-			switch cmdName {
-			case "remember", "recall", "forget", "memories":
-				skipsStoreInit = true
-			}
 		}
 
 		// Skip for root command with no subcommand (just shows help)
