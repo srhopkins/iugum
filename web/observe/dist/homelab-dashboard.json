@@ -1,0 +1,287 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "homelab",
+    "project": "iugum",
+    "createdAt": "2026-08-24T00:00:00Z",
+    "updatedAt": "2026-08-24T00:00:00Z",
+    "version": 1
+  },
+  "spec": {
+    "display": {
+      "name": "homelab",
+      "description": "MI50 + VII junction/edge/mem in °C, SYS_FAN1 + VII fan RPM, LogQL {stream=\"homelab\"}."
+    },
+    "duration": "1h",
+    "refreshInterval": "0s",
+    "variables": [],
+    "panels": {
+      "mi50Temps": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "MI50 °C",
+            "description": "junction / edge / mem. Marks at 50 / 100 / 105 °C."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": { "position": "bottom", "mode": "list", "size": "small" },
+              "yAxis": {
+                "show": true,
+                "label": "°C",
+                "min": 0,
+                "max": 110,
+                "format": { "unit": "celsius", "decimalPlaces": 1 }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": 50, "name": "50 °C", "color": "#e6a817" },
+                  { "value": 100, "name": "100 °C", "color": "#e6553f" },
+                  { "value": 105, "name": "105 °C", "color": "#8b1a1a" }
+                ]
+              },
+              "visual": { "display": "line", "lineWidth": 1.5, "connectNulls": true }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "junction_c{gpu=\"mi50\"}",
+                    "seriesNameFormat": "junction",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "edge_c{gpu=\"mi50\"}",
+                    "seriesNameFormat": "edge",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "mem_c{gpu=\"mi50\"}",
+                    "seriesNameFormat": "mem",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "viiTemps": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "VII °C",
+            "description": "junction / edge / mem. Marks at 50 / 100 / 105 °C."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": { "position": "bottom", "mode": "list", "size": "small" },
+              "yAxis": {
+                "show": true,
+                "label": "°C",
+                "min": 0,
+                "max": 110,
+                "format": { "unit": "celsius", "decimalPlaces": 1 }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": 50, "name": "50 °C", "color": "#e6a817" },
+                  { "value": 100, "name": "100 °C", "color": "#e6553f" },
+                  { "value": 105, "name": "105 °C", "color": "#8b1a1a" }
+                ]
+              },
+              "visual": { "display": "line", "lineWidth": 1.5, "connectNulls": true }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "junction_c{gpu=\"vii\"}",
+                    "seriesNameFormat": "junction",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "edge_c{gpu=\"vii\"}",
+                    "seriesNameFormat": "edge",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "mem_c{gpu=\"vii\"}",
+                    "seriesNameFormat": "mem",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fans": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Fans RPM",
+            "description": "SYS_FAN1 (nct6795) and VII onboard blower."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": { "position": "bottom", "mode": "list", "size": "small" },
+              "yAxis": {
+                "show": true,
+                "label": "RPM",
+                "min": 0,
+                "format": { "unit": "decimal", "decimalPlaces": 0 }
+              },
+              "visual": { "display": "line", "lineWidth": 1.5, "connectNulls": true }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "fan_rpm{header=\"SYS_FAN1\"}",
+                    "seriesNameFormat": "SYS_FAN1",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "fan_rpm{gpu=\"vii\"}",
+                    "seriesNameFormat": "VII",
+                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "homelabLogs": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "homelab logs",
+            "description": "LogQL {stream=\"homelab\"}."
+          },
+          "plugin": {
+            "kind": "LogsTable",
+            "spec": {
+              "allowWrap": true,
+              "showTime": true
+            }
+          },
+          "queries": [
+            {
+              "kind": "LogQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "LokiLogQuery",
+                  "spec": {
+                    "query": "{stream=\"homelab\"}",
+                    "direction": "backward",
+                    "datasource": { "kind": "LokiDatasource", "name": "loki" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "homelab",
+            "collapse": { "open": true }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": { "$ref": "#/spec/panels/mi50Temps" }
+            },
+            {
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "content": { "$ref": "#/spec/panels/viiTemps" }
+            },
+            {
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 7,
+              "content": { "$ref": "#/spec/panels/fans" }
+            },
+            {
+              "x": 12,
+              "y": 8,
+              "width": 12,
+              "height": 7,
+              "content": { "$ref": "#/spec/panels/homelabLogs" }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+bead: iugum-9n8.1
+namespace: main
+search_query: "observe CLI graceful SIGINT SIGTERM shutdown"
+candidates: []
+associated_issues: none
+duplicate_issues: none
+checked_at: 2026-08-23T19:10:55Z
+written_by: ayo-related-set

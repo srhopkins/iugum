@@ -19,6 +19,12 @@ import (
 	"github.com/srhopkins/iugum/plugin"
 )
 
+const (
+	metricsFile = "observe-metrics.db"
+	logsFile    = "observe-logs.db"
+	legacyFile  = "observe.db"
+)
+
 func init() {
 	plugin.RegisterObserver("sqlite", func(cfg map[string]string) (contract.Observer, error) {
 		dir := cfg["data_dir"]
@@ -32,23 +38,69 @@ func init() {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
 		}
-		return Open(filepath.Join(dir, "observe.db"))
+		return OpenDir(dir)
 	})
 }
 
-// Store is metrics + logs in one SQLite file (observe.db).
+// Store is metrics and logs in two SQLite files (observe-metrics.db, observe-logs.db).
 type Store struct {
-	db *sql.DB
-	mu sync.Mutex
+	metrics   *sql.DB
+	logs      *sql.DB
+	metricsMu sync.Mutex
+	logsMu    sync.Mutex
 }
 
+// Open treats a .db path as its parent directory, then opens the split files.
 func Open(path string) (*Store, error) {
+	dir := path
+	if strings.HasSuffix(strings.ToLower(path), ".db") {
+		dir = filepath.Dir(path)
+	}
+	return OpenDir(dir)
+}
+
+func OpenDir(dir string) (*Store, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := migrateLegacy(dir); err != nil {
+		return nil, err
+	}
+	metrics, err := openFile(filepath.Join(dir, metricsFile), metricsSchema)
+	if err != nil {
+		return nil, err
+	}
+	logsDB, err := openFile(filepath.Join(dir, logsFile), logsSchema)
+	if err != nil {
+		_ = metrics.Close()
+		return nil, err
+	}
+	if err := ensureLogFTS(logsDB); err != nil {
+		_ = metrics.Close()
+		_ = logsDB.Close()
+		return nil, err
+	}
+	return &Store{metrics: metrics, logs: logsDB}, nil
+}
+
+func openFile(path, schema string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+const metricsSchema = `
 		CREATE TABLE IF NOT EXISTS samples (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
@@ -57,6 +109,9 @@ func Open(path string) (*Store, error) {
 			time_us INTEGER NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS samples_name_time ON samples(name, time_us);
+`
+
+const logsSchema = `
 		CREATE TABLE IF NOT EXISTS logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			time_us INTEGER NOT NULL,
@@ -66,15 +121,117 @@ func Open(path string) (*Store, error) {
 			attrs TEXT NOT NULL DEFAULT '{}'
 		);
 		CREATE INDEX IF NOT EXISTS logs_stream_time ON logs(stream, time_us);
-	`); err != nil {
-		_ = db.Close()
-		return nil, err
+`
+
+func migrateLegacy(dir string) error {
+	old := filepath.Join(dir, legacyFile)
+	if _, err := os.Stat(old); err != nil {
+		return nil
 	}
-	if err := ensureLogFTS(db); err != nil {
-		_ = db.Close()
-		return nil, err
+	if fileExists(filepath.Join(dir, metricsFile)) && fileExists(filepath.Join(dir, logsFile)) {
+		return nil
 	}
-	return &Store{db: db}, nil
+	src, err := sql.Open("sqlite", old)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	src.SetMaxOpenConns(1)
+
+	metrics, err := openFile(filepath.Join(dir, metricsFile), metricsSchema)
+	if err != nil {
+		return err
+	}
+	if err := copySamples(src, metrics); err != nil {
+		_ = metrics.Close()
+		return err
+	}
+	_ = metrics.Close()
+
+	logsDB, err := openFile(filepath.Join(dir, logsFile), logsSchema)
+	if err != nil {
+		return err
+	}
+	if err := copyLogs(src, logsDB); err != nil {
+		_ = logsDB.Close()
+		return err
+	}
+	if err := ensureLogFTS(logsDB); err != nil {
+		_ = logsDB.Close()
+		return err
+	}
+	_ = logsDB.Close()
+	return os.Rename(old, old+".bak")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func copySamples(src, dst *sql.DB) error {
+	rows, err := src.Query(`SELECT name, labels, value, time_us FROM samples`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	tx, err := dst.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO samples(name, labels, value, time_us) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for rows.Next() {
+		var name, labels string
+		var value float64
+		var timeUS int64
+		if err := rows.Scan(&name, &labels, &value, &timeUS); err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(name, labels, value, timeUS); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func copyLogs(src, dst *sql.DB) error {
+	rows, err := src.Query(`SELECT time_us, stream, level, message, attrs FROM logs`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	tx, err := dst.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO logs(time_us, stream, level, message, attrs) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for rows.Next() {
+		var timeUS int64
+		var stream, level, message, attrs string
+		if err := rows.Scan(&timeUS, &stream, &level, &message, &attrs); err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(timeUS, stream, level, message, attrs); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func ensureLogFTS(db *sql.DB) error {
@@ -103,13 +260,20 @@ func ensureLogFTS(db *sql.DB) error {
 
 func (Store) Name() string { return "sqlite" }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err1 := s.metrics.Close()
+	err2 := s.logs.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
 
 func (s *Store) IngestMetrics(_ context.Context, samples []contract.Sample) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
 	now := time.Now().UnixMicro()
-	tx, err := s.db.Begin()
+	tx, err := s.metrics.Begin()
 	if err != nil {
 		return err
 	}
@@ -146,9 +310,9 @@ func (s *Store) QueryMetrics(_ context.Context, q contract.MetricQuery) ([]contr
 		}
 		ql.ApplyPromQL(&q, p)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows, err := s.db.Query(`
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	rows, err := s.metrics.Query(`
 		SELECT name, labels, value, time_us FROM samples
 		WHERE (? = '' OR name = ?)
 		  AND (? = 0 OR time_us >= ?)
@@ -200,11 +364,25 @@ func (s *Store) QueryMetrics(_ context.Context, q contract.MetricQuery) ([]contr
 	return out, nil
 }
 
+// QueryMetricRange evaluates a PromQL range query (selectors, rate, avg by).
+// Samples are fetched with Prometheus lookback, then step-aligned.
+func (s *Store) QueryMetricRange(ctx context.Context, q contract.MetricRangeQuery) ([]contract.Series, error) {
+	rx, err := ql.RangeFromQuery(q)
+	if err != nil {
+		return nil, err
+	}
+	series, err := s.QueryMetrics(ctx, ql.SampleQuery(rx, q.StartUS, q.EndUS))
+	if err != nil {
+		return nil, err
+	}
+	return ql.EvalRange(series, rx, q.StartUS, q.EndUS, q.StepUS), nil
+}
+
 func (s *Store) IngestLogs(_ context.Context, recs []contract.Log) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.logsMu.Lock()
+	defer s.logsMu.Unlock()
 	now := time.Now().UnixMicro()
-	tx, err := s.db.Begin()
+	tx, err := s.logs.Begin()
 	if err != nil {
 		return err
 	}
@@ -243,43 +421,115 @@ func (s *Store) SearchLogs(_ context.Context, q contract.LogQuery) ([]contract.L
 	if q.Limit <= 0 {
 		q.Limit = 200
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.queryLogs(logFilter{
+		stream: q.Stream,
+		text:   q.Text,
+		start:  q.StartUS,
+		end:    q.EndUS,
+		limit:  q.Limit,
+	})
+}
+
+// SearchLogRange is a Loki-style range read for a Perses log panel:
+// stream labels + |= over StartUS/EndUS. FTS5 runs when a word is set.
+// StepUS is ignored (log lines, not Loki metric queries).
+func (s *Store) SearchLogRange(_ context.Context, q contract.LogRangeQuery) ([]contract.Log, error) {
+	var labs map[string]string
+	if q.Expr != "" {
+		p, err := ql.ParseLogQL(q.Expr)
+		if err != nil {
+			return nil, err
+		}
+		ql.ApplyLogQLRange(&q, p)
+		labs = p.Labels
+	}
+	if q.Limit <= 0 {
+		q.Limit = 200
+	}
+	level, attrs := ql.LogStreamAttrs(labs)
+	f := logFilter{
+		stream: q.Stream,
+		level:  level,
+		text:   q.Text,
+		start:  q.StartUS,
+		end:    q.EndUS,
+		limit:  q.Limit,
+	}
+	if len(attrs) > 0 {
+		f.limit = -1
+	}
+	out, err := s.queryLogs(f)
+	if err != nil {
+		return nil, err
+	}
+	if len(attrs) == 0 {
+		return out, nil
+	}
+	kept := out[:0]
+	for _, r := range out {
+		if labelsMatch(attrs, r.Attrs) {
+			kept = append(kept, r)
+			if len(kept) >= q.Limit {
+				break
+			}
+		}
+	}
+	return kept, nil
+}
+
+type logFilter struct {
+	stream string
+	level  string
+	text   string
+	start  int64
+	end    int64
+	limit  int
+}
+
+func (s *Store) queryLogs(f logFilter) ([]contract.Log, error) {
+	if f.limit == 0 {
+		f.limit = 200
+	}
+	s.logsMu.Lock()
+	defer s.logsMu.Unlock()
 	var rows *sql.Rows
 	var err error
-	if q.Text != "" {
-		match := ftsQuote(q.Text)
-		rows, err = s.db.Query(`
+	if f.text != "" {
+		match := ftsQuote(f.text)
+		rows, err = s.logs.Query(`
 			SELECT l.time_us, l.stream, l.level, l.message, l.attrs
 			FROM logs l
 			JOIN logs_fts f ON f.rowid = l.id
 			WHERE f MATCH ?
 			  AND (? = '' OR l.stream = ?)
+			  AND (? = '' OR l.level = ?)
 			  AND (? = 0 OR l.time_us >= ?)
 			  AND (? = 0 OR l.time_us <= ?)
 			ORDER BY l.time_us DESC
 			LIMIT ?
-		`, match, q.Stream, q.Stream, q.StartUS, q.StartUS, q.EndUS, q.EndUS, q.Limit)
+		`, match, f.stream, f.stream, f.level, f.level, f.start, f.start, f.end, f.end, f.limit)
 		if err != nil {
-			rows, err = s.db.Query(`
+			rows, err = s.logs.Query(`
 				SELECT time_us, stream, level, message, attrs FROM logs
 				WHERE (? = '' OR stream = ?)
+				  AND (? = '' OR level = ?)
 				  AND message LIKE ?
 				  AND (? = 0 OR time_us >= ?)
 				  AND (? = 0 OR time_us <= ?)
 				ORDER BY time_us DESC
 				LIMIT ?
-			`, q.Stream, q.Stream, "%"+q.Text+"%", q.StartUS, q.StartUS, q.EndUS, q.EndUS, q.Limit)
+			`, f.stream, f.stream, f.level, f.level, "%"+f.text+"%", f.start, f.start, f.end, f.end, f.limit)
 		}
 	} else {
-		rows, err = s.db.Query(`
+		rows, err = s.logs.Query(`
 			SELECT time_us, stream, level, message, attrs FROM logs
 			WHERE (? = '' OR stream = ?)
+			  AND (? = '' OR level = ?)
 			  AND (? = 0 OR time_us >= ?)
 			  AND (? = 0 OR time_us <= ?)
 			ORDER BY time_us DESC
 			LIMIT ?
-		`, q.Stream, q.Stream, q.StartUS, q.StartUS, q.EndUS, q.EndUS, q.Limit)
+		`, f.stream, f.stream, f.level, f.level, f.start, f.start, f.end, f.end, f.limit)
 	}
 	if err != nil {
 		return nil, err

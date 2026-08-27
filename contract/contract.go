@@ -122,12 +122,18 @@ type Embedder interface {
 
 // Observer is the metrics+logs slot. Default config is memory; iugum observe uses sqlite.
 // Agents query metrics with PromQL and logs with LogQL (see NORTHSTARS.md).
+//
+// QueryMetrics and SearchLogs stay the current reads (filter + MaxPoints/Limit).
+// QueryMetricRange and SearchLogRange are range reads for Prometheus query_range
+// and Loki /query_range. HTTP adapters call these; do not special-case Perses in main.go.
 type Observer interface {
 	Name() string
 	IngestMetrics(ctx context.Context, samples []Sample) error
 	QueryMetrics(ctx context.Context, q MetricQuery) ([]Series, error)
+	QueryMetricRange(ctx context.Context, q MetricRangeQuery) ([]Series, error)
 	IngestLogs(ctx context.Context, recs []Log) error
 	SearchLogs(ctx context.Context, q LogQuery) ([]Log, error)
+	SearchLogRange(ctx context.Context, q LogRangeQuery) ([]Log, error)
 }
 
 // Sample is one metric point in degrees or percents as the adapter documents.
@@ -174,6 +180,36 @@ type LogQuery struct {
 	Expr    string
 	StartUS int64
 	EndUS   int64
+	Limit   int
+}
+
+// MetricRangeQuery is a PromQL range query (Prometheus GET /api/v1/query_range).
+// StartUS, EndUS, and StepUS are unix microseconds, same as Sample.TimeUS.
+// Prometheus start/end/step in seconds convert as sec * 1e6 (step 15s = 15_000_000).
+// StepUS <= 0 means return every sample in the window (no bucket).
+// Expr is PromQL. Name and Labels are optional; adapters that parse Expr fill them.
+// Series.Points stay [unix_seconds, value] so a Prometheus HTTP handler can copy them.
+type MetricRangeQuery struct {
+	Name    string
+	Labels  map[string]string
+	Expr    string
+	StartUS int64
+	EndUS   int64
+	StepUS  int64
+}
+
+// LogRangeQuery is a Loki-style range read (Loki GET /loki/api/v1/query_range).
+// StartUS and EndUS are unix microseconds, same as Log.TimeUS.
+// Loki nanosecond timestamps convert as ns / 1000.
+// Limit is max lines (Loki "limit"). StepUS is reserved for Loki metric queries;
+// log line reads ignore it. Expr is LogQL. Stream and Text are optional selectors.
+type LogRangeQuery struct {
+	Stream  string
+	Text    string
+	Expr    string
+	StartUS int64
+	EndUS   int64
+	StepUS  int64
 	Limit   int
 }
 

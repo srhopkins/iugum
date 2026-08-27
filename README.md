@@ -9,7 +9,7 @@ Current defaults:
 - **Tracker — Beads.** Issue graph and CLI. Same commands as `bd`.
 - **Wiki — SilverBullet.** Markdown wiki server, embedded in this file.
 - **Metrics — observe.** `iugum observe` serves sqlite + uPlot. PromQL is the query language. Config `observe: memory` stays for tests.
-- **Logs — observe.** Same sqlite file (`observe.db`). LogQL is the query language. FTS5 word search.
+- **Logs — observe.** Separate sqlite file (`observe-logs.db`). LogQL is the query language. FTS5 word search.
 - **Policy — Casbin.** Every command hits the gate first. The default model allows all.
 - **Memory — SQLite.** Facts, FTS5 word search, optional embeddings, namespaces, and a glossary graph. Tickets stay on Dolt.
 - **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`.
@@ -43,12 +43,10 @@ scripts/install.sh
 `CGO_ENABLED=0` makes a static program with no C libraries.
 
 Install puts the binary at `~/.local/bin/iugum` and `~/bin/iugum`.
-`~/.local/bin/bd` is a shim: `remember` / `recall` / `forget` / `memories` go to iugum SQLite.
-All other `bd` commands go to Homebrew Beads (CGO + embedded Dolt).
-`bd prime` runs Homebrew first, then prints the SQLite memory list.
+`~/.local/bin/bd` runs `iugum beads`. Every `bd` command is iugum.
 
 Config: `~/.config/iugum/config.yaml` (or `./iugum.yaml`, or `IUGUM_CONFIG`).
-Data: `~/Library/Application Support/iugum` (`memory.db`, `observe.db`). Override with `data_dir` or `IUGUM_DATA`.
+Data: `~/Library/Application Support/iugum` (`memory.db`, `observe-metrics.db`, `observe-logs.db`). Override with `data_dir` or `IUGUM_DATA`.
 
 Optional nearest-neighbor search (`embeddings.vec: true`) uses **sqlite-vec** (`modernc.org/sqlite/vec`) on linux, darwin, freebsd, netbsd, openbsd, and windows (`vec.go`). Other platforms compile `vec_stub.go` and keep cosine search in Go. Vec stays off unless embeddings are on and the vec0 probe succeeds.
 

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/srhopkins/iugum/adapter/observe/ql"
 	"github.com/srhopkins/iugum/contract"
 	"github.com/srhopkins/iugum/plugin"
 )
@@ -71,6 +72,22 @@ func (o *Observer) QueryMetrics(_ context.Context, q contract.MetricQuery) ([]co
 	return out, nil
 }
 
+func (o *Observer) QueryMetricRange(ctx context.Context, q contract.MetricRangeQuery) ([]contract.Series, error) {
+	mq := ql.MetricQueryFromRange(q)
+	if mq.Expr != "" {
+		p, err := ql.ParsePromQL(mq.Expr)
+		if err != nil {
+			return nil, err
+		}
+		ql.ApplyPromQL(&mq, p)
+	}
+	series, err := o.QueryMetrics(ctx, mq)
+	if err != nil {
+		return nil, err
+	}
+	return ql.AlignSeries(series, q.StartUS, q.EndUS, q.StepUS), nil
+}
+
 func (o *Observer) IngestLogs(_ context.Context, recs []contract.Log) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -107,6 +124,18 @@ func (o *Observer) SearchLogs(_ context.Context, q contract.LogQuery) ([]contrac
 		}
 	}
 	return out, nil
+}
+
+func (o *Observer) SearchLogRange(ctx context.Context, q contract.LogRangeQuery) ([]contract.Log, error) {
+	lq := ql.LogQueryFromRange(q)
+	if lq.Expr != "" {
+		p, err := ql.ParseLogQL(lq.Expr)
+		if err != nil {
+			return nil, err
+		}
+		ql.ApplyLogQL(&lq, p)
+	}
+	return o.SearchLogs(ctx, lq)
 }
 
 func labelsMatch(want, have map[string]string) bool {

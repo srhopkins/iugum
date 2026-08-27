@@ -30,6 +30,20 @@ func (a *App) SearchLogs(ctx context.Context, q contract.LogQuery) ([]contract.L
 	return a.Observer.SearchLogs(ctx, q)
 }
 
+func (a *App) QueryMetricRange(ctx context.Context, q contract.MetricRangeQuery) ([]contract.Series, error) {
+	if err := a.Check(ctx, "observe", "query"); err != nil {
+		return nil, err
+	}
+	return a.Observer.QueryMetricRange(ctx, q)
+}
+
+func (a *App) SearchLogRange(ctx context.Context, q contract.LogRangeQuery) ([]contract.Log, error) {
+	if err := a.Check(ctx, "observe", "query"); err != nil {
+		return nil, err
+	}
+	return a.Observer.SearchLogRange(ctx, q)
+}
+
 // ServeObserve starts the sqlite metrics/logs UI. Port 0 means 3848.
 func (a *App) ServeObserve(ctx context.Context, port int, host string) error {
 	if err := a.Check(ctx, "observe", "serve"); err != nil {
@@ -46,7 +60,12 @@ func (a *App) ServeObserve(ctx context.Context, port int, host string) error {
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	srv := &http.Server{Addr: addr, Handler: a.ObserveHandler()}
-	fmt.Fprintf(os.Stdout, "iugum observe: http://%s\n", addr)
+	if data, err := dirs.ResolveData(""); err == nil {
+		fmt.Fprintf(os.Stdout, "iugum observe: http://%s\n", addr)
+		fmt.Fprintf(os.Stdout, "iugum observe dashboards: %s\n", sqladapt.DashboardDir(data))
+	} else {
+		fmt.Fprintf(os.Stdout, "iugum observe: http://%s\n", addr)
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.ListenAndServe()
@@ -68,7 +87,11 @@ func (a *App) ServeObserve(ctx context.Context, port int, host string) error {
 
 // ObserveHandler is UI + ingest + query. Casbin gates ingest and query per request.
 func (a *App) ObserveHandler() http.Handler {
-	inner := sqladapt.Handler(a.Observer)
+	data, err := dirs.ResolveData("")
+	if err != nil {
+		data = ""
+	}
+	inner := sqladapt.NewHandler(a.Observer, sqladapt.HandlerOptions{DataDir: data})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if act, ok := observeAct(r); ok {
 			if err := a.Check(r.Context(), "observe", act); err != nil {
@@ -85,8 +108,11 @@ func observeAct(r *http.Request) (string, bool) {
 	if strings.HasPrefix(p, "/ingest/") {
 		return "ingest", true
 	}
-	if strings.HasPrefix(p, "/query/") {
+	if strings.HasPrefix(p, "/query/") || strings.HasPrefix(p, "/api/v1/") || strings.HasPrefix(p, "/loki/") {
 		return "query", true
+	}
+	if r.Method == http.MethodPut && (p == "/homelab-dashboard.json" || strings.HasPrefix(p, "/dashboards/")) {
+		return "serve", true
 	}
 	return "", false
 }

@@ -64,3 +64,53 @@ func TestIngestSearchLogs(t *testing.T) {
 		t.Fatalf("message %q", got[0].Message)
 	}
 }
+
+func TestQueryMetricRangeStep(t *testing.T) {
+	o := New()
+	ctx := context.Background()
+	_ = o.IngestMetrics(ctx, []contract.Sample{
+		{Name: "cpu_c", Value: 10, TimeUS: 1_000_000},
+		{Name: "cpu_c", Value: 20, TimeUS: 2_000_000},
+		{Name: "cpu_c", Value: 30, TimeUS: 3_000_000},
+		{Name: "cpu_c", Value: 40, TimeUS: 4_000_000},
+	})
+	got, err := o.QueryMetricRange(ctx, contract.MetricRangeQuery{
+		Expr:    "cpu_c",
+		StartUS: 1_000_000,
+		EndUS:   4_000_000,
+		StepUS:  2_000_000,
+	})
+	if err != nil || len(got) != 1 || len(got[0].Points) != 2 {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+}
+
+func TestSearchLogRange(t *testing.T) {
+	o := New()
+	ctx := context.Background()
+	_ = o.IngestLogs(ctx, []contract.Log{
+		{Stream: "homelab", Message: "fan 40", TimeUS: 2_000_000},
+		{Stream: "homelab", Message: "skip", TimeUS: 9_000_000},
+	})
+	got, err := o.SearchLogRange(ctx, contract.LogRangeQuery{
+		Expr:    `{stream="homelab"} |= "fan"`,
+		StartUS: 1_000_000,
+		EndUS:   3_000_000,
+	})
+	if err != nil || len(got) != 1 || got[0].Message != "fan 40" {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+}
+
+func TestQueryMetricRangeEmpty(t *testing.T) {
+	o := New()
+	got, err := o.QueryMetricRange(context.Background(), contract.MetricRangeQuery{
+		Expr:    "missing",
+		StartUS: 1,
+		EndUS:   2,
+		StepUS:  1,
+	})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+}

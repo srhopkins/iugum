@@ -195,6 +195,38 @@ func ApplyLogQL(q *contract.LogQuery, p LogQL) {
 	}
 }
 
+// ApplyLogQLRange copies a parsed selector onto a range query.
+func ApplyLogQLRange(q *contract.LogRangeQuery, p LogQL) {
+	if q.Stream == "" {
+		q.Stream = p.Stream
+	}
+	if q.Text == "" {
+		q.Text = p.Text
+	}
+}
+
+// LogStreamAttrs splits LogQL labels into level (logs.level) and the rest (logs.attrs).
+// stream is already on LogQL.Stream / LogRangeQuery.Stream.
+func LogStreamAttrs(labs map[string]string) (level string, attrs map[string]string) {
+	if len(labs) == 0 {
+		return "", nil
+	}
+	for k, v := range labs {
+		switch k {
+		case "stream":
+			continue
+		case "level":
+			level = v
+		default:
+			if attrs == nil {
+				attrs = map[string]string{}
+			}
+			attrs[k] = v
+		}
+	}
+	return level, attrs
+}
+
 var nameAlias = map[string]string{
 	"memory_c":      "mem_c",
 	"sys_fan1":      "fan_pct",

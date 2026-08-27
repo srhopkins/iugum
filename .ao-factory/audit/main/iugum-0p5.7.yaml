@@ -1,0 +1,8 @@
+bead: iugum-0p5.7
+namespace: main
+search_query: "HTTP job DefaultClient has no timeout"
+candidates: []
+associated_issues: none
+duplicate_issues: none
+checked_at: 2026-08-23T19:10:54Z
+written_by: ayo-related-set

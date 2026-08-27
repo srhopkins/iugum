@@ -15,5 +15,4 @@ install -m 0755 "$ROOT/scripts/bd-shim.sh" "$HOME/.local/bin/bd"
 chmod +x "$HOME/.local/bin/iugum" "$HOME/bin/iugum"
 
 echo "installed $HOME/.local/bin/iugum"
-echo "bd shim: remember/recall/forget/memories/prime-tail -> iugum"
-echo "bd shim: all other commands -> $HOMEBREW_PREFIX/bin/bd or /opt/homebrew/bin/bd"
+echo "bd -> $HOME/.local/bin/iugum beads"
