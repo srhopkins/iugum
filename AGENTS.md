@@ -1,7 +1,8 @@
 # iugum — agent context
 
-iugum is one Go program. The target is static (`CGO_ENABLED=0`).
-Today the default build is CGO for the Beads embedded Dolt store (temporary, see NORTHSTARS.md star 1).
+iugum is one Go program.
+The default build is CGO so Beads can open the embedded Dolt store (see NORTHSTARS.md star 1).
+A static (`CGO_ENABLED=0`) build still compiles; beads then needs Dolt server mode.
 The program includes the Beads CLI and the SilverBullet wiki server.
 
 North stars: [NORTHSTARS.md](NORTHSTARS.md).

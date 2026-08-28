@@ -20,11 +20,13 @@ More slots can join the same file. The contract stays the same.
 ## North stars
 
 iugum is for agents first.
-The product is one static Go program.
+The same slots must stay readable to a person: a human must understand what the agent is doing, and must be able to operate the same commands.
+The product is one Go program.
 The product uses languages that agents know.
 Function has priority. Program size is last.
 
-New work is Go, or the new work becomes part of this one file (`CGO_ENABLED=0`).
+New work is Go, or the new work becomes part of this one file.
+The default build uses CGO so Beads can open the embedded Dolt store. A static (`CGO_ENABLED=0`) build still compiles; `iugum beads` then needs Dolt server mode.
 Metrics search uses **PromQL** (Prometheus query language).
 Log search uses **LogQL** (Grafana Loki).
 The tracker is `bd`. The wiki is SilverBullet. Do not make a local dialect.
@@ -77,15 +79,15 @@ iugum --help
 
 ### Beads
 
-This starts Beads.
+This is the tracker CLI. It is not a daemon.
 
 ```bash
 iugum beads …
 ```
 
-This command starts Beads.
-The procedure is the same as the standalone `bd` CLI.
+`iugum beads` is the same as the standalone `bd` CLI: one command, then exit.
 Arguments after `beads` pass through with no change.
+`~/.local/bin/bd` is a shim that runs `iugum beads`.
 
 ### Wiki
 
