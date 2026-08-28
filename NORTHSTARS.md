@@ -1,7 +1,8 @@
 # iugum north stars
 
 iugum is a tool set for agents first.
-A person interface is a translation layer.
+The same slots must stay readable to a person.
+A human must understand what the agent is doing, and must be able to operate the same commands.
 An agent must know how to operate each slot.
 
 These three rules filter each product decision.
@@ -10,22 +11,20 @@ The sequence is the priority.
 ## 1. One Go program
 
 New work is Go.
-Or the new work becomes part of this one static Go program (`CGO_ENABLED=0`).
+Or the new work becomes part of this one Go program.
 One other language is permitted only if the result is one file.
 One other procedure is permitted only if the result is one file.
 The public contract must stay the same.
 
 Do not add a program that the operator must install adjacent to iugum.
 
-**Deviation (2026-08): CGO for the tracker.**
+**Default build (2026-08): CGO for the tracker.**
 The Beads tracker stores issues in embedded Dolt (a Go SQL database).
 That store needs CGO and the ICU C library.
 The default build is `scripts/build.sh --cgo`.
-This CGO dependency is a deliberate, temporary deviation from star 1.
 Function first (star 3): `iugum beads` must open the same database as `bd` today.
-A Go-native store replaces the Dolt store later.
-Then the default build returns to `CGO_ENABLED=0`.
-`scripts/build.sh --static` keeps the static program buildable now.
+Do not add new CGO outside the tracker store and the sqlite-vec path.
+`scripts/build.sh --static` (`CGO_ENABLED=0`) stays buildable; beads then needs Dolt server mode.
 
 ## 2. Agent-known syntax, not a local dialect
 

@@ -6,7 +6,7 @@ iugum has a small public contract so the harness can hold other tools.
 
 Read [NORTHSTARS.md](NORTHSTARS.md) before you add a dependency or a query language.
 
-1. **Go or one file.** New work is Go, or the new work becomes part of this one `CGO_ENABLED=0` program. Do not add a sidecar stack.
+1. **Go or one file.** New work is Go, or the new work becomes part of this one program. Do not add a sidecar stack.
 2. **Agent-known syntax.** Metrics: PromQL. Logs: LogQL. Tracker: `bd`. Wiki: SilverBullet. Do not make a local dialect.
 3. **Function first.** Keep the file small when you can. Do not stop a function to save bytes.
 
@@ -20,9 +20,9 @@ The pre-commit hook runs `scripts/public-audit.sh --staged`:
 
 Install gitleaks with `brew install gitleaks`. Agents: `skills/public-audit/SKILL.md`.
 
-`CGO_ENABLED=0` is the target. Do not add new CGo.
+The default build is CGO for the tracker's embedded Dolt store. Do not add new CGo.
 CGo is permitted in two places only: the tracker's embedded Dolt store (`beads/`, needs ICU) and the sqlite-vec path.
-The Dolt CGo is a deliberate, temporary deviation (see NORTHSTARS.md star 1). A Go-native store replaces it later.
+`CGO_ENABLED=0` stays a secondary static build (beads then needs Dolt server mode). See NORTHSTARS.md star 1.
 Do not use Go `plugin.Open` (shared-object plugins).
 Those plugins break a single static program.
 
