@@ -55,11 +55,12 @@ func newWithClock(clock cron.Clock) *Scheduler {
 func (s *Scheduler) Name() string { return "cron" }
 
 func (s *Scheduler) Add(spec, jobName string, fn contract.JobFunc) error {
-	if s.started {
-		return fmt.Errorf("cronadapt: Add after Start")
-	}
 	if spec == "" {
 		spec = "@triggered"
+	}
+	if s.started {
+		_, err := s.c.AddJob(spec, s.wrapJob(jobName, fn), cron.WithName(jobName))
+		return err
 	}
 	s.pending = append(s.pending, pendingJob{spec: spec, name: jobName, fn: fn})
 	return nil

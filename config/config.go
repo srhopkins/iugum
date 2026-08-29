@@ -32,13 +32,14 @@ type File struct {
 // after + on wire go-cron AddDependencyByName (OnSuccess, OnFailure, …).
 type JobSpec struct {
 	Name     string   `yaml:"name"`
-	Spec     string   `yaml:"spec"`
-	Kind     string   `yaml:"kind"` // empty | func | exec | http
-	Command  []string `yaml:"command"`
-	URL      string   `yaml:"url"`
-	Workflow []string `yaml:"workflow"`
-	After    []string `yaml:"after"`
-	On       string   `yaml:"on"` // success | failure | skipped | complete
+	Spec     string   `yaml:"spec,omitempty"`
+	Kind     string   `yaml:"kind,omitempty"` // empty | func | exec | http | session
+	Command  []string `yaml:"command,omitempty"`
+	URL      string   `yaml:"url,omitempty"`
+	Prompt   string   `yaml:"prompt,omitempty"` // kind session: text injected into the standing OpenCode session
+	Workflow []string `yaml:"workflow,omitempty"`
+	After    []string `yaml:"after,omitempty"`
+	On       string   `yaml:"on,omitempty"` // success | failure | skipped | complete
 }
 
 // HookRoute sends a hook name to a job.
@@ -117,7 +118,7 @@ func Load() (File, error) {
 		}
 	}
 	if path == "" {
-		return cfg, nil
+		return mergeJobsFile(cfg)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -148,7 +149,7 @@ func Load() (File, error) {
 			cfg.Embeddings.Kind = "off"
 		}
 	}
-	return cfg, nil
+	return mergeJobsFile(cfg)
 }
 
 func Actor(cfg File) string {

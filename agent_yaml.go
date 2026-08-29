@@ -23,6 +23,7 @@ type AgentFile struct {
 	Privileges *AgentPrivilege `yaml:"privileges,omitempty"`
 	Startup    AgentStartup    `yaml:"startup,omitempty"`
 	Jobs       string          `yaml:"jobs,omitempty"`
+	ShmSize    string          `yaml:"shm_size,omitempty"` // docker --shm-size, e.g. 1g for Chromium
 }
 
 // AgentMount describes a bind mount or a tmpfs mask.
@@ -46,6 +47,7 @@ type AgentPrivilege struct {
 type AgentStartup struct {
 	Restart string   `yaml:"restart,omitempty"`
 	Env     []string `yaml:"env,omitempty"`
+	Command []string `yaml:"command,omitempty"` // extra argv after the image; empty = image default (up)
 }
 
 // ParseAgentFile parses agent.yaml and applies defaults that may be omitted.

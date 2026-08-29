@@ -12,7 +12,8 @@ import (
 	"github.com/srhopkins/iugum/contract"
 )
 
-// allow-all: one policy p, *, *, *, allow. Swap model/policy files to deny.
+// allow-all with deny override. One row p, *, *, *, allow is the default.
+// Add p, <sub>, <obj>, <act>, deny to lock one action (e.g. schedule, add).
 const defaultModel = `
 [request_definition]
 r = sub, obj, act
@@ -21,7 +22,7 @@ r = sub, obj, act
 p = sub, obj, act, eft
 
 [policy_effect]
-e = some(where (p.eft == allow))
+e = some(where (p.eft == allow)) && !some(where (p.eft == deny))
 
 [matchers]
 m = (p.sub == "*" || p.sub == r.sub) && (p.obj == "*" || p.obj == r.obj || keyMatch(r.obj, p.obj)) && (p.act == "*" || p.act == r.act)
@@ -40,6 +41,12 @@ func New(modelPath, policyPath string) (*Gate, error) {
 	var err error
 	if modelPath != "" && policyPath != "" {
 		e, err = casbin.NewEnforcer(modelPath, fileadapter.NewAdapter(policyPath))
+	} else if modelPath == "" && policyPath != "" {
+		m, merr := model.NewModelFromString(defaultModel)
+		if merr != nil {
+			return nil, merr
+		}
+		e, err = casbin.NewEnforcer(m, fileadapter.NewAdapter(policyPath))
 	} else if modelPath != "" {
 		e, err = casbin.NewEnforcer(modelPath)
 	} else {

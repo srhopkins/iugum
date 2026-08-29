@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/srhopkins/iugum/config"
 	"github.com/srhopkins/iugum/contract"
@@ -25,6 +26,8 @@ type App struct {
 	Watcher   contract.Watcher
 	Net       contract.Net // nil when network.backend is off
 	NetRules  contract.NetRules
+	jobsMu    sync.Mutex
+	knownJobs map[string]config.JobSpec
 }
 
 func New(cfg config.File) (*App, error) {
@@ -131,6 +134,7 @@ func New(cfg config.File) (*App, error) {
 	}
 	a.registerExecJobs(cfg.Jobs)
 	a.registerHTTPJobs(cfg.Jobs)
+	a.rememberJobs(cfg.Jobs)
 	a.bindBeadsMemory()
 	return a, nil
 }

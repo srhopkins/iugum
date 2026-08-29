@@ -57,6 +57,13 @@ jobs:
   #   spec: "@every 24h"
   #   command: [echo, backup-complete]
 
+  # kind session injects text into the standing OpenCode session (ACP).
+  # Agents add these with: iugum job add hourly-checks --every 1h --prompt "Run hourly-checks"
+  # - name: hourly-checks
+  #   kind: session
+  #   spec: "@every 1h"
+  #   prompt: "Run the hourly-checks skill now."
+
   # kind http POSTs the event JSON to a URL when the job fires.
   # - name: notify-slack
   #   kind: http

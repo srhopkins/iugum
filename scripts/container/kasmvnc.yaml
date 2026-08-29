@@ -1,0 +1,35 @@
+# System defaults for iugum-browser. User yaml at $HOME/.vnc/kasmvnc.yaml
+# can override bind and port at start.
+desktop:
+  resolution:
+    width: 1920
+    height: 1080
+  allow_resize: true
+  pixel_depth: 24
+
+network:
+  protocol: http
+  interface: 0.0.0.0
+  websocket_port: 6080
+  use_ipv4: true
+  use_ipv6: false
+  ssl:
+    require_ssl: false
+
+command_line:
+  prompt: false
+
+data_loss_prevention:
+  clipboard:
+    delay_between_operations: none
+    allow_mimetypes:
+      - chromium/x-web-custom-data
+      - text/html
+      - image/png
+    server_to_client:
+      enabled: true
+      size: unlimited
+      primary_clipboard_enabled: false
+    client_to_server:
+      enabled: true
+      size: unlimited

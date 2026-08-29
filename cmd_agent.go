@@ -31,8 +31,25 @@ const agentUsage = `Usage: iugum agent <init|up|down|status|ls|tui|acp|checkpoin
 `
 
 const starterAgentPolicy = `# Casbin policy: subject, object, action, effect
-# Replace this row with narrower rules when the agent needs restrictions.
+# Default allows all, including iugum job add/rm/run.
+# Lock cron for this agent by uncommenting the deny rows:
+# p, *, schedule, add, deny
+# p, *, schedule, remove, deny
+# p, *, schedule, run, deny
 p, *, *, *, allow
+`
+
+const starterAgentIugum = `actor: %s
+data_dir: /data
+tracker: beads
+wiki: silverbullet
+observe: memory
+memory: sqlite
+policy:
+  policy: /home/iugum/policy.csv
+`
+
+const starterAgentJobs = `jobs: []
 `
 
 func runAgent(ctx context.Context, a *app.App, args []string) int {
@@ -218,15 +235,34 @@ func agentRunArgv(engine, root string, cfg AgentFile) []string {
 	for _, port := range cfg.Ports {
 		argv = append(argv, "-p", port)
 	}
+	envFile := filepath.Join(root, "home", ".env")
+	if _, err := os.Stat(envFile); err == nil {
+		argv = append(argv, "--env-file", envFile)
+	}
 	for _, name := range cfg.Startup.Env {
 		argv = append(argv, "-e", name)
+	}
+	if cfg.ShmSize != "" {
+		argv = append(argv, "--shm-size", cfg.ShmSize)
+	}
+	if cfg.Jobs != "" {
+		source := cfg.Jobs
+		if !filepath.IsAbs(source) {
+			source = filepath.Join(root, source)
+		}
+		argv = append(argv, "-v", filepath.Clean(source)+":/workspace/jobs.yaml")
+		argv = append(argv, "-e", "IUGUM_JOBS=/workspace/jobs.yaml")
 	}
 	if cfg.Privileges != nil {
 		for _, capability := range cfg.Privileges.CapAdd {
 			argv = append(argv, "--cap-add", capability)
 		}
 	}
-	return append(argv, cfg.Image)
+	argv = append(argv, cfg.Image)
+	if len(cfg.Startup.Command) > 0 {
+		argv = append(argv, cfg.Startup.Command...)
+	}
+	return argv
 }
 
 func agentUp(engine, root string, cfg AgentFile, dryRun bool, stdout, stderr io.Writer) int {
@@ -516,6 +552,7 @@ func initAgent(cwd, name string, warnings io.Writer) error {
 		},
 		Network: AgentNetwork{Name: name, Mode: defaultNetworkMode},
 		Startup: AgentStartup{Restart: defaultRestart},
+		Jobs:    "jobs.yaml",
 	}
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -542,6 +579,8 @@ func initAgent(cwd, name string, warnings io.Writer) error {
 		filepath.Join(home, "policy.csv"):   starterAgentPolicy,
 		filepath.Join(home, ".iugum-probe"): "iugum agent home\n",
 		filepath.Join(data, ".iugum-probe"): "iugum agent data\n",
+		filepath.Join(data, "iugum.yaml"):   fmt.Sprintf(starterAgentIugum, name),
+		filepath.Join(root, "jobs.yaml"):    starterAgentJobs,
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
