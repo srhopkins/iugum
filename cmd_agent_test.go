@@ -36,10 +36,15 @@ func TestInitAgentScaffoldAndParse(t *testing.T) {
 	if len(cfg.Mounts) != 2 {
 		t.Fatalf("mounts = %+v", cfg.Mounts)
 	}
+	if cfg.Jobs != "jobs.yaml" {
+		t.Fatalf("jobs = %q", cfg.Jobs)
+	}
 	for _, path := range []string{
 		filepath.Join(root, "home", "policy.csv"),
 		filepath.Join(root, "home", ".iugum-probe"),
 		filepath.Join(root, "data", ".iugum-probe"),
+		filepath.Join(root, "data", "iugum.yaml"),
+		filepath.Join(root, "jobs.yaml"),
 	} {
 		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
 			t.Fatalf("%s missing or empty: %v", path, err)
@@ -174,6 +179,21 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 	}
 	if strings.Contains(argv, " --rm") {
 		t.Fatalf("long-lived agent argv contains --rm: %s", argv)
+	}
+	if strings.Contains(argv, "--env-file") {
+		t.Fatalf("argv leaked --env-file without home/.env: %s", argv)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "home"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(root, "home", ".env")
+	if err := os.WriteFile(envPath, []byte("HASS_TOKEN=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withEnv := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	if !strings.Contains(withEnv, "--env-file "+envPath) {
+		t.Fatalf("argv %q lacks --env-file %s", withEnv, envPath)
 	}
 }
 

@@ -25,9 +25,9 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|prepare-pr|skill>
+const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|job|prepare-pr|skill>
 
-  up           start wiki, observe, jobs/hooks/watch, and code-server in one process
+  up           start wiki, observe, jobs/hooks/watch, code-server, browser, and ttyd in one process
   container    build or stop the iugum image (docker or podman)
   agent        scaffold and manage per-agent homes
   beads        work-graph slot (default: beads)
@@ -35,12 +35,14 @@ const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|prepa
   observe      metrics+logs store and graph UI (sqlite + uPlot)
   net          network policy: plan | apply [--dry-run] | show (iptables or nftables)
   run          start jobs, file watch, and optional HTTP POST /hooks/{name}
+  job          list, add, remove, or run cron jobs (jobs.yaml)
   prepare-pr   write review files; do not push
   skill run    run a skill by name (prepare-pr)
 
-  iugum up [--wiki-port N] [--observe-port N] [--code-server-port N] [--no-code-server]
+  iugum up [--wiki-port N] [--observe-port N] [--code-server-port N] [--browser-port N] [--ttyd-port N]
+  iugum up [--no-code-server] [--no-browser] [--no-ttyd]
   iugum up --container [--image IMG] [--engine docker|podman|auto] [--name N] [--detach] [--dry-run]
-  iugum container build [--with LIST] [--tag T] [--engine E] [--dry-run]
+  iugum container build [--with LIST] [--code-server 1|0] [--browser 1|0] [--tag T] [--engine E] [--dry-run]
   iugum container stop [--name N] [--engine E] [--dry-run]
   iugum agent init <name>
   iugum agent up|down <name> [--engine E] [--dry-run]
@@ -52,6 +54,8 @@ const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|prepa
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
   iugum observe [--port N] [--hostname ADDR]
   iugum net plan | apply [--dry-run] | show
+  iugum job ls | add <name> [--every 1h|--spec SPEC] [--kind exec|http|session] [--prompt T] -- [cmd...]
+  iugum job rm <name> | run <name>
   iugum prepare-pr [--repo DIR] [--base main] [--head BRANCH] [--title T] [--body-file F]
   iugum skill run prepare-pr [same flags]
 
@@ -92,6 +96,8 @@ func run(args []string) int {
 		return runAgent(ctx, a, args[1:])
 	case "run":
 		return runRuntime(ctx, a, cfg)
+	case "job":
+		return runJob(ctx, a, args[1:])
 	case "beads":
 		if err := a.RunTracker(ctx, args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))

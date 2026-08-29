@@ -33,6 +33,10 @@ type upOpts struct {
 	ObservePort    int
 	CodeServerPort int
 	NoCodeServer   bool
+	BrowserPort    int
+	NoBrowser      bool
+	TtydPort       int
+	NoTtyd         bool
 	Host           string
 	Space          string
 	// container mode
@@ -46,7 +50,9 @@ type upOpts struct {
 
 // containerOpts is the parsed `iugum container build|stop` command line.
 type containerOpts struct {
-	With   string
+	With       string
+	CodeServer string // "1", "0", or empty = follow WITH
+	Browser    string // "1", "0", or empty = follow WITH
 	Tag    string
 	Engine string
 	Name   string
@@ -105,7 +111,7 @@ func containerRunArgv(engine string, c config.Container, o upOpts, cwd, data str
 	}
 	ports := c.Ports
 	if len(ports) == 0 {
-		ports = []string{"3000:3000", "3848:3848", "8080:8080"}
+		ports = []string{"3000:3000", "3848:3848", "8080:8080", "7681:7681"}
 	}
 	for _, p := range ports {
 		argv = append(argv, "-p", p)
@@ -124,6 +130,12 @@ func containerBuildArgv(engine string, c config.Container, o containerOpts) []st
 	argv := []string{engine, "build"}
 	if o.With != "" {
 		argv = append(argv, "--build-arg", "WITH="+o.With)
+	}
+	if o.CodeServer != "" {
+		argv = append(argv, "--build-arg", "CODE_SERVER="+o.CodeServer)
+	}
+	if o.Browser != "" {
+		argv = append(argv, "--build-arg", "BROWSER="+o.Browser)
 	}
 	return append(argv, "-t", tag, ".")
 }
@@ -243,6 +255,38 @@ func runUpHost(ctx context.Context, a *app.App, cfg config.File, o upOpts) int {
 			return 1
 		}
 	}
+	browserBin := ""
+	if !o.NoBrowser {
+		if p, err := lookPath("iugum-browser"); err == nil {
+			if _, err := lookPath("chromium"); err == nil {
+				browserBin = p
+			} else if _, err := lookPath("chromium-browser"); err == nil {
+				browserBin = p
+			}
+		}
+	}
+	browserPort := 0
+	if browserBin != "" {
+		browserPort, err = pickPort(host, o.BrowserPort)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "up: browser: %v\n", err)
+			return 1
+		}
+	}
+	ttydBin := ""
+	if !o.NoTtyd {
+		if p, err := lookPath("ttyd"); err == nil {
+			ttydBin = p
+		}
+	}
+	ttydPort := 0
+	if ttydBin != "" {
+		ttydPort, err = pickPort(host, o.TtydPort)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "up: ttyd: %v\n", err)
+			return 1
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -284,6 +328,21 @@ func runUpHost(ctx context.Context, a *app.App, cfg config.File, o upOpts) int {
 	} else {
 		fmt.Fprintln(os.Stdout, "code-server off")
 	}
+	if browserBin != "" {
+		start("browser", func(c context.Context) error {
+			return a.RunBrowser(c, browserBin, host, browserPort)
+		})
+		fmt.Fprintf(os.Stdout, "browser http://%s/\n", net.JoinHostPort(host, strconv.Itoa(browserPort)))
+	} else {
+		fmt.Fprintln(os.Stdout, "browser off")
+	}
+	if ttydBin != "" {
+		cwd, _ := os.Getwd()
+		start("ttyd", func(c context.Context) error { return a.RunTtyd(c, ttydBin, host, ttydPort, cwd) })
+		fmt.Fprintf(os.Stdout, "ttyd http://%s/\n", net.JoinHostPort(host, strconv.Itoa(ttydPort)))
+	} else {
+		fmt.Fprintln(os.Stdout, "ttyd off")
+	}
 	if cfg.HookHTTP != "" {
 		fmt.Fprintf(os.Stdout, "hooks http://%s/hooks/{name}\n", cfg.HookHTTP)
 	}
@@ -319,6 +378,11 @@ func startRuntime(ctx context.Context, a *app.App, cfg config.File) error {
 	if err := a.Scheduler.Start(); err != nil {
 		return fmt.Errorf("schedule: %w", err)
 	}
+	if path := config.JobsFile(); path != "" {
+		if err := app.WatchJobsFile(ctx, a, path); err != nil {
+			return fmt.Errorf("jobs watch: %w", err)
+		}
+	}
 	if cfg.HookHTTP != "" {
 		if err := a.ListenHooksHTTP(ctx, cfg.HookHTTP); err != nil {
 			return fmt.Errorf("hooks: %w", err)
@@ -348,7 +412,7 @@ func pickPort(host string, port int) (int, error) {
 // --- parsers ---
 
 func parseUpArgs(args []string) (o upOpts, code int, ok bool) {
-	o.WikiPort, o.ObservePort, o.CodeServerPort = 3000, 3848, 8080
+	o.WikiPort, o.ObservePort, o.CodeServerPort, o.BrowserPort, o.TtydPort = 3000, 3848, 8080, 6080, 7681
 	o.Host = "127.0.0.1"
 	o.Space = "./wiki"
 	for i := 0; i < len(args); i++ {
@@ -397,6 +461,10 @@ func parseUpArgs(args []string) (o upOpts, code int, ok bool) {
 			o.DryRun = true
 		case "--no-code-server":
 			o.NoCodeServer = true
+		case "--no-browser":
+			o.NoBrowser = true
+		case "--no-ttyd":
+			o.NoTtyd = true
 		case "--wiki-port":
 			if !port(&o.WikiPort) {
 				return o, 2, false
@@ -407,6 +475,14 @@ func parseUpArgs(args []string) (o upOpts, code int, ok bool) {
 			}
 		case "--code-server-port":
 			if !port(&o.CodeServerPort) {
+				return o, 2, false
+			}
+		case "--browser-port":
+			if !port(&o.BrowserPort) {
+				return o, 2, false
+			}
+		case "--ttyd-port":
+			if !port(&o.TtydPort) {
 				return o, 2, false
 			}
 		case "--hostname", "-L":
@@ -471,6 +547,14 @@ func parseContainerArgs(verb string, args []string) (o containerOpts, code int, 
 			}
 		case "--with":
 			if verb != "build" || !str(&o.With) {
+				return o, 2, false
+			}
+		case "--code-server":
+			if verb != "build" || !str(&o.CodeServer) {
+				return o, 2, false
+			}
+		case "--browser":
+			if verb != "build" || !str(&o.Browser) {
 				return o, 2, false
 			}
 		case "--tag", "-t":

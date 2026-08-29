@@ -1,0 +1,47 @@
+#!/bin/sh
+# Chromium in a tiny window manager so it fills the desktop and keeps its
+# address bar. No fullscreen: that painted about:blank as a white page.
+set -eu
+
+CHROME=""
+for c in chromium chromium-browser google-chrome; do
+  if command -v "$c" >/dev/null 2>&1; then
+    CHROME="$c"
+    break
+  fi
+done
+if [ -z "$CHROME" ]; then
+  echo "browser-xstartup: chromium is not installed" >&2
+  sleep infinity
+fi
+
+HOME="${HOME:-/home/iugum}"
+DATA="${HOME}/.chromium"
+mkdir -p "$DATA" "$HOME/.config/openbox"
+rm -f "$DATA/SingletonLock" "$DATA/SingletonCookie" "$DATA/SingletonSocket"
+
+if [ -f /usr/local/lib/iugum/openbox-rc.xml ]; then
+  cp /usr/local/lib/iugum/openbox-rc.xml "$HOME/.config/openbox/rc.xml"
+fi
+if command -v openbox >/dev/null 2>&1; then
+  openbox &
+  sleep 0.4
+fi
+
+while true; do
+  "$CHROME" \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --disable-gpu \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-translate \
+    --hide-crash-restore-bubble \
+    --disable-session-crashed-bubble \
+    --start-maximized \
+    --window-position=0,0 \
+    --password-store=basic \
+    --user-data-dir="$DATA" \
+    chrome://new-tab-page || true
+  sleep 1
+done

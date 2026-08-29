@@ -58,6 +58,10 @@ func TestContainerBuildStopArgv(t *testing.T) {
 	if b != "docker build --build-arg WITH=claude,codex -t iugum:latest ." {
 		t.Fatalf("build argv: %q", b)
 	}
+	b2 := strings.Join(containerBuildArgv("docker", config.Container{}, containerOpts{With: "opencode", CodeServer: "1", Browser: "1"}), " ")
+	if b2 != "docker build --build-arg WITH=opencode --build-arg CODE_SERVER=1 --build-arg BROWSER=1 -t iugum:latest ." {
+		t.Fatalf("build argv with overlays: %q", b2)
+	}
 	s := strings.Join(containerStopArgv("podman", config.Container{}, containerOpts{}), " ")
 	if s != "podman stop iugum" {
 		t.Fatalf("stop argv: %q", s)

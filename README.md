@@ -10,9 +10,9 @@ Current defaults:
 - **Wiki — SilverBullet.** Markdown wiki server, embedded in this file.
 - **Metrics — observe.** `iugum observe` serves sqlite + uPlot. PromQL is the query language. Config `observe: memory` stays for tests.
 - **Logs — observe.** Separate sqlite file (`observe-logs.db`). LogQL is the query language. FTS5 word search.
-- **Policy — Casbin.** Every command hits the gate first. The default model allows all.
+- **Policy — Casbin.** Every command hits the gate first. The default model allows all. A deny row locks one action (example: `schedule, add`).
 - **Memory — SQLite.** Facts, FTS5 word search, optional embeddings, namespaces, and a glossary graph. Tickets stay on Dolt.
-- **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`.
+- **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. `iugum job` adds jobs to `jobs.yaml`. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`.
 - **Ship — prepare-pr.** Writes a review markdown file and a script. Does not push. First push or `gh pr create`.
 
 More slots can join the same file. The contract stays the same.

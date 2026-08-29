@@ -52,7 +52,8 @@ func (a *App) ServeWikiSupervised(ctx context.Context, opts contract.WikiOpts) e
 	if err := f.Close(); err != nil {
 		return err
 	}
-	args := []string{"-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space}
+	// --single: one folder, no 2.10 setup wizard, no login (same as an existing notes space).
+	args := []string{"--single", "-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space}
 	return runChild(ctx, "wiki", path, args...)
 }
 
@@ -79,4 +80,14 @@ func runChild(ctx context.Context, label, bin string, args ...string) error {
 func (a *App) RunCodeServer(ctx context.Context, bin, host string, port int, dir string) error {
 	addr := host + ":" + strconv.Itoa(port)
 	return runChild(ctx, "code-server", bin, "--bind-addr", addr, "--auth", "none", dir)
+}
+
+// RunBrowser starts iugum-browser (Chromium + KasmVNC) until ctx ends.
+func (a *App) RunBrowser(ctx context.Context, bin, host string, port int) error {
+	return runChild(ctx, "browser", bin, "--bind", host, "--port", strconv.Itoa(port))
+}
+
+// RunTtyd starts ttyd (a page that is only a shell) until ctx ends.
+func (a *App) RunTtyd(ctx context.Context, bin, host string, port int, dir string) error {
+	return runChild(ctx, "ttyd", bin, "-W", "-i", host, "-p", strconv.Itoa(port), "-w", dir, "bash")
 }

@@ -103,7 +103,10 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `mem/{type}/ns/{path}` | `grant` | reserved for later policy |
 | `hook` | `fire` | local hook |
 | `hook` | `http` | POST /hooks/{name} when hook_http is set |
-| `schedule` | `run` | cron or adhoc job |
+| `schedule` | `list` | `iugum job ls` |
+| `schedule` | `add` | `iugum job add` (default allow; deny to lock an agent) |
+| `schedule` | `remove` | `iugum job rm` |
+| `schedule` | `run` | cron tick, `iugum job run`, or adhoc trigger |
 | `service` | `serve` | `iugum up` host mode start |
 | `container` | `run` | `iugum up --container` |
 | `container` | `build` | `iugum container build` |

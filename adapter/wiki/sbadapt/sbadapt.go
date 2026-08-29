@@ -53,7 +53,7 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	cmd := exec.Command(path, "-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space)
+	cmd := exec.Command(path, "--single", "-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("wiki: %w", err)

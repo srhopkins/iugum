@@ -27,6 +27,7 @@ iugum agent down scout
 
 `up` creates the agent's `iugum-agent-scout` network and starts a detached container.
 The container runs as user `1000:1000` with restart policy `unless-stopped`.
+`startup.command` is optional extra argv after the image. Use `[run]` for jobs only (no wiki). Use `[up, --hostname, 0.0.0.0]` when the image has code-server and you publish port 8080. Empty keeps the image default (`up`).
 Running `up` again leaves a running container unchanged or starts a stopped container.
 Use `--dry-run` on `up` or `down` to print the Docker or Podman commands.
 
@@ -90,7 +91,27 @@ startup:
 - `privileges.cap_add` is an optional list of Linux capabilities. The container still runs as a non-root user.
 - `startup.restart` defaults to `unless-stopped`.
 - `startup.env` is an optional list of host environment variable names to pass through. Do not put secret values in this file.
-- `jobs` optionally points to a cron jobs file.
+- If `home/.env` exists, `up` passes it to Docker as `--env-file`. That file is gitignored with the rest of `home/`. Put long-lived tokens there (`HASS_TOKEN=...`).
+- `jobs` points to a cron jobs file (default `jobs.yaml`). `up` mounts it at `/workspace/jobs.yaml` and sets `IUGUM_JOBS`.
+- `shm_size` is Docker `/dev/shm` size (example `1g`). Chromium needs this.
+
+Inside the container the agent adds work with `iugum job`:
+
+```text
+iugum job add hourly-checks --every 1h --prompt "Run the hourly-checks skill now."
+```
+
+That writes `jobs.yaml`. The running `iugum up` process loads the new job within a second. `kind: session` injects the prompt into the standing OpenCode session. Write the skill under `.opencode/skills/<name>/SKILL.md`.
+
+Cron is allowed by default. Lock it in `home/policy.csv`:
+
+```text
+p, *, *, *, allow
+p, *, schedule, add, deny
+p, *, schedule, remove, deny
+```
+
+`data/iugum.yaml` points Casbin at `/home/iugum/policy.csv`. The embedded model honors deny rows.
 
 The starter `home/policy.csv` matches iugum's current Casbin allow-all policy.
 Replace its allow row with narrower rules when an agent needs restrictions.
