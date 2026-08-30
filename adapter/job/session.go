@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/srhopkins/iugum/contract"
@@ -46,6 +47,20 @@ func promptSession(ctx context.Context, text string) error {
 	cmd := exec.CommandContext(runCtx, "opencode", "acp")
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
+	// Put opencode in its own process group so a timeout kill can take the
+	// whole group with it. Without this, exec.CommandContext's default
+	// context-cancel behavior only signals the direct child: any grandchild
+	// opencode spawns survives the kill, gets reparented to PID 1, and — if
+	// the container's PID 1 never reaps it — sits forever as a zombie that
+	// fools a name-based busy check on the next tick.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		killProcessGroup(cmd)
+		return nil
+	}
+	// Bound how long Wait() waits after Cancel fires before giving up on the
+	// pipes, so a wedged process can't also wedge this call forever.
+	cmd.WaitDelay = 5 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -72,7 +87,7 @@ func promptSession(ctx context.Context, text string) error {
 			"fs": map[string]any{"readTextFile": true, "writeTextFile": false},
 		},
 	}); err != nil {
-		_ = cmd.Process.Kill()
+		killProcessGroup(cmd)
 		return fmt.Errorf("iugum: session job: initialize: %w", err)
 	}
 
@@ -90,12 +105,12 @@ func promptSession(ctx context.Context, text string) error {
 			"cwd": cwd, "mcpServers": []any{},
 		})
 		if err != nil {
-			_ = cmd.Process.Kill()
+			killProcessGroup(cmd)
 			return fmt.Errorf("iugum: session job: session/new: %w", err)
 		}
 		sessionID, _ = res["sessionId"].(string)
 		if sessionID == "" {
-			_ = cmd.Process.Kill()
+			killProcessGroup(cmd)
 			return fmt.Errorf("iugum: session job: session/new missing sessionId")
 		}
 		if err := writeSessionID(file, sessionID); err != nil {
@@ -103,11 +118,23 @@ func promptSession(ctx context.Context, text string) error {
 		}
 	}
 
+	if model := sessionModel(); model != "" {
+		if _, err := c.call(runCtx, "session/set_model", map[string]any{
+			"sessionId": sessionID, "modelId": model,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "iugum: session job: set_model %s: %v\n", model, err)
+		}
+	}
+
+	if prefix := wakePreamble(); prefix != "" {
+		text = prefix + text
+	}
+
 	if _, err := c.call(runCtx, "session/prompt", map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []map[string]string{{"type": "text", "text": text}},
 	}); err != nil {
-		_ = cmd.Process.Kill()
+		killProcessGroup(cmd)
 		return fmt.Errorf("iugum: session job: prompt: %w", err)
 	}
 
@@ -123,6 +150,22 @@ func promptSession(ctx context.Context, text string) error {
 	return nil
 }
 
+// killProcessGroup kills cmd's whole process group, not just cmd itself, so
+// a hung opencode session can't leave descendants behind for the container's
+// init to miss reaping. Falls back to killing just the process if the group
+// lookup fails (e.g. it already exited).
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+}
+
 func sessionFile() string {
 	if p := os.Getenv("IUGUM_SESSION_FILE"); p != "" {
 		return p
@@ -135,6 +178,43 @@ func sessionCWD() string {
 		return p
 	}
 	return defaultSessionCWD
+}
+
+func sessionModel() string {
+	file := os.Getenv("IUGUM_SESSION_MODEL_FILE")
+	if file == "" {
+		file = "/data/MODEL"
+	}
+	if m := readTrimmed(file); m != "" {
+		return m
+	}
+	if m := os.Getenv("OPENCODE_MODEL"); m != "" {
+		return m
+	}
+	if m := os.Getenv("IUGUM_SESSION_MODEL"); m != "" {
+		return m
+	}
+	return ""
+}
+
+func wakePreamble() string {
+	p := os.Getenv("IUGUM_WAKE_PREAMBLE_FILE")
+	if p == "" {
+		p = "/data/WAKE-USAGE.txt"
+	}
+	s := readTrimmed(p)
+	if s == "" {
+		return ""
+	}
+	return "WAKE USAGE: " + s + "\n\n"
+}
+
+func readTrimmed(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func readSessionID(path string) string {
