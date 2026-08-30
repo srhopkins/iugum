@@ -11,8 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/srhopkins/iugum/contract"
 )
@@ -20,29 +23,61 @@ import (
 const (
 	defaultSessionFile = "/home/iugum/session.id"
 	defaultSessionCWD  = "/workspace"
-	sessionTimeout     = 10 * time.Minute
+
+	// defaultTimeout and defaultIdleTimeout are the jobs.yaml fallbacks:
+	// timeout (hard ceiling) and idle_timeout (max silence). A jobs.yaml
+	// without these fields, or with a value that fails to parse, gets these.
+	defaultTimeout     = 4 * time.Hour
+	defaultIdleTimeout = 10 * time.Minute
 )
 
-// SessionPrompt returns a JobFunc that injects text into the standing OpenCode session via ACP.
-func SessionPrompt(prompt string) contract.JobFunc {
+// SessionPrompt returns a JobFunc that injects text into the standing
+// OpenCode session via ACP. timeoutStr and idleTimeoutStr are jobs.yaml's
+// optional per-job timeout / idle_timeout fields (Go duration strings, e.g.
+// "4h", "10m"); empty or unparsable falls back to defaultTimeout /
+// defaultIdleTimeout.
+func SessionPrompt(prompt, timeoutStr, idleTimeoutStr string) contract.JobFunc {
 	text := prompt
 	return func(ctx context.Context, _ contract.Event) error {
 		if strings.TrimSpace(text) == "" {
 			return fmt.Errorf("iugum: session job: empty prompt")
 		}
-		return promptSession(ctx, text)
+		return promptSession(ctx, text, timeoutStr, idleTimeoutStr)
 	}
 }
 
-func promptSession(ctx context.Context, text string) error {
+// resolveJobDurations parses jobs.yaml's timeout / idle_timeout strings.
+// Empty, non-positive, or unparsable input falls back to the default rather
+// than erroring, so a malformed jobs.yaml can't wedge a job with a zero
+// timeout, and a jobs.yaml written before these fields existed loads
+// unchanged.
+func resolveJobDurations(timeoutStr, idleTimeoutStr string) (timeout, idleTimeout time.Duration) {
+	timeout = defaultTimeout
+	if d, err := time.ParseDuration(timeoutStr); err == nil && d > 0 {
+		timeout = d
+	}
+	idleTimeout = defaultIdleTimeout
+	if d, err := time.ParseDuration(idleTimeoutStr); err == nil && d > 0 {
+		idleTimeout = d
+	}
+	return timeout, idleTimeout
+}
+
+func promptSession(ctx context.Context, text, timeoutStr, idleTimeoutStr string) error {
 	if _, err := exec.LookPath("opencode"); err != nil {
 		return fmt.Errorf("iugum: session job: opencode not on PATH")
 	}
 	cwd := sessionCWD()
 	file := sessionFile()
+	timeout, idleTimeout := resolveJobDurations(timeoutStr, idleTimeoutStr)
 
-	runCtx, cancel := context.WithTimeout(ctx, sessionTimeout)
-	defer cancel()
+	// hardCtx is the overall ceiling. runCtx is a child of it that the idle
+	// watchdog can also cancel on its own, so either limit tears the process
+	// down the same way (cmd.Cancel below, via exec.CommandContext).
+	hardCtx, hardCancel := context.WithTimeout(ctx, timeout)
+	defer hardCancel()
+	runCtx, runCancel := context.WithCancel(hardCtx)
+	defer runCancel()
 
 	cmd := exec.CommandContext(runCtx, "opencode", "acp")
 	cmd.Dir = cwd
@@ -61,6 +96,15 @@ func promptSession(ctx context.Context, text string) error {
 	// Bound how long Wait() waits after Cancel fires before giving up on the
 	// pipes, so a wedged process can't also wedge this call forever.
 	cmd.WaitDelay = 5 * time.Second
+
+	// The stall watchdog treats three things as activity: a byte on stdout
+	// or stderr, an ACP event (these ride the stdout JSON-RPC stream, so the
+	// stdout wrapper below already covers them), and a file write under cwd
+	// (the job's data dir: opencode's own working directory). idleTimeout
+	// with none of those resets the process group same as a hard timeout.
+	sw := newStallWatchdog(runCtx, hardCtx, runCancel, idleTimeout, cwd)
+	defer sw.close()
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -69,7 +113,7 @@ func promptSession(ctx context.Context, text string) error {
 	if err != nil {
 		return err
 	}
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = sw.wrapWriter(os.Stderr)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("iugum: session job: %w", err)
 	}
@@ -79,7 +123,7 @@ func promptSession(ctx context.Context, text string) error {
 		pending: map[int]chan acpReply{},
 	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- c.read(stdout) }()
+	go func() { errCh <- c.read(sw.wrapReader(stdout)) }()
 
 	if _, err := c.call(runCtx, "initialize", map[string]any{
 		"protocolVersion": 1,
@@ -140,6 +184,9 @@ func promptSession(ctx context.Context, text string) error {
 
 	_ = stdin.Close()
 	waitErr := cmd.Wait()
+	if reason := sw.reason(); reason != "" {
+		fmt.Fprintf(os.Stderr, "iugum: session job: killed on %s limit\n", reason)
+	}
 	select {
 	case readErr := <-errCh:
 		if readErr != nil && waitErr == nil {
@@ -164,6 +211,186 @@ func killProcessGroup(cmd *exec.Cmd) {
 		return
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+}
+
+// stallReason names which limit, if any, ended the job.
+const (
+	reasonTimeout = "timeout"
+	reasonIdle    = "idle"
+)
+
+// activityTracker records the last time something happened, as a unix-nano
+// timestamp so it's safe to touch and read from multiple goroutines without
+// a mutex.
+type activityTracker struct {
+	lastNano atomic.Int64
+}
+
+func newActivityTracker() *activityTracker {
+	a := &activityTracker{}
+	a.touch()
+	return a
+}
+
+func (a *activityTracker) touch() { a.lastNano.Store(time.Now().UnixNano()) }
+
+func (a *activityTracker) idleFor() time.Duration {
+	return time.Since(time.Unix(0, a.lastNano.Load()))
+}
+
+// stallWatchdog kills a session job's process group when either the hard
+// timeout or the idle_timeout elapses first, and remembers which one fired
+// so the caller can log it.
+type stallWatchdog struct {
+	act       *activityTracker
+	hardCtx   context.Context
+	idleFired atomic.Bool
+	stop      func()
+}
+
+// newStallWatchdog starts watching. cancel is called the moment idleTimeout
+// elapses with no activity; the caller is expected to wire cancel to the
+// same context that cmd.Cancel tears the process group down on (so a hard
+// timeout and an idle timeout both end the job the same way). watchDir is
+// the job's data dir: a file write anywhere under it counts as activity.
+func newStallWatchdog(runCtx, hardCtx context.Context, cancel context.CancelFunc, idleTimeout time.Duration, watchDir string) *stallWatchdog {
+	sw := &stallWatchdog{act: newActivityTracker(), hardCtx: hardCtx}
+	sw.stop = startStallTicker(runCtx, sw.act, idleTimeout, watchDir, func() {
+		sw.idleFired.Store(true)
+		cancel()
+	})
+	return sw
+}
+
+// wrapWriter returns a writer that forwards to w and counts any write as activity.
+func (sw *stallWatchdog) wrapWriter(w io.Writer) io.Writer {
+	return &activityWriter{w: w, touch: sw.act.touch}
+}
+
+// wrapReader returns a reader that forwards from r and counts any read as
+// activity. Used on the ACP stdout pipe: every ACP event (session update,
+// tool call, …) arrives as bytes on this stream, so counting bytes here
+// covers "stdout" and "ACP event" with one signal.
+func (sw *stallWatchdog) wrapReader(r io.Reader) io.Reader {
+	return &activityReader{r: r, touch: sw.act.touch}
+}
+
+// reason reports which limit ended the job, if either did. Checked after
+// cmd.Wait() returns. Priority goes to the hard timeout on a tie, since
+// hardCtx is the ancestor context and reads as authoritative.
+func (sw *stallWatchdog) reason() string {
+	if sw.hardCtx.Err() == context.DeadlineExceeded {
+		return reasonTimeout
+	}
+	if sw.idleFired.Load() {
+		return reasonIdle
+	}
+	return ""
+}
+
+func (sw *stallWatchdog) close() { sw.stop() }
+
+type activityWriter struct {
+	w     io.Writer
+	touch func()
+}
+
+func (a *activityWriter) Write(p []byte) (int, error) {
+	n, err := a.w.Write(p)
+	if n > 0 {
+		a.touch()
+	}
+	return n, err
+}
+
+type activityReader struct {
+	r     io.Reader
+	touch func()
+}
+
+func (a *activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.touch()
+	}
+	return n, err
+}
+
+// startStallTicker polls act and calls onIdle once idleTimeout has elapsed
+// with no touch. It also watches watchDir with fsnotify (the directory tree
+// as it exists at call time — a best-effort signal, not a guarantee against
+// a brand-new subdirectory created after startup) so a file write there
+// counts as activity even when the process stays quiet on stdout/stderr.
+// Returns a stop func; safe to call exactly once.
+func startStallTicker(ctx context.Context, act *activityTracker, idleTimeout time.Duration, watchDir string, onIdle func()) func() {
+	done := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(done) }) }
+
+	if watcher, err := fsnotify.NewWatcher(); err == nil {
+		addWatchTree(watcher, watchDir)
+		go func() {
+			defer watcher.Close()
+			for {
+				select {
+				case <-done:
+					return
+				case ev, ok := <-watcher.Events:
+					if !ok {
+						return
+					}
+					if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0 {
+						act.touch()
+					}
+				case _, ok := <-watcher.Errors:
+					if !ok {
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	interval := idleTimeout / 5
+	if interval < 20*time.Millisecond {
+		interval = 20 * time.Millisecond
+	}
+	if interval > 2*time.Second {
+		interval = 2 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if act.idleFor() >= idleTimeout {
+					onIdle()
+					return
+				}
+			}
+		}
+	}()
+	return stop
+}
+
+// addWatchTree adds watchDir and every subdirectory under it to w. Errors
+// (missing dir, permission) are ignored: the fsnotify signal is a bonus on
+// top of the stdout/stderr activity signal, never the only one.
+func addWatchTree(w *fsnotify.Watcher, watchDir string) {
+	_ = filepath.WalkDir(watchDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // best-effort watch, see comment above
+		}
+		if d.IsDir() {
+			_ = w.Add(path)
+		}
+		return nil
+	})
 }
 
 func sessionFile() string {

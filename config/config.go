@@ -40,6 +40,14 @@ type JobSpec struct {
 	Workflow []string `yaml:"workflow,omitempty"`
 	After    []string `yaml:"after,omitempty"`
 	On       string   `yaml:"on,omitempty"` // success | failure | skipped | complete
+
+	// Timeout and IdleTimeout apply to kind session (the standing OpenCode
+	// session runner). Both are Go duration strings (e.g. "4h", "10m").
+	// Empty, zero, or unparsable falls back to the runner's default (4h /
+	// 10m) rather than failing the job, so an old jobs.yaml without these
+	// fields loads unchanged.
+	Timeout     string `yaml:"timeout,omitempty"`      // hard ceiling on the whole job
+	IdleTimeout string `yaml:"idle_timeout,omitempty"` // max silence before the job is treated as stalled
 }
 
 // HookRoute sends a hook name to a job.
