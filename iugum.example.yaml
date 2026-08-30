@@ -59,10 +59,15 @@ jobs:
 
   # kind session injects text into the standing OpenCode session (ACP).
   # Agents add these with: iugum job add hourly-checks --every 1h --prompt "Run hourly-checks"
+  # timeout (hard ceiling, default 4h) and idle_timeout (max silence, default
+  # 10m) are optional Go duration strings; a stall watchdog kills the whole
+  # process group and logs which one fired.
   # - name: hourly-checks
   #   kind: session
   #   spec: "@every 1h"
   #   prompt: "Run the hourly-checks skill now."
+  #   timeout: 4h
+  #   idle_timeout: 10m
 
   # kind http POSTs the event JSON to a URL when the job fires.
   # - name: notify-slack

@@ -12,7 +12,7 @@ Current defaults:
 - **Logs — observe.** Separate sqlite file (`observe-logs.db`). LogQL is the query language. FTS5 word search.
 - **Policy — Casbin.** Every command hits the gate first. The default model allows all. A deny row locks one action (example: `schedule, add`).
 - **Memory — SQLite.** Facts, FTS5 word search, optional embeddings, namespaces, and a glossary graph. Tickets stay on Dolt.
-- **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. `iugum job` adds jobs to `jobs.yaml`. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`.
+- **Jobs — go-cron.** Schedule, adhoc `@triggered`, or hook. `iugum job` adds jobs to `jobs.yaml`. File watch uses fsnotify. HTTP `POST /hooks/{name}` listens when `hook_http` is set. HMAC uses `IUGUM_HOOK_SECRET`. `kind: session` jobs take a per-job `timeout` (default 4h) and `idle_timeout` (default 10m) stall watchdog — see `docs/agent.md`.
 - **Ship — prepare-pr.** Writes a review markdown file and a script. Does not push. First push or `gh pr create`.
 
 More slots can join the same file. The contract stays the same.

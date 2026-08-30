@@ -94,6 +94,7 @@ startup:
 - If `home/.env` exists, `up` passes it to Docker as `--env-file`. That file is gitignored with the rest of `home/`. Put long-lived tokens there (`HASS_TOKEN=...`).
 - `jobs` points to a cron jobs file (default `jobs.yaml`). `up` mounts it at `/workspace/jobs.yaml` and sets `IUGUM_JOBS`.
 - `shm_size` is Docker `/dev/shm` size (example `1g`). Chromium needs this.
+- `extra_hosts` is a list of Docker `--add-host` entries. Empty defaults to `host.docker.internal:host-gateway` so Linux containers can reach services on the host.
 
 Inside the container the agent adds work with `iugum job`:
 
@@ -102,6 +103,23 @@ iugum job add hourly-checks --every 1h --prompt "Run the hourly-checks skill now
 ```
 
 That writes `jobs.yaml`. The running `iugum up` process loads the new job within a second. `kind: session` injects the prompt into the standing OpenCode session. Write the skill under `.opencode/skills/<name>/SKILL.md`.
+
+A `kind: session` job also takes two optional stall-watchdog fields, both Go duration strings:
+
+```yaml
+jobs:
+  - name: hourly-checks
+    spec: "@every 1h"
+    kind: session
+    prompt: "Run the hourly-checks skill now."
+    timeout: 4h        # hard ceiling on the whole job; default 4h
+    idle_timeout: 10m  # kill if the job goes this long with no activity; default 10m
+```
+
+- `timeout` is the hard ceiling. The job is killed once it elapses, no matter how busy it is.
+- `idle_timeout` fires on silence: no stdout/stderr byte, no ACP event (these ride the stdout stream, so it's one signal), and no file write under the job's working directory. A chatty job resets this clock on every event; a stuck one hits it even with time left on `timeout`.
+- Either limit kills the whole process group (not just the direct child) and logs which one fired: `killed on timeout limit` or `killed on idle limit`.
+- Both fields are optional. A `jobs.yaml` written before they existed loads unchanged and gets the defaults above.
 
 Cron is allowed by default. Lock it in `home/policy.csv`:
 

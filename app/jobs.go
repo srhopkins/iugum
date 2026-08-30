@@ -35,7 +35,7 @@ func (a *App) registerJobBody(j config.JobSpec) {
 		}
 	case "session":
 		if j.Prompt != "" {
-			a.Hooks.Register(j.Name, jobexec.SessionPrompt(j.Prompt))
+			a.Hooks.Register(j.Name, jobexec.SessionPrompt(j.Prompt, j.Timeout, j.IdleTimeout))
 		}
 	}
 }
@@ -103,7 +103,7 @@ func RunJobBody(ctx context.Context, j config.JobSpec) error {
 	case "http":
 		fn = jobexec.HTTPPost(j.URL)
 	case "session":
-		fn = jobexec.SessionPrompt(j.Prompt)
+		fn = jobexec.SessionPrompt(j.Prompt, j.Timeout, j.IdleTimeout)
 	default:
 		return fmt.Errorf("iugum: job %q: kind %q cannot run from the CLI", j.Name, j.Kind)
 	}
