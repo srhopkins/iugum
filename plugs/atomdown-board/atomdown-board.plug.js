@@ -17,6 +17,11 @@
 // iugum-w6y for why. The only name this file treats specially is "id",
 // because Atomdown Core itself requires every atom to have one (SPEC.md
 // "Identity"); that is a Core structural rule, not a domain attribute.
+// Same policy for the drag-to-reorder code below: a "locked" atom (whatever
+// that ends up meaning at the application level) still drags normally here.
+// Steve was explicit that lock protects an atom's CONTENT, not its
+// position — see iugum-w6y's design notes — so reordering never consults
+// any attribute value, locked or not.
 
 // ---------------------------------------------------------------------------
 // Worker <-> host runtime shim.
@@ -284,6 +289,300 @@ function serializeAtomLine(prefix, attrs, suffix) {
   return `${prefix}${attrText} ${suffix}`;
 }
 
+// ---------------------------------------------------------------------------
+// Drag-to-reorder: source-line-range scan + move.
+//
+// parseAtoms() above answers "what atoms exist and what attributes do they
+// carry" for rendering. It deliberately throws away line-range information
+// (an atom's .text is just its content, joined). Reordering needs the
+// opposite: not the content, but exactly which source lines make up a
+// movable unit, so a move can cut and reinsert those lines verbatim and
+// leave everything else byte-identical.
+//
+// A "unit" is the thing a drag actually moves:
+//   - a standalone atom (explicit or implicit): its directive line, if any,
+//     plus its one content block.
+//   - a whole atom-group: every line from "<atom-group ...>" through
+//     "</atom-group>", regardless of how many atoms or blank lines are
+//     inside it.
+//
+// Group contiguity decision (iugum-w6y): a group always moves as one
+// indivisible unit. emit.go rejects a discontiguous group
+// (TestEmitRejectsDiscontiguousGroup) — dragging a single member out from
+// between other members would produce exactly that. Moving the whole span
+// verbatim, as one cut/paste, makes a discontiguous result structurally
+// impossible: the lines between "<atom-group ...>" and "</atom-group>"
+// never separate from each other, so the invariant holds by construction,
+// not by a check this code has to remember to run. It also matches what an
+// atom-group means per SPEC.md ("Extensions") — a deliberately grouped set
+// of related atoms, most often materialize --split's split list items,
+// which are meant to stay together. Refusing the drag instead was
+// rejected: it would make roughly a third of a split-list document
+// (testdata/valid/split-list.md) immovable for no benefit to the user, who
+// dragged one card meaning "move this content," not "move this one list
+// item out of its list." Dissolving the group on drag was also rejected:
+// silently deleting group structure as a side effect of reordering is a
+// surprising, hard-to-notice content change — the group markers are
+// meaningful data (see split.go), not incidental formatting.
+// ---------------------------------------------------------------------------
+
+/**
+ * Scans sourceText into an ordered list of top-level reorderable units, plus
+ * the line range of any fixed preamble (currently just the <atomdown
+ * version="1"/> marker, if present) that always stays first and is never
+ * itself draggable.
+ *
+ * Returns { lines, preambleEndLine, units }, where each unit is
+ * { unitKey, kind: "atom" | "group", startLine, endLine, atomIds, groupId,
+ *   implicit }. startLine/endLine are inclusive 0-based indices into `lines`
+ * and cover exactly that unit's own lines — no leading/trailing blank line,
+ * no neighboring unit's content.
+ *
+ * unitKey is "atom:<id>" for a standalone atom (implicit atoms use their
+ * "implicit-N" id, numbered in the same left-to-right document order
+ * parseAtoms() uses, so a card's data-atom-id always resolves to the right
+ * unit) or "group:<groupId>" for a whole group — every atom inside a group
+ * shares that one unit, which is exactly what makes moving the group by its
+ * unit key keep it contiguous.
+ */
+function computeUnits(sourceText) {
+  const lines = sourceText.split("\n");
+  const n = lines.length;
+  const units = [];
+
+  function isBoundary(line) {
+    return line.trim() === "" ||
+      ATOM_TAG_RE.test(line) ||
+      GROUP_OPEN_RE.test(line) ||
+      GROUP_CLOSE_RE.test(line) ||
+      DOC_MARKER_RE.test(line);
+  }
+
+  let i = 0;
+  let preambleEndLine = -1;
+
+  // Fixed preamble: leading blank lines, then the doc marker line if
+  // present. Never reordered — it is document-level metadata, not an atom.
+  while (i < n) {
+    if (lines[i].trim() === "") { i++; continue; }
+    if (DOC_MARKER_RE.test(lines[i])) {
+      preambleEndLine = i;
+      i++;
+      continue;
+    }
+    break;
+  }
+
+  let implicitCounter = 0;
+
+  while (i < n) {
+    if (lines[i].trim() === "") { i++; continue; }
+
+    const groupOpenMatch = lines[i].match(GROUP_OPEN_RE);
+    if (groupOpenMatch) {
+      const startLine = i;
+      const groupAttrs = parseAttrs(groupOpenMatch[1]);
+      const groupIdAttr = groupAttrs.find((a) => a.name === "id");
+      const groupId = groupIdAttr ? groupIdAttr.value : null;
+      i++;
+      const atomIds = [];
+      while (i < n && !GROUP_CLOSE_RE.test(lines[i])) {
+        const am = lines[i].match(ATOM_TAG_RE);
+        if (am) {
+          const attrs = parseAttrs(am[2]);
+          const idAttr = attrs.find((a) => a.name === "id");
+          if (idAttr) atomIds.push(idAttr.value);
+        }
+        i++;
+      }
+      // If the group never closes (malformed document), fall back to
+      // treating whatever remains as this unit's span rather than
+      // throwing — findAtomDirectiveLine-style leniency.
+      const endLine = i < n ? i : n - 1;
+      units.push({
+        unitKey: `group:${groupId}`,
+        kind: "group",
+        startLine,
+        endLine,
+        atomIds,
+        groupId,
+      });
+      if (i < n) i++; // step past the close marker line itself
+      continue;
+    }
+
+    const atomMatch = lines[i].match(ATOM_TAG_RE);
+    if (atomMatch) {
+      const attrs = parseAttrs(atomMatch[2]);
+      const idAttr = attrs.find((a) => a.name === "id");
+      if (idAttr) {
+        const startLine = i;
+        i++;
+        let endLine = startLine;
+        while (i < n && !isBoundary(lines[i])) { endLine = i; i++; }
+        units.push({
+          unitKey: `atom:${idAttr.value}`,
+          kind: "atom",
+          startLine,
+          endLine,
+          atomIds: [idAttr.value],
+          groupId: null,
+        });
+        continue;
+      }
+      // No id: not a valid directive by SPEC.md ("Identity"). Fall through
+      // and treat the line as ordinary content, same as parseAtoms() does.
+    }
+
+    // Implicit atom: a content block with no directive of its own.
+    const startLine = i;
+    let endLine = i;
+    i++;
+    while (i < n && !isBoundary(lines[i])) { endLine = i; i++; }
+    implicitCounter++;
+    units.push({
+      unitKey: `atom:implicit-${implicitCounter}`,
+      kind: "atom",
+      startLine,
+      endLine,
+      atomIds: [`implicit-${implicitCounter}`],
+      groupId: null,
+      implicit: true,
+    });
+  }
+
+  return { lines, preambleEndLine, units };
+}
+
+/**
+ * Moves one unit (an atom, or a whole group — see computeUnits() above) to
+ * a new position relative to another unit, and returns the rewritten
+ * document text. Never called with cached state: the caller (reorderAtom
+ * below) always re-scans a freshly-read copy of the page first, the same
+ * "re-read, don't trust the client" pattern saveAttrs() uses.
+ *
+ * movedUnitKey/targetUnitKey are unit keys as produced by computeUnits()
+ * ("atom:<id>" or "group:<id>"). targetUnitKey may be null with
+ * placement "end" (drop past the last card) or "start" (drop before the
+ * first); otherwise placement is "before" or "after" the target unit.
+ *
+ * Returns { ok: true, text } on a real change, { ok: true, unchanged: true }
+ * if the drop would not change the order (e.g. dropped adjacent to its own
+ * current position, or on itself), or { ok: false, error } if either unit
+ * can no longer be found — the document changed since the board was drawn.
+ */
+function reorderUnit(sourceText, movedUnitKey, targetUnitKey, placement) {
+  const { lines, preambleEndLine, units } = computeUnits(sourceText);
+
+  if (units.length === 0) {
+    return { ok: false, error: "No reorderable blocks found in this document" };
+  }
+
+  const movedIndex = units.findIndex((u) => u.unitKey === movedUnitKey);
+  if (movedIndex === -1) {
+    return {
+      ok: false,
+      error: "Could not find the dragged block (document changed since the board opened?)",
+    };
+  }
+  const moved = units[movedIndex];
+
+  let targetIndex;
+  if (targetUnitKey == null) {
+    targetIndex = placement === "start" ? 0 : units.length;
+  } else {
+    targetIndex = units.findIndex((u) => u.unitKey === targetUnitKey);
+    if (targetIndex === -1) {
+      return {
+        ok: false,
+        error: "Could not find the drop target (document changed since the board opened?)",
+      };
+    }
+    if (targetIndex === movedIndex) return { ok: true, unchanged: true };
+    if (placement === "after") targetIndex += 1;
+  }
+
+  const remaining = units.filter((_, idx) => idx !== movedIndex);
+  let insertAt = movedIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  insertAt = Math.max(0, Math.min(insertAt, remaining.length));
+  const newOrder = remaining.slice(0, insertAt)
+    .concat([moved], remaining.slice(insertAt));
+
+  const sameOrder = newOrder.length === units.length &&
+    newOrder.every((u, idx) => u.unitKey === units[idx].unitKey);
+  if (sameOrder) return { ok: true, unchanged: true };
+
+  // Gap map: the exact original blank-line run between each pair of units
+  // that were adjacent in the original document, keyed by
+  // "beforeKey|afterKey". A pair that stays adjacent in the same order
+  // after the move reuses its original gap line-for-line — that is how a
+  // user's own extra blank lines, or a genuinely zero-blank-line seam like
+  // the one between the <atomdown version="1"/> marker and the first atom
+  // in atomdown/testdata/valid/split-list.md, survive a drag that never
+  // touched that seam. A brand new seam (created by the move) gets exactly
+  // one blank line, matching every top-level separator already used in
+  // atomdown/testdata/valid/{groups,split-list}.md.
+  const PREAMBLE_KEY = " preamble";
+  const gapMap = new Map();
+  if (preambleEndLine >= 0) {
+    gapMap.set(
+      `${PREAMBLE_KEY}|${units[0].unitKey}`,
+      lines.slice(preambleEndLine + 1, units[0].startLine),
+    );
+  }
+  for (let i = 0; i + 1 < units.length; i++) {
+    gapMap.set(
+      `${units[i].unitKey}|${units[i + 1].unitKey}`,
+      lines.slice(units[i].endLine + 1, units[i + 1].startLine),
+    );
+  }
+
+  const resultLines = [];
+  if (preambleEndLine >= 0) {
+    resultLines.push(...lines.slice(0, preambleEndLine + 1));
+    const gap = gapMap.get(`${PREAMBLE_KEY}|${newOrder[0].unitKey}`);
+    resultLines.push(...(gap !== undefined ? gap : [""]));
+  }
+  newOrder.forEach((unit, idx) => {
+    if (idx > 0) {
+      const prev = newOrder[idx - 1];
+      const gap = gapMap.get(`${prev.unitKey}|${unit.unitKey}`);
+      resultLines.push(...(gap !== undefined ? gap : [""]));
+    }
+    resultLines.push(...lines.slice(unit.startLine, unit.endLine + 1));
+  });
+
+  // Whatever trailed the original last unit (typically just the file's
+  // final newline, possibly extra trailing blank lines) stays at the very
+  // end of the document regardless of which unit now ends it.
+  const lastOriginalUnit = units[units.length - 1];
+  resultLines.push(...lines.slice(lastOriginalUnit.endLine + 1));
+
+  return { ok: true, text: resultLines.join("\n") };
+}
+
+// CSS custom property names SilverBullet's own theme defines on the
+// PARENT document's <html> element. A plug panel renders in an iframe, and
+// CSS custom properties do not cross that boundary on their own — see
+// applyParentTheme() in the client script below, which is what actually
+// copies these across at runtime. Listed once here so the fallback values
+// baked into buildBoardHtml()'s <style> block and this list can't drift
+// apart silently.
+const THEME_VAR_NAMES = [
+  "--root-background-color",
+  "--root-color",
+  "--ui-surface-background-color",
+  "--ui-surface-color",
+  "--ui-surface-border-color",
+  "--ui-surface-section-background-color",
+  "--ui-surface-hover-background-color",
+  "--ui-accent-color",
+  "--ui-accent-contrast-color",
+  "--subtle-color",
+  "--subtle-background-color",
+  "--link-color",
+];
+
 function buildBoardHtml(atoms, pageName) {
   const cardsHtml = atoms.map((atom) => {
     const classes = ["board-card"];
@@ -300,7 +599,8 @@ function buildBoardHtml(atoms, pageName) {
     }
     return `
       <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}">
-        <div class="board-card-header">
+        <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
+          <span class="board-drag-handle" aria-hidden="true">&#10021;&#10021;</span>
           <span class="board-card-id">${escapeHtml(atom.id)}</span>
           ${badges.join("")}
           <div class="board-card-menu">
@@ -313,19 +613,39 @@ function buildBoardHtml(atoms, pageName) {
   }).join("\n");
 
   const style = `
+    :root {
+      /* Light-theme snapshot as the fallback for every var() below — never
+         a dark guess. applyParentTheme() in the client script overwrites
+         these with the real live values (light or dark) read from the
+         parent document the moment this panel loads, so the fallback only
+         shows for the instant before that runs, or if reading the parent
+         ever fails. */
+      --root-background-color: #ffffff;
+      --root-color: #37352f;
+      --ui-surface-background-color: #ffffff;
+      --ui-surface-color: #37352f;
+      --ui-surface-border-color: #e9e9e7;
+      --ui-surface-section-background-color: #f7f6f3;
+      --ui-surface-hover-background-color: #f1f0ee;
+      --ui-accent-color: #2383e2;
+      --ui-accent-contrast-color: #ffffff;
+      --subtle-color: #787774;
+      --subtle-background-color: #f7f6f3;
+      --link-color: #0330cb;
+    }
     body {
       margin: 0;
       padding: 0;
-      font-family: system-ui, -apple-system, sans-serif;
-      background: var(--root-background-color, #1e1e1e);
-      color: var(--root-color, #ddd);
+      font-family: var(--board-font-family, system-ui, -apple-system, sans-serif);
+      background: var(--root-background-color);
+      color: var(--root-color);
     }
     .board-toolbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 10px 16px;
-      border-bottom: 1px solid rgba(128,128,128,0.3);
+      border-bottom: 1px solid var(--ui-surface-border-color);
       position: sticky;
       top: 0;
       background: inherit;
@@ -334,14 +654,14 @@ function buildBoardHtml(atoms, pageName) {
     .board-title { font-weight: 600; font-size: 14px; }
     .board-close {
       cursor: pointer;
-      border: 1px solid rgba(128,128,128,0.5);
+      border: 1px solid var(--ui-surface-border-color);
       background: transparent;
       color: inherit;
       border-radius: 4px;
       padding: 4px 12px;
       font-size: 13px;
     }
-    .board-close:hover { background: rgba(128,128,128,0.2); }
+    .board-close:hover { background: var(--ui-surface-hover-background-color); }
     /* A single vertical column, like TiddlyWiki's story river. The column IS
        the document's order, which is what makes drag-to-reorder meaningful:
        moving a card up or down moves that block in the source file. A grid
@@ -356,37 +676,55 @@ function buildBoardHtml(atoms, pageName) {
       align-items: stretch;
     }
     .board-card {
-      border: 1px solid rgba(128,128,128,0.4);
+      border: 1px solid var(--ui-surface-border-color);
       border-radius: 6px;
-      background: rgba(128,128,128,0.08);
+      background: var(--ui-surface-section-background-color);
       display: flex;
       flex-direction: column;
       min-height: 60px;
       width: 100%;
+      transition: box-shadow 0.1s ease-out;
     }
     .board-card-implicit { border-style: dashed; }
-    .board-card-grouped { border-left: 3px solid #7aa2f7; }
+    .board-card-grouped { border-left: 3px solid var(--ui-accent-color); }
+    /* Drag state, applied by the client script below. board-card-dragging
+       marks every card sharing the dragged unit (a whole group drags
+       together, see computeUnits() in the worker code); dropbefore/after
+       mark the card the pointer is currently hovering, to show where the
+       drop would land. */
+    .board-card-dragging { opacity: 0.4; }
+    .board-card-dropbefore { box-shadow: inset 0 3px 0 0 var(--ui-accent-color); }
+    .board-card-dropafter { box-shadow: inset 0 -3px 0 0 var(--ui-accent-color); }
     .board-card-header {
       display: flex;
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
       padding: 6px 8px;
-      border-bottom: 1px solid rgba(128,128,128,0.3);
+      border-bottom: 1px solid var(--ui-surface-border-color);
       position: relative;
+      cursor: grab;
+    }
+    .board-card-header:active { cursor: grabbing; }
+    .board-drag-handle {
+      opacity: 0.45;
+      font-size: 11px;
+      line-height: 1;
+      user-select: none;
     }
     .board-card-id {
       font-family: ui-monospace, monospace;
       font-size: 11px;
-      opacity: 0.7;
+      color: var(--subtle-color);
     }
     .board-badge {
       font-size: 10px;
       padding: 1px 6px;
       border-radius: 999px;
-      background: rgba(128,128,128,0.25);
+      background: var(--ui-surface-hover-background-color);
+      color: var(--subtle-color);
     }
-    .board-badge-group { background: rgba(122,162,247,0.25); }
+    .board-badge-group { background: var(--ui-accent-color); color: var(--ui-accent-contrast-color); }
     .board-card-body {
       margin: 0;
       padding: 8px;
@@ -407,35 +745,35 @@ function buildBoardHtml(atoms, pageName) {
       padding: 2px 6px;
       border-radius: 4px;
     }
-    .board-menu-btn:hover { background: rgba(128,128,128,0.25); }
+    .board-menu-btn:hover { background: var(--ui-surface-hover-background-color); }
     .board-menu-popover {
       position: absolute;
       top: 100%;
       right: 0;
       z-index: 30;
-      background: var(--root-background-color, #2a2a2a);
-      border: 1px solid rgba(128,128,128,0.4);
+      background: var(--ui-surface-background-color);
+      border: 1px solid var(--ui-surface-border-color);
       border-radius: 6px;
       padding: 8px;
       min-width: 240px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
     }
     .board-menu-popover[hidden] { display: none; }
     .board-menu-title {
       font-size: 12px;
       font-weight: 600;
       margin-bottom: 6px;
-      opacity: 0.8;
+      color: var(--subtle-color);
     }
-    .board-attr-empty { font-size: 12px; opacity: 0.7; padding: 4px 0; }
+    .board-attr-empty { font-size: 12px; color: var(--subtle-color); padding: 4px 0; }
     .board-attr-row { display: flex; gap: 4px; margin-bottom: 4px; }
     .board-attr-name, .board-attr-value {
       flex: 1;
       min-width: 0;
       font-size: 12px;
       padding: 3px 5px;
-      background: rgba(128,128,128,0.15);
-      border: 1px solid rgba(128,128,128,0.3);
+      background: var(--ui-surface-section-background-color);
+      border: 1px solid var(--ui-surface-border-color);
       color: inherit;
       border-radius: 3px;
       font-family: ui-monospace, monospace;
@@ -455,14 +793,14 @@ function buildBoardHtml(atoms, pageName) {
     .board-attr-add, .board-attr-save {
       cursor: pointer;
       font-size: 12px;
-      border: 1px solid rgba(128,128,128,0.5);
+      border: 1px solid var(--ui-surface-border-color);
       background: transparent;
       color: inherit;
       border-radius: 4px;
       padding: 3px 10px;
     }
-    .board-attr-add:hover, .board-attr-save:hover { background: rgba(128,128,128,0.2); }
-    .board-menu-status { font-size: 11px; margin-top: 4px; opacity: 0.8; min-height: 14px; }
+    .board-attr-add:hover, .board-attr-save:hover { background: var(--ui-surface-hover-background-color); }
+    .board-menu-status { font-size: 11px; margin-top: 4px; color: var(--subtle-color); min-height: 14px; }
   `;
 
   const html = `
@@ -471,7 +809,7 @@ function buildBoardHtml(atoms, pageName) {
       <div class="board-title">Atomdown Board${pageName ? " — " + escapeHtml(pageName) : ""}</div>
       <button class="board-close" id="atomdown-board-close">Close</button>
     </div>
-    <div class="board-cards">${cardsHtml || "<p style=\"padding:16px;opacity:0.7;\">No atoms found in this document.</p>"}</div>
+    <div class="board-cards">${cardsHtml || "<p style=\"padding:16px;color:var(--subtle-color);\">No atoms found in this document.</p>"}</div>
   `;
 
   // Everything below runs inside the panel iframe (see
@@ -485,6 +823,49 @@ function buildBoardHtml(atoms, pageName) {
   // "id" (disabled, not removable) because Atomdown Core requires one on
   // every atom — see the header comment in this file.
   const clientScript = `
+    // Theme: SilverBullet's CSS custom properties live on the PARENT
+    // document's <html>, and custom properties do not cross an iframe
+    // boundary on their own. This panel iframe has no "sandbox" attribute
+    // and is loaded via srcDoc (see silverbullet client/components/
+    // panel.tsx), which makes it same-origin with the parent — so read the
+    // parent's live computed values directly and copy them onto this
+    // document's own root. If that ever fails (cross-origin, parent gone),
+    // the :root fallback values baked into the <style> block above are the
+    // light-theme snapshot, never a dark guess.
+    var THEME_VAR_NAMES = ${JSON.stringify(THEME_VAR_NAMES)};
+
+    function applyParentTheme() {
+      try {
+        var parentDoc = window.parent && window.parent.document;
+        if (!parentDoc || !parentDoc.documentElement) return;
+        var cs = window.parent.getComputedStyle(parentDoc.documentElement);
+        THEME_VAR_NAMES.forEach(function (name) {
+          var value = cs.getPropertyValue(name);
+          if (value && value.trim()) {
+            document.documentElement.style.setProperty(name, value.trim());
+          }
+        });
+        var bodyEl = parentDoc.body || parentDoc.documentElement;
+        var fontFamily = window.parent.getComputedStyle(bodyEl).fontFamily;
+        if (fontFamily) {
+          document.documentElement.style.setProperty("--board-font-family", fontFamily);
+        }
+      } catch (e) {
+        // Cross-origin or otherwise unreachable - leave the light-theme
+        // fallback in place rather than throw.
+      }
+    }
+
+    applyParentTheme();
+    // panel_html.ts's own top-level listener (outside this eval'd script)
+    // already updates data-theme on this document when the parent toggles
+    // theme; it does not carry the actual color values, so re-read them
+    // here on the same message so a live toggle is reflected, not just the
+    // moment this panel first opened.
+    window.addEventListener("message", function (e) {
+      if (e.data && e.data.type === "theme") applyParentTheme();
+    });
+
     function el(tag, className) {
       var e = document.createElement(tag);
       if (className) e.className = className;
@@ -631,11 +1012,122 @@ function buildBoardHtml(atoms, pageName) {
         try { await syscall("system.invokeFunction", "atomdown-board.notifyClosed"); } catch (e) {}
       });
     }
+
+    // --- Drag to reorder -----------------------------------------------
+    //
+    // A unit key mirrors computeUnits() in the worker code: an atom that
+    // belongs to a group resolves to that whole group's key, so dragging
+    // (or dropping onto) any one member of a group always means "the whole
+    // group" - the actual cut/paste of source lines happens fresh on the
+    // worker side against the real document, this is only the client's
+    // notion of "which cards move/highlight together" and "is this drop
+    // target my own current unit" for the UI.
+    function unitKeyFor(atom) {
+      return atom.groupId ? ("group:" + atom.groupId) : ("atom:" + atom.id);
+    }
+
+    var dragState = null;
+
+    function clearDropMarkers() {
+      document.querySelectorAll(".board-card-dropbefore, .board-card-dropafter").forEach(function (c) {
+        c.classList.remove("board-card-dropbefore", "board-card-dropafter");
+      });
+    }
+
+    async function performDrop(movedUnitKey, targetUnitKey, placement) {
+      try {
+        var result = await syscall(
+          "system.invokeFunction",
+          "atomdown-board.reorderAtom",
+          movedUnitKey,
+          targetUnitKey,
+          placement,
+        );
+        if (!result || !result.ok) {
+          window.alert("Reorder failed: " + ((result && result.error) || "unknown error"));
+        }
+        // On success the worker re-renders this panel itself (see
+        // reorderAtom in the worker code) - nothing to do here.
+      } catch (e) {
+        window.alert("Reorder failed: " + e.message);
+      }
+    }
+
+    document.querySelectorAll(".board-card-header[data-drag-atom]").forEach(function (header) {
+      var atomId = header.getAttribute("data-drag-atom");
+      var atom = ATOMDOWN_BOARD_DATA.find(function (a) { return a.id === atomId; });
+      if (!atom) return;
+      var unitKey = unitKeyFor(atom);
+
+      header.addEventListener("dragstart", function (e) {
+        dragState = { unitKey: unitKey };
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", unitKey); } catch (err) {}
+        document.querySelectorAll(".board-card").forEach(function (c) {
+          var cAtom = ATOMDOWN_BOARD_DATA.find(function (a) { return a.id === c.getAttribute("data-atom-id"); });
+          if (cAtom && unitKeyFor(cAtom) === unitKey) c.classList.add("board-card-dragging");
+        });
+      });
+
+      header.addEventListener("dragend", function () {
+        document.querySelectorAll(".board-card-dragging").forEach(function (c) {
+          c.classList.remove("board-card-dragging");
+        });
+        clearDropMarkers();
+        dragState = null;
+      });
+    });
+
+    document.querySelectorAll(".board-card[data-atom-id]").forEach(function (card) {
+      var atomId = card.getAttribute("data-atom-id");
+      var atom = ATOMDOWN_BOARD_DATA.find(function (a) { return a.id === atomId; });
+      if (!atom) return;
+      var targetUnitKey = unitKeyFor(atom);
+
+      card.addEventListener("dragover", function (e) {
+        if (!dragState || dragState.unitKey === targetUnitKey) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        var rect = card.getBoundingClientRect();
+        var before = (e.clientY - rect.top) < rect.height / 2;
+        clearDropMarkers();
+        card.classList.add(before ? "board-card-dropbefore" : "board-card-dropafter");
+      });
+
+      card.addEventListener("drop", async function (e) {
+        if (!dragState || dragState.unitKey === targetUnitKey) return;
+        e.preventDefault();
+        var rect = card.getBoundingClientRect();
+        var before = (e.clientY - rect.top) < rect.height / 2;
+        var movedUnitKey = dragState.unitKey;
+        clearDropMarkers();
+        await performDrop(movedUnitKey, targetUnitKey, before ? "before" : "after");
+      });
+    });
+
+    // Dropping in the empty space below the last card (not over any card)
+    // moves the dragged unit to the very end of the document.
+    var cardsContainer = document.querySelector(".board-cards");
+    if (cardsContainer) {
+      cardsContainer.addEventListener("dragover", function (e) {
+        if (!dragState || e.target !== cardsContainer) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      });
+      cardsContainer.addEventListener("drop", async function (e) {
+        if (!dragState || e.target !== cardsContainer) return;
+        e.preventDefault();
+        var movedUnitKey = dragState.unitKey;
+        clearDropMarkers();
+        await performDrop(movedUnitKey, null, "end");
+      });
+    }
   `;
 
   const clientData = atoms.map((atom) => ({
     id: atom.id,
     implicit: atom.implicit,
+    groupId: atom.groupId || null,
     attrs: atom.attrs || [],
   }));
 
@@ -659,9 +1151,19 @@ async function toggleBoard() {
   const atoms = parseAtoms(sourceText);
   const { html, script } = buildBoardHtml(atoms, pageName);
 
-  // A small inset keeps this close to full-viewport (see
-  // client/styles/main.scss .sb-modal, which insets a fixed backdrop).
-  await syscall("editor.showPanel", "modal", 24, html, script);
+  // Inset 0: this reads as a page VIEW, not a floating dialog, matching
+  // Steve's expectation ("an option in the UI" that switches the current
+  // page's display, not a popup over it). SilverBullet's own
+  // client/styles/main.scss .sb-modal class still applies a border-radius,
+  // a box-shadow, and a 1px border to the panel wrapper, and
+  // .sb-modal-backdrop still exists as a sibling element behind it — both
+  // are compiled into the PARENT document and are not reachable from this
+  // plug's iframe content, so a faint rounded/shadowed edge at the screen
+  // border is an unavoidable residual, not a bug in this file. Inset 0
+  // does remove the floating margin and (once the background matches the
+  // real page background, via applyParentTheme() above) the visible dim
+  // behind it, since the panel now fully covers the backdrop.
+  await syscall("editor.showPanel", "modal", 0, html, script);
   boardOpen = true;
 }
 
@@ -727,7 +1229,43 @@ async function saveAttrs(atomId, attrsJson) {
   return { ok: true };
 }
 
-const functionMapping = { toggleBoard, notifyClosed, saveAttrs };
+/**
+ * Moves one card's block (or, if it belongs to a group, the whole group —
+ * see the "Drag-to-reorder" comment above computeUnits()) to a new position
+ * in the source document, called from a card's drop handler in the panel
+ * above.
+ *
+ * Re-reads the page fresh, same as saveAttrs(), rather than trusting
+ * whatever the client last rendered — the document may have changed since
+ * the board was opened (another edit, another save). On success, rewrites
+ * the whole page and re-renders the still-open panel in place with the new
+ * order, so the board does not need a separate "refresh" round trip and
+ * does not close as a side effect of a successful drop.
+ */
+async function reorderAtom(movedUnitKey, targetUnitKey, placement) {
+  const pageName = await syscall("editor.getCurrentPage");
+  const currentText = await syscall("space.readPage", pageName);
+
+  const result = reorderUnit(currentText, movedUnitKey, targetUnitKey, placement);
+  if (!result.ok) return result;
+  if (result.unchanged) return { ok: true, unchanged: true };
+
+  await syscall("space.writePage", pageName, result.text);
+
+  try {
+    await syscall("editor.reloadPage");
+  } catch (e) {
+    // ignore, same as saveAttrs()
+  }
+
+  const atoms = parseAtoms(result.text);
+  const { html, script } = buildBoardHtml(atoms, pageName);
+  await syscall("editor.showPanel", "modal", 0, html, script);
+
+  return { ok: true };
+}
+
+const functionMapping = { toggleBoard, notifyClosed, saveAttrs, reorderAtom };
 
 const manifest = {
   name: "atomdown-board",
@@ -742,6 +1280,9 @@ const manifest = {
     },
     saveAttrs: {
       path: "./atomdown-board.js:saveAttrs",
+    },
+    reorderAtom: {
+      path: "./atomdown-board.js:reorderAtom",
     },
   },
 };

@@ -5,9 +5,9 @@ Atomdown atom in the current document, and lets you view and edit the
 generic XML attributes on each atom's directive. Built for bead
 `iugum-w6y` ("SilverBullet board view for Atomdown documents").
 
-This is a spike. It proves the rendering and edit-write surfaces work
-end to end. It is **not** the finished board — see "What is NOT
-implemented" below.
+This is a spike. It proves the rendering, edit-write, and drag-to-reorder
+surfaces work end to end. It is **not** the finished board — see "What is
+NOT implemented" below.
 
 ## What it does
 
@@ -27,9 +27,16 @@ implemented" below.
    remove one, then click **Save**. Saving rewrites *only* that atom's
    one directive line in the document (see "How the write path works"),
    and leaves everything else byte-identical.
-5. Closing the modal (the **Close** button, or running the toggle command
+5. Drag a card by its header (the grip icon, id, or badges — anywhere in
+   the header strip, not the prose body below it) to reorder it. Dropping
+   on the top half of another card moves it before that card; the bottom
+   half moves it after. Dropping in the empty space below the last card
+   moves it to the very end. See "Drag-to-reorder" below for exactly what
+   this rewrites in the file and how atom groups are handled.
+6. Closing the modal (the **Close** button, or running the toggle command
    again) returns to the normal page. The document is otherwise
-   unchanged unless you explicitly clicked Save on an attribute edit.
+   unchanged unless you explicitly clicked Save on an attribute edit or
+   dragged a card.
 
 The `id` attribute is shown but is never editable and can never be
 removed — Atomdown Core requires every atom to have one
@@ -77,6 +84,162 @@ function, which:
 The directive is always rebuilt onto one source line, since `SPEC.md`
 requires that ("Each directive must occupy one source line") and the
 `inline-directive` lint diagnostic (`atomdown/parser.go`) enforces it.
+
+## Drag-to-reorder
+
+Dragging a card moves that block in the source file. There are no
+coordinates and no layout attributes anywhere — the card's position in the
+column IS its position in the document, per Steve's design direction in
+`iugum-w6y`. This is implemented separately from the rendering path above:
+
+- `computeUnits(sourceText)` scans the document into an ordered list of
+  "units" — a standalone atom (explicit or implicit) is one unit; a whole
+  `<atom-group>...</atom-group>` span is one unit, regardless of how many
+  atoms or blank lines are inside it. Each unit records its exact
+  `[startLine, endLine]` in the source, not just its content.
+- `reorderUnit(sourceText, movedUnitKey, targetUnitKey, placement)` removes
+  one unit from that list and reinserts it before/after another, then
+  rebuilds the document. A pair of units that stays adjacent in the same
+  order across the move reuses its *original* blank-line gap byte for
+  byte — including a genuinely zero-blank-line seam, like the one between
+  `<!-- <atomdown version="1"/> -->` and the first atom in
+  `atomdown/testdata/valid/split-list.md` — so a move that never touches a
+  given seam cannot change its formatting. A brand new seam (created by the
+  move) gets exactly one blank line, matching every top-level separator
+  already used in `atomdown/testdata/valid/{groups,split-list}.md`.
+- `reorderAtom(movedUnitKey, targetUnitKey, placement)` is the exported
+  plug function the panel's drop handler calls. Like `saveAttrs`, it
+  re-reads the page fresh via `space.readPage` rather than trusting
+  whatever the client last rendered, then writes the whole rewritten
+  document back via `space.writePage`. On success it re-renders the
+  still-open panel with the new order in place (calling `editor.showPanel`
+  again) instead of closing it — a successful drop should not feel like
+  the board closed on you.
+- A drop that would not change the order (dropped on itself, or already
+  adjacent in that exact position) is a no-op: `reorderUnit` detects this
+  and returns without writing the file.
+
+A locked atom (whatever "locked" ends up meaning at the application level
+— see `iugum-w6y`'s design notes) still drags normally. Steve was explicit
+that a lock protects an atom's *content*, not its position, so this code
+never reads any attribute value, locked or not, before allowing a drag.
+
+### Group contiguity decision
+
+`emit.go` rejects a discontiguous group (`TestEmitRejectsDiscontiguousGroup`
+in `atomdown/emit_test.go`), and `materialize --split list-item` wraps
+split list items in one `atom-group`. Dragging a single member out from
+between its siblings would produce exactly the discontiguous shape that
+test rejects.
+
+**Decision: a group always moves as one indivisible unit.** Dragging any
+card that belongs to a group — grabbing it by its header, same as any
+other card — moves the whole group: every member, in its existing
+internal order, relocates together to the new position. This is not a
+check this code has to remember to run on every drop; it falls out of
+`computeUnits()` treating the whole `<atom-group>...</atom-group>` span as
+one unit, so `reorderUnit()` only ever knows how to move that span as one
+contiguous slice of lines. A discontiguous result is structurally
+impossible to produce through this code path, not merely disallowed.
+
+Two alternatives were considered and rejected:
+
+- **Refuse the drag.** This would make a large fraction of a real
+  split-list document (see `atomdown/testdata/valid/split-list.md`, where
+  every list item is a group member) permanently immovable, for no benefit
+  to a user who dragged a card meaning "move this content."
+- **Dissolve the group on drag.** Silently deleting group structure as a
+  side effect of a reorder is a surprising, easy-to-miss content change —
+  the group markers are meaningful data produced by `materialize --split`
+  (see `atomdown/split.go`), not incidental formatting a reorder should be
+  allowed to erase.
+
+Content inside a group's span that has no directive of its own (an
+implicit block that happens to sit between two group markers) moves with
+the group rather than becoming its own independently draggable unit —
+consistent with the same contiguity reasoning: extracting it would need to
+invent a new position for it that could put it outside the group's own
+markers.
+
+Proven with a real test document (`scratchpad/reorder-harness.mjs`, not
+committed — imports the actual plug module the same way the earlier
+`saveAttrs` verification did): dragging the *middle* member of a tight,
+no-blank-line group (the exact shape `materialize --split list-item`
+produces, from `atomdown/testdata/valid/split-list.md`) moved all three
+list items together, in their original relative order, with the group's
+open/close markers still directly wrapping them and nothing interleaved.
+The same was proven for a *loose* group with blank lines between members
+(the shape in `atomdown/testdata/valid/groups.md`). Both mutated documents
+were then re-checked with the real binary: `go run ./cmd/atomdown lint`
+printed `ok` (exit 0), and `go run ./cmd/atomdown strip` produced the same
+prose, reordered, with no doubled blank lines and no lost content.
+
+## Theme
+
+The board renders inside an iframe (`client/components/panel.tsx`'s
+`IFramePanel`), and CSS custom properties do not cross an iframe boundary
+on their own — SilverBullet's real theme variables
+(`--root-background-color` and friends) live only on the *parent*
+document's `<html>`. Without doing anything about this, every `var(...,
+fallback)` in this plug's own `<style>` block would always resolve to
+its JS-authored fallback, regardless of the space's actual light or dark
+theme.
+
+The fix lives entirely in the client script that runs inside the panel
+iframe (not the plug's worker code, which has no `window`/`document` at
+all — see `isWorker` at the top of `atomdown-board.plug.js`). That iframe
+is loaded via `srcDoc` with no `sandbox` attribute
+(`client/components/panel.tsx`), which makes it same-origin with the
+parent, so `applyParentTheme()` reads the parent's live computed custom
+properties with `window.parent.getComputedStyle(...)` and copies them onto
+this document's own root with `document.documentElement.style.setProperty`
+— live values, not a hardcoded palette. It also copies the parent body's
+computed `font-family` the same way. If reading the parent ever fails
+(cross-origin, parent gone), the `<style>` block's own `:root` values are
+used instead — those are a snapshot of the space's real *light*-theme
+values (confirmed live from the running instance), never a dark guess.
+
+Verified in the browser: with the space in its default light theme, the
+board's background, text, borders, and accent color matched the page
+behind it (`--root-background-color: #ffffff`, etc.) rather than the
+previous hardcoded dark fallback. Toggling the parent to
+`data-theme="dark"` and then closing and reopening the board picked up the
+real dark values correctly. A live toggle *while the board stays open* did
+not update it in this test: `panel.tsx` does hold a `MutationObserver` on
+`document.documentElement`'s `data-theme` attribute that is meant to
+`postMessage` a `{type: "theme"}` notice into the iframe on every toggle,
+and this plug's client script does listen for that message and re-run
+`applyParentTheme()` when it arrives — but toggling `data-theme` in this
+test never produced that message (confirmed by counting `message` events
+inside the iframe across two toggles: zero), so something about how this
+deployed instance updates theme did not trigger it. Manually posting the
+same `{type: "theme"}` message *did* make the listener re-apply the
+correct colors, proving that half of the mechanism works — the reopen path
+is what actually reads live values and is therefore the reliable one.
+Reopening the board (Close, then run the command again) after a theme
+change is guaranteed correct; whether it updates live while left open is
+not.
+
+## Modal chrome — reads as a page view, not a floating dialog
+
+`toggleBoard()` calls `editor.showPanel("modal", 0, html, script)` with
+inset `0` (previously `24`), so the panel fills the window edge to edge
+instead of floating with a margin, and — once the background actually
+matches the real page background (see "Theme" above) — the dim backdrop
+behind it is no longer visible, since the panel now fully covers it.
+
+**Residual constraint, not fixable from inside this plug:** SilverBullet's
+own compiled `client/styles/main.scss` still applies a `border-radius:
+8px`, a `box-shadow`, and a `1px` border to the `.sb-modal` wrapper
+element, and renders `.sb-modal-backdrop` as a sibling behind it — both of
+those classes live on elements in the *parent* document
+(`client/editor_ui.tsx`), not inside this plug's iframe, so nothing this
+plug's `<style>` block does can reach them. Confirmed in the browser via
+`getComputedStyle` on the live `.sb-modal` element: `inset: 0px` (this
+plug's change took effect), but `borderRadius: 8px` and a visible
+`boxShadow` remained. In practice this shows up as a faint rounded/shadowed
+edge right at the screen border — everything else (backdrop dimming, the
+floating margin) is gone.
 
 ## Build
 
@@ -136,7 +299,40 @@ for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
 
-## What was verified vs. what needs Steve to click
+## What was verified
+
+The rendering/edit spike (commits `a171a7f`, `61d85be`) was verified only
+without a browser; the theme fix, modal-chrome fix, and drag-to-reorder
+feature (this change) were verified in a real, running browser against the
+FFAI SilverBullet space at `http://localhost:3000`, using a scratch page
+(`Reference/atomdown-board-test.md`, materialized with the real
+`atomdown materialize --split list-item` binary, then deleted before
+finishing — never a real document):
+
+- **Theme:** confirmed the board's colors matched the space's live light
+  theme, and matched the live dark theme after toggling and reopening the
+  board — see "Theme" above for what was and was not confirmed about a
+  live in-place toggle.
+- **Modal chrome:** confirmed `inset: 0` reached the real `.sb-modal`
+  element and the floating margin/backdrop dimming were gone; confirmed
+  the residual rounded corner and box-shadow described in "Modal chrome"
+  above are real and come from the parent document, not this plug.
+- **Drag-to-reorder:** dispatched real `dragstart`/`dragover`/`drop`/
+  `dragend` `DragEvent`s (with a `DataTransfer`) inside the panel's
+  iframe. Confirmed: (1) dragging a standalone card to after the last card
+  moved it there, in both the rendered board and the on-disk file; (2)
+  dragging the *middle* card of a real materialized atom-group moved the
+  whole group together, in original order, markers intact — the group
+  contiguity decision above, exercised for real, not just in the Node
+  harness; (3) dropping in the empty space below the last card moved a
+  card to the very end; (4) after each drag, `go run ./cmd/atomdown lint`
+  on the rewritten file printed `ok` (exit 0); (5) the attribute-editing
+  popover (unchanged code) still opened correctly afterward, and the
+  browser console showed no errors from this plug throughout.
+- Group contiguity was additionally proven against two real atomdown test
+  fixture shapes (tight and loose groups) via
+  `scratchpad/reorder-harness.mjs` (not committed) — see "Group
+  contiguity decision" above for what that harness checked.
 
 Verified without a browser, using Node to import and run the actual
 `atomdown-board.plug.js` module (not a reimplementation of its logic —
@@ -166,31 +362,25 @@ the real file, with only `syscall()` mocked):
   `{ok: false, error: ...}` rather than corrupting the document or
   throwing.
 
-**Not verified — needs Steve to click, because this environment has no
-browser access to a running SilverBullet instance:**
+All of the following, previously listed as "needs Steve to click," were
+confirmed in the real browser session described above: "Atomdown: Toggle
+Board" appears in the real Command Palette and opens the panel on screen;
+cards lay out sensibly and the three-dot menu popover opens/closes
+correctly by mouse; clicking Save round-trips through the actual
+`system.invokeFunction`/postMessage bridge and the page visibly updates.
 
-- That "Atomdown: Toggle Board" actually appears in the real Command
-  Palette and opens the modal on screen.
-- That the modal visually renders as a full-screen overlay, that cards
-  lay out sensibly, and that the three-dot menu popover positions and
-  opens/closes correctly by mouse.
-- That clicking Save in the real browser round-trips through the actual
-  `system.invokeFunction` / postMessage bridge (the Node harness mocked
-  `syscall` directly rather than exercising that bridge) and that the
-  page visibly updates / the toolbar's Close button and re-running the
-  toggle command agree on open/closed state.
-- Cross-browser behavior of `CSS.escape`, used once in the popover
-  wiring (broadly supported in modern browsers, but not exercised here).
+**Still not verified:** cross-browser behavior of `CSS.escape` (used once
+in the popover wiring) and of the drag-and-drop event handling, beyond the
+one Chromium-based browser this was exercised in.
 
 ## What is NOT implemented (out of scope for this spike)
 
-- **Dragging or reordering cards.** Cards render in document order and
-  do not move. No drag handles, no drop targets.
-- **Writing the file from a drag.** There is no drag, so there is
-  nothing to write for that; the only write path is the attribute
-  editor described above.
-- **Locking.** No atom is treated as non-draggable or protected — there
-  is no dragging yet to protect against.
+- **Reordering members within a group.** Dragging a group card moves the
+  whole group (see "Group contiguity decision" above); there is no way to
+  change the order of atoms *inside* one group's markers from the board.
+- **Locking.** No atom is treated as non-draggable or protected on the
+  basis of any attribute — see "Drag-to-reorder" above for why that is
+  deliberate, not a gap.
 - **Any application-level attribute behavior.** This plug does not know
   about `audited`, `audit-source`, `lock`, or any other specific
   attribute name. It is a generic viewer/editor of whatever attributes
@@ -199,7 +389,10 @@ browser access to a running SilverBullet instance:**
 - **Creating a directive on an implicit atom.** You can view (empty) and
   not edit an implicit atom's attributes; there is no "materialize this
   block as an explicit atom" action yet.
-- **Concurrent-edit safety.** `saveAttrs` re-reads the page fresh at
-  save time and only rewrites the one target line, but if the document
-  changes between opening the board and clicking Save, the save is still
-  last-write-wins on that one line. Fine for a single-user spike.
+- **Concurrent-edit safety.** `saveAttrs` and `reorderAtom` both re-read
+  the page fresh before writing, but a drop or a save is still
+  last-write-wins against whatever the file held at that moment — if the
+  document changed since the board was opened, the card the user meant to
+  move might land somewhere unexpected, or `reorderUnit` might report "no
+  longer found" if the specific unit disappeared. Fine for a single-user
+  spike; not safe for two people editing the same page at once.

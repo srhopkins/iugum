@@ -17,3 +17,6 @@ functions:
 
   saveAttrs:
     path: "./atomdown-board.js:saveAttrs"
+
+  reorderAtom:
+    path: "./atomdown-board.js:reorderAtom"
