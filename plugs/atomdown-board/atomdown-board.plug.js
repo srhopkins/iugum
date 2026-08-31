@@ -845,9 +845,21 @@ function buildBoardHtml(atoms, pageName) {
             document.documentElement.style.setProperty(name, value.trim());
           }
         });
-        var bodyEl = parentDoc.body || parentDoc.documentElement;
-        var fontFamily = window.parent.getComputedStyle(bodyEl).fontFamily;
-        if (fontFamily) {
+        // SilverBullet never styles <body>, so its computed fontFamily is the
+        // browser default ("Times" on this machine). The font the app actually
+        // renders with lives in the --editor-font custom property; fall back to
+        // the editor element's own computed font, and only then to <body>.
+        var fontFamily = cs.getPropertyValue("--editor-font").trim();
+        if (!fontFamily) {
+          var edEl = parentDoc.querySelector("#sb-editor .cm-content") ||
+            parentDoc.querySelector("#sb-editor");
+          if (edEl) fontFamily = window.parent.getComputedStyle(edEl).fontFamily;
+        }
+        if (!fontFamily) {
+          var bodyEl = parentDoc.body || parentDoc.documentElement;
+          fontFamily = window.parent.getComputedStyle(bodyEl).fontFamily;
+        }
+        if (fontFamily && !/^Times\b/.test(fontFamily)) {
           document.documentElement.style.setProperty("--board-font-family", fontFamily);
         }
       } catch (e) {
