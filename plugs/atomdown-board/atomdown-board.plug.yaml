@@ -1,0 +1,19 @@
+# Logical manifest for the atomdown-board plug.
+#
+# This file is NOT read by SilverBullet at runtime and is NOT compiled by
+# `deno task build` / `silverbullet plug-compile` on this machine (see
+# README.md for why). It documents the manifest that is hand-encoded inside
+# atomdown-board.plug.js, so the two stay in sync when either changes.
+name: atomdown-board
+version: 0.1
+functions:
+  toggleBoard:
+    path: "./atomdown-board.js:toggleBoard"
+    command:
+      name: "Atomdown: Toggle Board"
+
+  notifyClosed:
+    path: "./atomdown-board.js:notifyClosed"
+
+  saveAttrs:
+    path: "./atomdown-board.js:saveAttrs"
