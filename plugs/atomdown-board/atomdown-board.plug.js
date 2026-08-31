@@ -342,12 +342,18 @@ function buildBoardHtml(atoms, pageName) {
       font-size: 13px;
     }
     .board-close:hover { background: rgba(128,128,128,0.2); }
+    /* A single vertical column, like TiddlyWiki's story river. The column IS
+       the document's order, which is what makes drag-to-reorder meaningful:
+       moving a card up or down moves that block in the source file. A grid
+       would have no natural sequence to map onto. */
     .board-cards {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
       padding: 16px;
-      align-content: start;
+      max-width: 820px;
+      margin: 0 auto;
+      align-items: stretch;
     }
     .board-card {
       border: 1px solid rgba(128,128,128,0.4);
@@ -355,7 +361,8 @@ function buildBoardHtml(atoms, pageName) {
       background: rgba(128,128,128,0.08);
       display: flex;
       flex-direction: column;
-      min-height: 80px;
+      min-height: 60px;
+      width: 100%;
     }
     .board-card-implicit { border-style: dashed; }
     .board-card-grouped { border-left: 3px solid #7aa2f7; }
