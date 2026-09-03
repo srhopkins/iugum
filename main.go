@@ -25,12 +25,13 @@ func init() {
 	embedbin.Set(silverbulletBin)
 }
 
-const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|job|prepare-pr|skill>
+const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|run|job|prepare-pr|skill>
 
   up           start wiki, observe, jobs/hooks/watch, code-server, browser, and ttyd in one process
   container    build or stop the iugum image (docker or podman)
   agent        scaffold and manage per-agent homes
   beads        work-graph slot (default: beads)
+  beadview     read-mostly HTML viewer for beads: ticket table + bd's own dependency graph
   wiki         notes-server slot (default: SilverBullet)
   observe      metrics+logs store and graph UI (sqlite + uPlot)
   net          network policy: plan | apply [--dry-run] | show (iptables or nftables)
@@ -51,6 +52,7 @@ const usage = `Usage: iugum <up|container|agent|net|beads|wiki|observe|run|job|p
   iugum agent tui|acp <name> [--dry-run]
   iugum agent checkpoint <name>
   iugum beads [bd args...]
+  iugum beadview [--port N] [--hostname ADDR] [--dir DIR]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
   iugum observe [--port N] [--hostname ADDR]
   iugum net plan | apply [--dry-run] | show
@@ -100,6 +102,18 @@ func run(args []string) int {
 		return runJob(ctx, a, args[1:])
 	case "beads":
 		if err := a.RunTracker(ctx, args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
+			return 1
+		}
+		return 0
+	case "beadview":
+		port, host, dir, code, ok := parseBeadViewArgs(args[1:])
+		if !ok {
+			return code
+		}
+		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := a.ServeBeadView(ctx, port, host, dir); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
 			return 1
 		}
@@ -327,6 +341,71 @@ func parseWikiArgs(args []string) (port int, host, space string, code int, ok bo
 		}
 	}
 	return port, host, space, 0, true
+}
+
+func parseBeadViewArgs(args []string) (port int, host, dir string, code int, ok bool) {
+	port = 3849
+	host = "127.0.0.1"
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--help" || a == "-h":
+			fmt.Fprint(os.Stdout, usage)
+			return 0, "", "", 0, false
+		case a == "--port" || a == "-p":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "beadview: --port requires a value")
+				return 0, "", "", 2, false
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				fmt.Fprintf(os.Stderr, "beadview: invalid port %q\n", args[i])
+				return 0, "", "", 2, false
+			}
+			port = n
+		case strings.HasPrefix(a, "--port="):
+			n, err := strconv.Atoi(strings.TrimPrefix(a, "--port="))
+			if err != nil || n <= 0 || n > 65535 {
+				fmt.Fprintf(os.Stderr, "beadview: invalid port %q\n", a)
+				return 0, "", "", 2, false
+			}
+			port = n
+		case a == "--hostname" || a == "-L":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "beadview: --hostname requires a value")
+				return 0, "", "", 2, false
+			}
+			i++
+			host = args[i]
+		case strings.HasPrefix(a, "--hostname="):
+			host = strings.TrimPrefix(a, "--hostname=")
+			if host == "" {
+				fmt.Fprintln(os.Stderr, "beadview: --hostname requires a value")
+				return 0, "", "", 2, false
+			}
+		case a == "--dir" || a == "-C":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "beadview: --dir requires a value")
+				return 0, "", "", 2, false
+			}
+			i++
+			dir = args[i]
+		case strings.HasPrefix(a, "--dir="):
+			dir = strings.TrimPrefix(a, "--dir=")
+			if dir == "" {
+				fmt.Fprintln(os.Stderr, "beadview: --dir requires a value")
+				return 0, "", "", 2, false
+			}
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(os.Stderr, "beadview: unknown flag %s\n", a)
+			return 0, "", "", 2, false
+		default:
+			fmt.Fprintf(os.Stderr, "beadview: extra argument %s\n", a)
+			return 0, "", "", 2, false
+		}
+	}
+	return port, host, dir, 0, true
 }
 
 func parseObserveArgs(args []string) (port int, host string, code int, ok bool) {

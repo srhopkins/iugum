@@ -90,6 +90,7 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | obj | act | when |
 |-----|-----|------|
 | `tracker` | `run` | `iugum beads …` |
+| `beadview` | `serve` | `iugum beadview …` |
 | `wiki` | `serve` | `iugum wiki …` |
 | `observe` | `ingest` | metric/log write |
 | `observe` | `query` | metric/log read |
