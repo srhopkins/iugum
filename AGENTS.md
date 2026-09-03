@@ -23,6 +23,7 @@ The Beads blocks below this layout are generated. Do not rewrite those blocks fo
 |------------|----------|
 | `iugum --help` | Top-level usage |
 | `iugum beads …` | In-process Beads — identical to `bd`, not `go run` |
+| `iugum beadview` | Read-mostly HTML viewer: ticket table + bd's own dependency graph; default `127.0.0.1:3849` |
 | `iugum wiki [space-dir]` | Embedded SilverBullet; default space `./wiki` |
 | `iugum observe` | sqlite metrics+logs + uPlot UI; default `127.0.0.1:3848` |
 | `iugum job` | list, add, remove, or run cron jobs in `jobs.yaml` |

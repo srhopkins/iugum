@@ -1,0 +1,37 @@
+{{define "detail-content"}}
+<p><a href="/">&larr; all tickets</a></p>
+<h2>{{.Bead.ID}}: {{.Bead.Title}}</h2>
+<dl class="detail-grid">
+<dt>Status</dt><dd class="status-{{.Bead.Status}}">{{.Bead.Status}}</dd>
+<dt>Priority</dt><dd>{{.Bead.PriorityLabel}}</dd>
+<dt>Type</dt><dd>{{.Bead.IssueType}}</dd>
+<dt>Assignee</dt><dd>{{if .Bead.Assignee}}{{.Bead.Assignee}}{{else}}<span class="muted">unassigned</span>{{end}}</dd>
+<dt>Owner</dt><dd>{{.Bead.Owner}}</dd>
+<dt>Labels</dt><dd>{{range .Bead.Labels}}<span class="pill">{{.}}</span> {{else}}<span class="muted">none</span>{{end}}</dd>
+<dt>Created</dt><dd>{{.Bead.CreatedAt}}</dd>
+<dt>Updated</dt><dd>{{.Bead.UpdatedAt}}</dd>
+{{if .Bead.Parent}}<dt>Parent</dt><dd><a href="/bead/{{.Bead.Parent}}">{{.Bead.Parent}}</a></dd>{{end}}
+</dl>
+
+<h3>Description</h3>
+<pre class="body">{{if .Bead.Description}}{{.Bead.Description}}{{else}}<span class="muted">(none)</span>{{end}}</pre>
+
+{{if .Bead.Notes}}
+<h3>Notes</h3>
+<pre class="body">{{.Bead.Notes}}</pre>
+{{end}}
+
+<h3>Dependencies</h3>
+{{if .Bead.Dependencies}}
+<ul class="deps">
+{{range .Bead.Dependencies}}<li><a href="/bead/{{.DependsOnID}}">{{.DependsOnID}}</a> <span class="muted">({{.Type}})</span></li>{{end}}
+</ul>
+{{else}}<p class="muted">none</p>{{end}}
+
+<h3>Comments</h3>
+{{if .Comments}}
+{{range .Comments}}
+<div class="comment"><div class="meta">{{.Author}} - {{.CreatedAt}}</div>{{.Text}}</div>
+{{end}}
+{{else}}<p class="muted">no comments</p>{{end}}
+{{end}}
