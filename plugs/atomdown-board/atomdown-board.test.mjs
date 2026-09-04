@@ -49,6 +49,9 @@ const {
   slugConflict,
   deriveGroupSlug,
   slugOrId,
+  buildBoardHtml,
+  boardOpenKey,
+  collapsedKey,
 } = plug.internals;
 
 // --- Fixtures --------------------------------------------------------------
@@ -567,17 +570,39 @@ test("reorderUnit still moves a whole group as one unit", () => {
 // therefore one entry in the editor's own undo history — and that none of them
 // writes the space file directly, because a space write is invisible to undo.
 
-function recordingSyscall(text) {
+// options:
+//   page          - what editor.getCurrentPage reports (default "Board")
+//   store         - the clientStore contents to start from
+//   storeThrows   - every clientStore call rejects, the way it would in a
+//                   browser with site data blocked
+function recordingSyscall(text, options) {
+  const opts = options || {};
   const calls = [];
-  const state = { text };
+  const state = {
+    text,
+    page: opts.page === undefined ? "Board" : opts.page,
+    store: opts.store || {},
+  };
   globalThis.syscall = async function (name, ...args) {
     calls.push({ name, args });
     if (name === "editor.getText") return state.text;
-    if (name === "editor.getCurrentPage") return "Board";
+    if (name === "editor.getCurrentPage") return state.page;
     if (name === "editor.replaceRange") {
       const [from, to, insert] = args;
       state.text = state.text.slice(0, from) + insert + state.text.slice(to);
       return;
+    }
+    if (name.indexOf("clientStore.") === 0) {
+      if (opts.storeThrows) throw new Error("store unavailable");
+      if (name === "clientStore.get") return state.store[args[0]];
+      if (name === "clientStore.set") {
+        state.store[args[0]] = args[1];
+        return;
+      }
+      if (name === "clientStore.delete") {
+        delete state.store[args[0]];
+        return;
+      }
     }
     return undefined;
   };
@@ -1168,10 +1193,13 @@ test("a rendered card shows the slug and keeps the id visible", async () => {
   assert.ok(panel, "expected the board to redraw");
   // showPanel("modal", inset, html, script) - html is the third argument.
   const html = panel.args[2];
-  // The group badge reads the name...
-  assert.ok(html.includes("group first-two"));
-  assert.ok(!html.includes("group " + result.groupId));
-  // ...and the real group id is still discoverable in its tooltip.
+  // The group's header reads the name...
+  assert.ok(html.includes('<span class="board-group-name"'));
+  assert.ok(html.includes(">first-two</span>"));
+  // ...and the real group id is still on the header, in the same small subtle
+  // monospace span a card uses, and in the tooltip.
+  assert.ok(html.includes('<span class="board-group-id"'));
+  assert.ok(html.includes(">" + result.groupId + "</span>"));
   assert.ok(html.includes("id " + result.groupId));
   // Every atom's own id is still on its card.
   for (const id of ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC"]) {
@@ -1179,15 +1207,20 @@ test("a rendered card shows the slug and keeps the id visible", async () => {
   }
 });
 
-test("a group with no name still shows its id on the badge", async () => {
+test("a group with no name still shows its id on the header", async () => {
   const { calls } = recordingSyscall(THREE_ATOMS);
   const result = await plug.functionMapping.groupAtoms(
     JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
     "",
   );
   assert.equal(result.ok, true);
-  const panel = calls.filter((c) => c.name === "editor.showPanel").pop();
-  assert.ok(panel.args[2].includes("group " + result.groupId));
+  const html = calls.filter((c) => c.name === "editor.showPanel").pop().args[2];
+  // No name span at all, and the id is the label.
+  assert.ok(!html.includes('class="board-group-name"'));
+  assert.ok(html.includes(
+    '<span class="board-group-id" title="Group id ' + result.groupId +
+      ' (no name yet)',
+  ));
 });
 
 test("the panel gets the same slug functions the worker uses", () => {
@@ -1205,4 +1238,343 @@ test("the panel gets the same slug functions the worker uses", () => {
   for (const texts of [["## Email PRs"], ["Body only."], []]) {
     assert.equal(injected.deriveGroupSlug(texts), deriveGroupSlug(texts));
   }
+});
+
+// --- one group, one object -------------------------------------------------
+//
+// The claim under test is that an atom-group renders as ONE bordered
+// container with a header bar, and that the per-card group marking (an accent
+// stripe and a `group <slug>` badge on every member) is gone, because the
+// container is what says "group" now.
+
+function boardHtml(sourceText, collapsedIds) {
+  return buildBoardHtml(parseAtoms(sourceText), "Board", collapsedIds).html;
+}
+
+function countOf(text, needle) {
+  return text.split(needle).length - 1;
+}
+
+test("a group renders as one container holding its member cards", () => {
+  const html = boardHtml(TIGHT_GROUP);
+  assert.equal(countOf(html, '<div class="board-group"'), 1);
+  assert.equal(countOf(html, "data-group-header="), 1);
+  // The container holds exactly the group's two members, and the standalone
+  // atom above it stays outside.
+  const opened = html.indexOf('data-group-cards="KF53ASNE"');
+  const cardsInside = html.slice(opened);
+  assert.ok(cardsInside.includes('data-atom-id="FAPWJSRC"'));
+  assert.ok(cardsInside.includes('data-atom-id="GPG5QA7A"'));
+  assert.ok(!cardsInside.includes('data-atom-id="J1BBCED5"'));
+});
+
+test("a member card carries no group accent and no group badge", () => {
+  const html = boardHtml(TIGHT_GROUP);
+  assert.ok(!html.includes("board-card-grouped"));
+  assert.ok(!html.includes("board-badge-group"));
+  // The stripe rule itself is gone, not merely unused.
+  assert.ok(!html.includes("border-left: 3px solid var(--ui-accent-color)"));
+});
+
+test("the container reuses the accent token, and adds no second colour", () => {
+  const html = boardHtml(TIGHT_GROUP);
+  assert.ok(html.includes(".board-group {"));
+  assert.ok(html.includes("border: 2px solid var(--ui-accent-color)"));
+  assert.ok(html.includes("background: var(--ui-accent-color)"));
+  // Every literal colour in the stylesheet is a :root fallback for a theme
+  // variable. Nothing added a hue of its own.
+  const style = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const rootBlock = style.slice(style.indexOf(":root {"), style.indexOf("body {"));
+  for (const hex of style.match(/#[0-9a-fA-F]{3,8}\b/g) || []) {
+    assert.ok(rootBlock.includes(hex), hex);
+  }
+  // The one functional colour is the popover's drop shadow, which predates
+  // this work and is a shadow, not a hue.
+  const rgbas = style.match(/rgba?\([^)]*\)/g) || [];
+  assert.deepEqual(rgbas, ["rgba(0,0,0,0.2)"]);
+});
+
+test("the header carries the group-level actions, Rename and Ungroup", () => {
+  const html = boardHtml(LOOSE_GROUP);
+  assert.ok(html.includes('data-group-rename="3G7K9R5V"'));
+  assert.ok(html.includes('data-group-ungroup="3G7K9R5V"'));
+  assert.ok(html.includes(">Rename</button>"));
+  assert.ok(html.includes(">Ungroup</button>"));
+});
+
+test("the member card menu no longer offers Rename group", () => {
+  const built = buildBoardHtml(parseAtoms(LOOSE_GROUP), "Board", []);
+  assert.ok(!built.html.includes("Rename group"));
+  assert.ok(!built.script.includes("Rename group"));
+  // The card menu keeps its own items: Group / Ungroup and the attributes.
+  assert.ok(built.script.includes("boardGroupBtn"));
+  assert.ok(built.script.includes("+ Add attribute"));
+});
+
+test("clicking the header is wired to select the whole group", () => {
+  const script = buildBoardHtml(parseAtoms(LOOSE_GROUP), "Board", []).script;
+  assert.ok(script.includes("function selectGroup("));
+  assert.ok(script.includes("board-card-selected"));
+  // The header listener selects, it does not invent a second grouping rule:
+  // the decision still comes from the shared groupMenuState.
+  assert.ok(script.includes("selectGroup(groupEl,"));
+  assert.ok(script.includes("groupMenuState(UNIT_ORDER"));
+});
+
+test("two adjacent groups render two separate containers", () => {
+  const source = [
+    '<!-- <atom-group id="AAAAAAA1"> -->',
+    '<!-- <atom id="BBBBBBB1"/> -->',
+    "One.",
+    "<!-- </atom-group> -->",
+    '<!-- <atom-group id="AAAAAAA2"> -->',
+    '<!-- <atom id="BBBBBBB2"/> -->',
+    "Two.",
+    "<!-- </atom-group> -->",
+    "",
+  ].join("\n");
+  const html = boardHtml(source);
+  assert.equal(countOf(html, "data-group-header="), 2);
+  assert.ok(html.indexOf("AAAAAAA1") < html.indexOf("AAAAAAA2"));
+});
+
+test("cards stay in document order whether or not they are in a container", () => {
+  const html = boardHtml(TIGHT_GROUP);
+  const order = ["J1BBCED5", "FAPWJSRC", "GPG5QA7A"].map((id) =>
+    html.indexOf('data-atom-id="' + id + '"')
+  );
+  for (const at of order) assert.ok(at > 0);
+  assert.deepEqual(order.slice().sort((a, b) => a - b), order);
+});
+
+test("a selected card is a double ring, not the container's single edge", () => {
+  const html = boardHtml(TIGHT_GROUP);
+  const rule = html.slice(
+    html.indexOf(".board-card-selected {"),
+    html.indexOf("}", html.indexOf(".board-card-selected {")),
+  );
+  // Same hue, different shape: a border plus a second ring set outside it,
+  // plus a lifted background. No second colour token.
+  assert.ok(rule.includes("border: 2px solid var(--ui-accent-color)"));
+  assert.ok(rule.includes("outline: 2px solid var(--ui-accent-color)"));
+  assert.ok(rule.includes("outline-offset: 2px"));
+  assert.ok(rule.includes("background: var(--ui-surface-hover-background-color)"));
+  // The old "grouped card keeps a thicker left edge" special case is gone.
+  assert.ok(!html.includes(".board-card-grouped.board-card-selected"));
+});
+
+test("a collapsed group's cards are hidden, and nothing else changes", () => {
+  const open = boardHtml(TIGHT_GROUP, []);
+  const shut = boardHtml(TIGHT_GROUP, ["KF53ASNE"]);
+  assert.ok(!open.includes("board-group-collapsed"));
+  assert.ok(open.includes('data-group-cards="KF53ASNE">'));
+  assert.ok(shut.includes("board-group-collapsed"));
+  assert.ok(shut.includes('data-group-cards="KF53ASNE" hidden>'));
+  assert.ok(shut.includes('aria-expanded="false"'));
+  // Every member card is still rendered, only not shown.
+  assert.ok(shut.includes('data-atom-id="FAPWJSRC"'));
+});
+
+test("a remembered collapse for a group that is gone changes nothing", () => {
+  assert.equal(boardHtml(TIGHT_GROUP, ["NOSUCHID"]), boardHtml(TIGHT_GROUP, []));
+});
+
+test("the panel is told which groups are collapsed, and nothing more", () => {
+  const script = buildBoardHtml(parseAtoms(TIGHT_GROUP), "Board", ["KF53ASNE"]).script;
+  assert.ok(script.includes('var ATOMDOWN_BOARD_COLLAPSED = ["KF53ASNE"]'));
+  assert.ok(script.includes('var ATOMDOWN_BOARD_PAGE = "Board"'));
+  // Collapse is stored in the client's key-value store, never in the page.
+  assert.ok(script.includes('"clientStore.set"'));
+  assert.ok(!script.includes('collapsed="'));
+});
+
+test("no board action writes a presentational attribute to a directive", async () => {
+  // Group, rename, collapse-persist and ungroup, in one buffer. Not one of
+  // them may leave a collapsed / selected / open attribute behind.
+  const { state } = recordingSyscall(THREE_ATOMS);
+  const grouped = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "First Two",
+  );
+  assert.equal(grouped.ok, true);
+  await plug.functionMapping.setGroupSlug(grouped.groupId, "renamed");
+  for (const banned of ["collapsed", "selected", "open=", "x=", "y=", "board"]) {
+    assert.ok(!state.text.includes(banned), banned);
+  }
+  await plug.functionMapping.ungroupAtoms(grouped.groupId);
+  assert.equal(state.text, THREE_ATOMS);
+});
+
+// --- the view survives a refresh, per page ---------------------------------
+//
+// Steve: "every refresh to the page and I have to go re-apply the atomdown
+// view". The flag is presentation state in the client's own key-value store,
+// scoped to the page name. It is never a default: a page whose key was never
+// written gets nothing, and Close deletes the key.
+
+const GROUP_PAGE = "Todo/running";
+
+async function closedStart(text, options) {
+  const rec = recordingSyscall(text, options);
+  // notifyClosed() is the one call that puts the module's own boardOpen flag
+  // into a known state, so these tests do not inherit the previous one's.
+  await plug.functionMapping.notifyClosed();
+  return rec;
+}
+
+test("opening the board remembers that this page is showing it", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.toggleBoard();
+  assert.ok(calls.some((c) => c.name === "editor.showPanel"));
+  assert.equal(state.store[boardOpenKey(GROUP_PAGE)], true);
+});
+
+test("closing the board with the toggle forgets the page", async () => {
+  const { state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.toggleBoard();
+  await plug.functionMapping.toggleBoard();
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+});
+
+test("Close on the panel forgets the page too", async () => {
+  const store = {};
+  store[boardOpenKey(GROUP_PAGE)] = true;
+  const { state } = recordingSyscall(TIGHT_GROUP, { page: GROUP_PAGE, store });
+  await plug.functionMapping.notifyClosed();
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+});
+
+test("a page reload reopens the board when it was open on that page", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  state.store[boardOpenKey(GROUP_PAGE)] = true;
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.opened, true);
+  const after = calls.slice(before);
+  assert.ok(after.some((c) => c.name === "editor.showPanel"));
+  // Reopening a view is not a content change.
+  assert.equal(after.some((c) => c.name === "editor.replaceRange"), false);
+  assert.equal(after.some((c) => c.name === "space.writePage"), false);
+});
+
+test("a page reload leaves the board closed when it was closed", async () => {
+  const { calls } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("the remembered view is per page, never a default for another one", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: "Other" });
+  state.store[boardOpenKey(GROUP_PAGE)] = true;
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard("Other");
+  assert.equal(result.opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+  // And the other page's flag is untouched.
+  assert.equal(state.store[boardOpenKey(GROUP_PAGE)], true);
+});
+
+test("Close then reload stays closed", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.toggleBoard();
+  await plug.functionMapping.notifyClosed();
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+  const before = calls.length;
+  assert.equal((await plug.functionMapping.restoreBoard(GROUP_PAGE)).opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("a store that throws degrades to a closed board, not an error", async () => {
+  const { calls } = await closedStart(TIGHT_GROUP, {
+    page: GROUP_PAGE,
+    storeThrows: true,
+  });
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.ok, true);
+  assert.equal(result.opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("a store that throws still lets the toggle open the board", async () => {
+  const { calls } = await closedStart(TIGHT_GROUP, {
+    page: GROUP_PAGE,
+    storeThrows: true,
+  });
+  await plug.functionMapping.toggleBoard();
+  assert.ok(calls.some((c) => c.name === "editor.showPanel"));
+});
+
+test("a reopen cannot draw an empty board when the editor is not ready", async () => {
+  const { calls, state } = await closedStart("", { page: GROUP_PAGE });
+  state.store[boardOpenKey(GROUP_PAGE)] = true;
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.opened, false);
+  assert.match(result.reason, /no text/);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+  // The flag survives, so the next load can still reopen it.
+  assert.equal(state.store[boardOpenKey(GROUP_PAGE)], true);
+});
+
+test("a reopen overtaken by a second navigation draws nothing", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: "Somewhere/else" });
+  state.store[boardOpenKey(GROUP_PAGE)] = true;
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.opened, false);
+  assert.match(result.reason, /navigated away/);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("navigating to a page with no remembered board takes the old panel down", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: "PageA" });
+  await plug.functionMapping.toggleBoard();
+  state.page = "PageB";
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard("PageB");
+  assert.equal(result.opened, false);
+  assert.ok(calls.slice(before).some((c) => c.name === "editor.hidePanel"));
+});
+
+test("restoreBoard is wired to the page-load events, not to a command", () => {
+  const def = plug.manifest.functions.restoreBoard;
+  assert.deepEqual(def.events, ["editor:pageLoaded", "editor:pageReloaded"]);
+  assert.equal(def.command, undefined);
+});
+
+test("a redraw after Rename keeps a collapsed group collapsed", async () => {
+  const store = {};
+  store[collapsedKey("Board")] = ["KF53ASNE"];
+  const { calls } = recordingSyscall(TIGHT_GROUP, { store });
+  const result = await plug.functionMapping.setGroupSlug("KF53ASNE", "Split List");
+  assert.equal(result.ok, true);
+  const html = calls.filter((c) => c.name === "editor.showPanel").pop().args[2];
+  assert.ok(html.includes("board-group-collapsed"));
+});
+
+test("the store keys are scoped by page and carry no document data", () => {
+  assert.equal(boardOpenKey("Todo/running"), "atomdown-board.open:Todo/running");
+  assert.equal(collapsedKey("Todo/running"), "atomdown-board.collapsed:Todo/running");
+  assert.notEqual(boardOpenKey("Todo/running"), boardOpenKey("Todo/other"));
 });
