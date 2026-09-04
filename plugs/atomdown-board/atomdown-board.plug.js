@@ -1195,38 +1195,35 @@ function injectSharedFunctions() {
     .join("\n\n");
 }
 
-function buildBoardHtml(atoms, pageName) {
-  const cardsHtml = atoms.map((atom) => {
-    const classes = ["board-card"];
-    if (atom.implicit) classes.push("board-card-implicit");
-    if (atom.groupId) classes.push("board-card-grouped");
-    const badges = [];
-    if (atom.implicit) {
-      badges.push('<span class="board-badge board-badge-implicit">implicit</span>');
-    }
-    if (atom.groupId) {
-      // The badge reads the group's slug when it has one, its id when it does
-      // not — the same slug-first, id-as-fallback rule the card name uses. The
-      // real group id is always in the tooltip, because that is the value
-      // Steve needs when citing the group from another page.
-      const groupLabel = slugOrId(atom.groupSlug, atom.groupId);
-      const groupTitle = atom.groupSlug
-        ? `Group "${atom.groupSlug}" — id ${atom.groupId}`
-        : `Group id ${atom.groupId} (no name yet)`;
-      badges.push(
-        `<span class="board-badge board-badge-group" title="${escapeHtml(groupTitle)}">group ${escapeHtml(groupLabel)}</span>`,
-      );
-    }
-    // Name first, identity second. A slug gets the readable name span; the id
-    // stays on the line either way, in small subtle monospace, so it is never
-    // more than a glance away.
-    const nameHtml = atom.slug
-      ? `<span class="board-card-slug" title="${escapeHtml(`Name (slug) "${atom.slug}" — the atom's id is ${atom.id}`)}">${escapeHtml(atom.slug)}</span>`
-      : "";
-    const idTitle = atom.implicit
-      ? "This block has no directive yet, so it has no id of its own."
-      : `Atom id ${atom.id} — this is the identity. A name (slug) is only an alias.`;
-    return `
+/**
+ * One card's HTML. A member of an atom-group gets NO group marking of its own
+ * — no accent stripe, no `group <slug>` badge. The group container drawn
+ * around it (see buildGroupHtml) is what says "these belong together", and a
+ * per-card repeat of that reads as many objects rather than one.
+ *
+ * The one per-card treatment that survives inside a container is contrast: a
+ * member card keeps the ordinary card background, and the container's own
+ * field is the plainer surface behind it, so the cards read as the group's
+ * contents. That is a background difference, not a second border, so it
+ * cannot compete with either the container edge or the selection ring.
+ */
+function buildCardHtml(atom) {
+  const classes = ["board-card"];
+  if (atom.implicit) classes.push("board-card-implicit");
+  const badges = [];
+  if (atom.implicit) {
+    badges.push('<span class="board-badge board-badge-implicit">implicit</span>');
+  }
+  // Name first, identity second. A slug gets the readable name span; the id
+  // stays on the line either way, in small subtle monospace, so it is never
+  // more than a glance away.
+  const nameHtml = atom.slug
+    ? `<span class="board-card-slug" title="${escapeHtml(`Name (slug) "${atom.slug}" — the atom's id is ${atom.id}`)}">${escapeHtml(atom.slug)}</span>`
+    : "";
+  const idTitle = atom.implicit
+    ? "This block has no directive yet, so it has no id of its own."
+    : `Atom id ${atom.id} — this is the identity. A name (slug) is only an alias.`;
+  return `
       <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}">
         <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
           <span class="board-drag-handle" aria-hidden="true">&#10021;&#10021;</span>
@@ -1240,7 +1237,96 @@ function buildBoardHtml(atoms, pageName) {
         </div>
         <pre class="board-card-body">${escapeHtml(atom.text)}</pre>
       </div>`;
-  }).join("\n");
+}
+
+/**
+ * One atom-group as ONE object: a single bordered container in
+ * --ui-accent-color (the blue already used by the drop indicator and the
+ * selection ring — never a second hue) with a header bar and the member cards
+ * inside it.
+ *
+ * The header is where every group-level thing lives, because a group finally
+ * has a surface of its own:
+ *   - the NAME (the slug), with the real id beside it in small subtle
+ *     monospace and in the tooltip, exactly the slug-then-id order a card
+ *     already uses. No slug means the id IS the label, same fallback as a card.
+ *   - Rename and Ungroup. Those used to sit in a member card's menu purely
+ *     because a group had no UI of its own; that workaround is gone.
+ *   - a collapse toggle, and a drag handle so a collapsed group is still
+ *     movable.
+ *
+ * Nothing here is written to the document. The container, the header, the
+ * collapse state and the selection are all presentation. `collapsed` arrives
+ * from the client-local key-value store (see loadCollapsedGroups) and is
+ * rendered into the markup rather than applied by the panel script afterwards,
+ * so a collapsed group never flashes open on the way in.
+ */
+function buildGroupHtml(groupId, groupSlug, members, collapsed) {
+  const nameHtml = groupSlug
+    ? `<span class="board-group-name" title="${escapeHtml(`Name (slug) "${groupSlug}" — the group's id is ${groupId}`)}">${escapeHtml(groupSlug)}</span>`
+    : "";
+  const idTitle = groupSlug
+    ? `Group id ${groupId} — this is the identity. A name (slug) is only an alias.`
+    : `Group id ${groupId} (no name yet) — click Rename to give it one.`;
+  const headerTitle = groupSlug
+    ? `Group "${groupSlug}" (id ${groupId}) — click to select the whole group`
+    : `Group ${groupId} — click to select the whole group`;
+  const count = members.length === 1 ? "1 card" : members.length + " cards";
+  const isCollapsed = collapsed === true;
+  return `
+      <div class="board-group${isCollapsed ? " board-group-collapsed" : ""}" data-group-id="${escapeHtml(groupId)}">
+        <div class="board-group-header" data-group-header="${escapeHtml(groupId)}" title="${escapeHtml(headerTitle)}">
+          <button type="button" class="board-group-collapse" data-group-collapse="${escapeHtml(groupId)}" aria-expanded="${isCollapsed ? "false" : "true"}" title="${isCollapsed ? "Expand this group" : "Collapse this group"}">${isCollapsed ? "&#9656;" : "&#9662;"}</button>
+          <span class="board-drag-handle board-group-drag" draggable="true" data-drag-unit="group:${escapeHtml(groupId)}" title="Drag to move the whole group">&#10021;&#10021;</span>
+          <span class="board-group-kind">group</span>
+          ${nameHtml}
+          <span class="board-group-id" title="${escapeHtml(idTitle)}">${escapeHtml(groupId)}</span>
+          <span class="board-group-count">${count}</span>
+          <div class="board-group-actions">
+            <button type="button" class="board-group-btn" data-group-rename="${escapeHtml(groupId)}" title="Give this group a readable name. Its id (${escapeHtml(groupId)}) does not change - a name is an alias, not the identity.">Rename</button>
+            <button type="button" class="board-group-btn" data-group-ungroup="${escapeHtml(groupId)}" title="Remove this group's markers. Every atom inside it stays.">Ungroup</button>
+          </div>
+        </div>
+        <div class="board-group-cards" data-group-cards="${escapeHtml(groupId)}"${isCollapsed ? " hidden" : ""}>${members.map(buildCardHtml).join("\n")}</div>
+      </div>`;
+}
+
+/**
+ * Walks the atom list into the panel's top-level strip: a standalone atom
+ * renders as a bare card, and a run of consecutive atoms sharing one groupId
+ * renders as one group container holding those cards.
+ *
+ * The cards stay in document order in the DOM, nested or not, which is what
+ * keeps the drop geometry, the lasso and the unit order working unchanged —
+ * every one of those reads `.board-card[data-atom-id]` in document order.
+ */
+function buildStripHtml(atoms, collapsedIds) {
+  const collapsed = collapsedIds || [];
+  const parts = [];
+  let i = 0;
+  while (i < atoms.length) {
+    if (!atoms[i].groupId) {
+      parts.push(buildCardHtml(atoms[i]));
+      i++;
+      continue;
+    }
+    const groupId = atoms[i].groupId;
+    const groupSlug = atoms[i].groupSlug;
+    const members = [];
+    while (i < atoms.length && atoms[i].groupId === groupId) {
+      members.push(atoms[i]);
+      i++;
+    }
+    parts.push(
+      buildGroupHtml(groupId, groupSlug, members, collapsed.indexOf(groupId) !== -1),
+    );
+  }
+  return parts.join("\n");
+}
+
+function buildBoardHtml(atoms, pageName, collapsedIds) {
+  const collapsed = Array.isArray(collapsedIds) ? collapsedIds : [];
+  const cardsHtml = buildStripHtml(atoms, collapsed);
 
   const style = `
     :root {
@@ -1312,7 +1398,13 @@ function buildBoardHtml(atoms, pageName) {
       margin: 0 auto;
       align-items: stretch;
     }
-    .board-card + .board-card { margin-top: 14px; }
+    /* Spacing between top-level items, whichever kind they are. Scoped to
+       direct children so the tighter spacing inside a group container (below)
+       does not have to fight it. */
+    .board-cards > .board-card + .board-card,
+    .board-cards > .board-card + .board-group,
+    .board-cards > .board-group + .board-card,
+    .board-cards > .board-group + .board-group { margin-top: 14px; }
     .board-card {
       border: 1px solid var(--ui-surface-border-color);
       border-radius: 6px;
@@ -1324,7 +1416,85 @@ function buildBoardHtml(atoms, pageName) {
       transition: box-shadow 0.1s ease-out;
     }
     .board-card-implicit { border-style: dashed; }
-    .board-card-grouped { border-left: 3px solid var(--ui-accent-color); }
+    /* One group, one object.
+       ------------------------------------------------------------------
+       The members of an atom-group sit inside a single container outlined in
+       --ui-accent-color — the SAME token as the drop indicator and the
+       selection ring, so the board still has exactly one blue. The container
+       is the group's identity on screen, which is why a member card carries
+       no accent stripe and no group badge any more.
+       The container's own field is the plain surface, and a member card keeps
+       the slightly tinted card background, so the cards read as contents ON
+       the group rather than as siblings of it. That is the only per-card
+       treatment left, and being a background it cannot be mistaken for
+       either the container edge or a selection.
+       Deliberately NO overflow:hidden here: a member card's attribute
+       popover is absolutely positioned inside the card, and clipping it
+       would hide the menu for every grouped card. The header rounds its own
+       top corners instead. */
+    .board-group {
+      border: 2px solid var(--ui-accent-color);
+      border-radius: 6px;
+      background: var(--ui-surface-background-color);
+    }
+    .board-group-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 5px 8px;
+      background: var(--ui-accent-color);
+      color: var(--ui-accent-contrast-color);
+      border-top-left-radius: 4px;
+      border-top-right-radius: 4px;
+      cursor: pointer;
+      user-select: none;
+    }
+    /* Name-then-identity, the same order and the same weights a card uses. */
+    .board-group-kind {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      opacity: 0.75;
+    }
+    .board-group-name { font-size: 13px; font-weight: 600; }
+    .board-group-id {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      opacity: 0.8;
+    }
+    .board-group-count { font-size: 11px; opacity: 0.8; }
+    .board-group-actions { display: flex; gap: 6px; margin-left: auto; }
+    .board-group-btn, .board-group-collapse {
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1.2;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      background: transparent;
+      color: inherit;
+    }
+    /* Hover inverts the two accent tokens rather than mixing in a new value. */
+    .board-group-btn:hover, .board-group-collapse:hover {
+      background: var(--ui-accent-contrast-color);
+      color: var(--ui-accent-color);
+    }
+    .board-group-collapse {
+      border-color: transparent;
+      font-size: 12px;
+      padding: 1px 5px;
+    }
+    .board-group-cards { padding: 8px; }
+    .board-group-cards[hidden] { display: none; }
+    .board-group-cards .board-card + .board-card { margin-top: 8px; }
+    /* The header's rename form: same inputs and the same classes as the
+       naming form in a card's popover, so there is one look for naming. */
+    .board-group-rename {
+      padding: 8px;
+      border-bottom: 1px solid var(--ui-surface-border-color);
+    }
+    .board-group-rename[hidden] { display: none; }
     /* Drag state, applied by the client script below. board-card-dragging
        marks every card sharing the dragged unit (a whole group drags
        together, see computeUnits() in the worker code); dropbefore/after
@@ -1333,16 +1503,26 @@ function buildBoardHtml(atoms, pageName) {
     .board-card-dragging { opacity: 0.4; }
     .board-card-dropbefore { box-shadow: inset 0 3px 0 0 var(--ui-accent-color); }
     .board-card-dropafter { box-shadow: inset 0 -3px 0 0 var(--ui-accent-color); }
-    /* Selection. The border is the SAME blue as the drop indicator two lines
-       up and as the grouped-card left edge: --ui-accent-color, SilverBullet's
+    /* Selection. The colour is the SAME blue as the drop indicator two lines
+       up and as the group container's edge: --ui-accent-color, SilverBullet's
        own accent token, copied live from the parent document by
-       applyParentTheme(). Selection must not introduce a second blue. */
+       applyParentTheme(). Selection must not introduce a second blue.
+       So it separates itself from the container by SHAPE, not by hue: a
+       DOUBLE ring (the card's own 2px border, then a second 2px ring set 2px
+       outside it, with the container's field showing through the gap) plus a
+       lifted background. A group container is a single continuous 2px edge;
+       a selected card is a banded edge with a gap in it. The two cannot be
+       read as the same thing even when a selected card sits right against
+       the container's own border.
+       An outline on purpose rather than a second box-shadow: box-shadow is
+       already spoken for by the drop indicator, and outline takes no space,
+       so a selection never nudges the layout the drop geometry just read. */
     .board-card-selected {
       border: 2px solid var(--ui-accent-color);
+      outline: 2px solid var(--ui-accent-color);
+      outline-offset: 2px;
+      background: var(--ui-surface-hover-background-color);
     }
-    /* A grouped card keeps its thicker left edge when it is also selected,
-       so the group marking does not disappear under the selection border. */
-    .board-card-grouped.board-card-selected { border-left-width: 3px; }
     .board-lasso {
       position: fixed;
       z-index: 40;
@@ -1388,7 +1568,6 @@ function buildBoardHtml(atoms, pageName) {
       background: var(--ui-surface-hover-background-color);
       color: var(--subtle-color);
     }
-    .board-badge-group { background: var(--ui-accent-color); color: var(--ui-accent-contrast-color); }
     .board-card-body {
       margin: 0;
       padding: 8px;
@@ -1717,6 +1896,269 @@ ${injectSharedFunctions()}
       });
     });
 
+    // Every readable name already in this page, mapped to the ids that carry
+    // it, so a naming form can warn about a duplicate as the user types. The
+    // worker checks the live buffer again before it writes; this copy is only
+    // for the hint, and neither check ever blocks the write.
+    var KNOWN_SLUGS = {};
+    ATOMDOWN_BOARD_DATA.forEach(function (a) {
+      if (a.slug) {
+        KNOWN_SLUGS[a.slug] = KNOWN_SLUGS[a.slug] || [];
+        if (KNOWN_SLUGS[a.slug].indexOf(a.id) === -1) KNOWN_SLUGS[a.slug].push(a.id);
+      }
+      if (a.groupSlug && a.groupId) {
+        KNOWN_SLUGS[a.groupSlug] = KNOWN_SLUGS[a.groupSlug] || [];
+        if (KNOWN_SLUGS[a.groupSlug].indexOf(a.groupId) === -1) {
+          KNOWN_SLUGS[a.groupSlug].push(a.groupId);
+        }
+      }
+    });
+
+    // --- Group containers ----------------------------------------------
+    //
+    // A group is one object on screen, so the header bar is where its own
+    // actions live and clicking it selects the whole thing. Everything in
+    // this block is presentation: not one line of it reaches the document
+    // except through setGroupSlug (Rename) and ungroupAtoms (Ungroup), which
+    // are the two content changes the user asked for by name.
+    var GROUP_ELS = Array.prototype.slice.call(
+      document.querySelectorAll(".board-group[data-group-id]"),
+    );
+
+    function memberCardsOf(groupEl) {
+      return Array.prototype.slice.call(
+        groupEl.querySelectorAll(".board-card[data-atom-id]"),
+      );
+    }
+
+    function isCollapsedGroup(groupEl) {
+      return groupEl.classList.contains("board-group-collapsed");
+    }
+
+    // Clicking the header selects every member card. That is the whole
+    // integration with grouping: the selection is still a set of cards, so
+    // selectedUnitKeys() collapses them to the one "group:<id>" unit and the
+    // existing Group / Ungroup decision (groupMenuState) applies with no
+    // special case — Ungroup acts on the group, and Group stays disabled
+    // because Atomdown Core 1 permits no group inside a group.
+    function selectGroup(groupEl, additive) {
+      if (!additive) clearSelection();
+      var members = memberCardsOf(groupEl);
+      members.forEach(function (card) {
+        card.classList.add("board-card-selected");
+      });
+      if (members.length) {
+        var first = CARD_ELS.indexOf(members[0]);
+        if (first >= 0) selectionAnchor = first;
+      }
+    }
+
+    // Collapse / expand.
+    //
+    // THIS IS PRESENTATION STATE AND IS NEVER WRITTEN TO THE DOCUMENT. There
+    // is no "collapsed" attribute on any directive and there never will be:
+    // Atomdown carries no layout, position, card or board metadata. It lives
+    // in SilverBullet's own client-local key-value store (clientStore, which
+    // is per-browser, not per-file), under a key scoped to this page, so a
+    // long page stays scanned the way it was left without the file changing
+    // by one byte.
+    var COLLAPSED = {};
+    (ATOMDOWN_BOARD_COLLAPSED || []).forEach(function (id) { COLLAPSED[id] = true; });
+
+    function collapsedIdList() {
+      return Object.keys(COLLAPSED).filter(function (id) { return COLLAPSED[id]; });
+    }
+
+    async function persistCollapsed() {
+      try {
+        await syscall(
+          "clientStore.set",
+          "atomdown-board.collapsed:" + ATOMDOWN_BOARD_PAGE,
+          collapsedIdList(),
+        );
+      } catch (e) {
+        // No store (a stub host, private browsing, an older SilverBullet).
+        // The collapse still applied for this session; only remembering it
+        // failed, and that is not worth an error in the user's face.
+      }
+    }
+
+    function setCollapsed(groupEl, collapsed) {
+      var groupId = groupEl.getAttribute("data-group-id");
+      var cards = groupEl.querySelector("[data-group-cards]");
+      var btn = groupEl.querySelector("[data-group-collapse]");
+      if (cards) cards.hidden = collapsed;
+      if (collapsed) groupEl.classList.add("board-group-collapsed");
+      else groupEl.classList.remove("board-group-collapsed");
+      if (btn) {
+        btn.innerHTML = collapsed ? "\\u25B8" : "\\u25BE";
+        btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        btn.title = collapsed ? "Expand this group" : "Collapse this group";
+      }
+      COLLAPSED[groupId] = collapsed;
+      persistCollapsed();
+    }
+
+    // The header's Rename form. Same classes, same duplicate-name hint and the
+    // same "sanitize, then write anyway" rule as the naming form in a card's
+    // popover — one look for naming, in the one place a group now owns.
+    function buildGroupRenameForm(groupId, currentSlug) {
+      var form = el("div", "board-group-rename");
+      form.hidden = true;
+      var label = el("label", "board-slug-label");
+      label.textContent = "Name for this group (id " + groupId + ")";
+      var input = el("input", "board-slug-input");
+      input.type = "text";
+      input.setAttribute("spellcheck", "false");
+      input.placeholder = "unnamed - the header shows " + groupId;
+      var actions = el("div", "board-menu-actions");
+      var confirmBtn = el("button", "board-attr-save");
+      confirmBtn.type = "button";
+      confirmBtn.textContent = "Rename";
+      var cancelBtn = el("button", "board-attr-add");
+      cancelBtn.type = "button";
+      cancelBtn.textContent = "Cancel";
+      actions.appendChild(confirmBtn);
+      actions.appendChild(cancelBtn);
+      var hint = el("div", "board-slug-hint");
+      form.appendChild(label);
+      form.appendChild(input);
+      form.appendChild(actions);
+      form.appendChild(hint);
+
+      function updateHint() {
+        var clean = sanitizeSlug(input.value);
+        if (!clean) {
+          hint.textContent = "No name. The group will show its id instead.";
+          return;
+        }
+        var owners = (KNOWN_SLUGS[clean] || []).filter(function (id) {
+          return id !== groupId;
+        });
+        hint.textContent = 'Writes slug="' + clean + '".' +
+          (owners.length
+            ? " Already used by " + owners.join(", ") +
+              " - allowed, just harder to read."
+            : "");
+      }
+
+      function close() { form.hidden = true; }
+
+      function open() {
+        input.value = currentSlug || "";
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Rename";
+        form.hidden = false;
+        updateHint();
+        input.focus();
+        input.select();
+      }
+
+      input.addEventListener("input", updateHint);
+      input.addEventListener("keydown", function (e) {
+        e.stopPropagation();
+        if (e.key === "Enter") { e.preventDefault(); confirmBtn.click(); }
+        if (e.key === "Escape") { e.preventDefault(); close(); }
+      });
+      cancelBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        close();
+      });
+      confirmBtn.addEventListener("click", async function (e) {
+        e.stopPropagation();
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "Renaming...";
+        try {
+          var result = await syscall(
+            "system.invokeFunction",
+            "atomdown-board.setGroupSlug",
+            groupId,
+            sanitizeSlug(input.value),
+          );
+          if (!result || !result.ok) {
+            hint.textContent = "Failed: " +
+              ((result && result.error) || "unknown error");
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "Rename";
+            return;
+          }
+          // On success the worker redraws the whole panel, so this form is
+          // already gone.
+        } catch (err) {
+          hint.textContent = "Failed: " + err.message;
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = "Rename";
+        }
+      });
+
+      return { form: form, open: open, close: close };
+    }
+
+    GROUP_ELS.forEach(function (groupEl) {
+      var groupId = groupEl.getAttribute("data-group-id");
+      var header = groupEl.querySelector("[data-group-header]");
+      if (!header) return;
+      var firstMember = memberCardsOf(groupEl)[0];
+      var datum = firstMember ? cardDatum(firstMember) : null;
+      var rename = buildGroupRenameForm(groupId, datum ? datum.groupSlug : null);
+      groupEl.insertBefore(rename.form, header.nextSibling);
+
+      header.addEventListener("click", function (e) {
+        // The header's own buttons have their own handlers; a click on one of
+        // them is not a selection gesture.
+        if (e.target.closest && e.target.closest("button")) return;
+        e.stopPropagation();
+        closeAllPopovers(null);
+        selectGroup(groupEl, e.metaKey || e.ctrlKey || e.shiftKey);
+      });
+
+      var collapseBtn = groupEl.querySelector("[data-group-collapse]");
+      if (collapseBtn) {
+        collapseBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          setCollapsed(groupEl, !isCollapsedGroup(groupEl));
+        });
+      }
+
+      var renameBtn = groupEl.querySelector("[data-group-rename]");
+      if (renameBtn) {
+        renameBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          closeAllPopovers(null);
+          if (rename.form.hidden) rename.open();
+          else rename.close();
+        });
+      }
+
+      var ungroupBtn = groupEl.querySelector("[data-group-ungroup]");
+      if (ungroupBtn) {
+        ungroupBtn.addEventListener("click", async function (e) {
+          e.stopPropagation();
+          ungroupBtn.disabled = true;
+          ungroupBtn.textContent = "Ungrouping...";
+          try {
+            var result = await syscall(
+              "system.invokeFunction",
+              "atomdown-board.ungroupAtoms",
+              groupId,
+            );
+            if (!result || !result.ok) {
+              window.alert(
+                "Ungroup failed: " + ((result && result.error) || "unknown error"),
+              );
+              ungroupBtn.disabled = false;
+              ungroupBtn.textContent = "Ungroup";
+            }
+            // On success the worker redraws the panel, so this button is gone.
+          } catch (err) {
+            window.alert("Ungroup failed: " + err.message);
+            ungroupBtn.disabled = false;
+            ungroupBtn.textContent = "Ungroup";
+          }
+        });
+      }
+    });
+
     // Lasso (rubber band). Starts only on empty board background — never on
     // a card, so it cannot compete with a card drag, which starts on the
     // card's own header.
@@ -1733,8 +2175,13 @@ ${injectSharedFunctions()}
 
     document.addEventListener("mousedown", function (e) {
       if (e.button !== 0) return;
+      // Never on a card, on the toolbar, or on a group's own header or its
+      // rename form — those are controls, and dragging out of one should not
+      // start a rubber band.
       if (e.target.closest && (e.target.closest(".board-card") ||
-        e.target.closest(".board-toolbar"))) return;
+        e.target.closest(".board-toolbar") ||
+        e.target.closest(".board-group-header") ||
+        e.target.closest(".board-group-rename"))) return;
       lasso = {
         x0: e.clientX,
         y0: e.clientY,
@@ -1769,6 +2216,15 @@ ${injectSharedFunctions()}
           if (selectionAnchor < 0) selectionAnchor = index;
         }
       });
+      // A collapsed group's cards have no rectangle to hit, so the band is
+      // tested against the container instead. Dragging over a collapsed group
+      // still selects it, which is what the user drew the band around.
+      GROUP_ELS.forEach(function (groupEl) {
+        if (!isCollapsedGroup(groupEl)) return;
+        if (rectsIntersect(groupEl.getBoundingClientRect(), band)) {
+          selectGroup(groupEl, true);
+        }
+      });
       // The mouseup also produces a click on the background, which would
       // otherwise clear what the lasso just selected.
       lassoJustSelected = true;
@@ -1778,24 +2234,6 @@ ${injectSharedFunctions()}
     // Both come from the injected pure functions above, so the panel and the
     // worker apply the same contiguity and nesting rules.
     var UNIT_ORDER = unitOrderFromCards(ATOMDOWN_BOARD_DATA);
-
-    // Every readable name already in this page, mapped to the ids that carry
-    // it, so the naming form can warn about a duplicate as the user types.
-    // The worker checks the live buffer again before it writes; this copy is
-    // only for the hint, and neither check ever blocks the write.
-    var KNOWN_SLUGS = {};
-    ATOMDOWN_BOARD_DATA.forEach(function (a) {
-      if (a.slug) {
-        KNOWN_SLUGS[a.slug] = KNOWN_SLUGS[a.slug] || [];
-        if (KNOWN_SLUGS[a.slug].indexOf(a.id) === -1) KNOWN_SLUGS[a.slug].push(a.id);
-      }
-      if (a.groupSlug && a.groupId) {
-        KNOWN_SLUGS[a.groupSlug] = KNOWN_SLUGS[a.groupSlug] || [];
-        if (KNOWN_SLUGS[a.groupSlug].indexOf(a.groupId) === -1) {
-          KNOWN_SLUGS[a.groupSlug].push(a.groupId);
-        }
-      }
-    });
 
     // The selected blocks' own text, in document order, which is what
     // deriveGroupSlug() reads to find the first heading. Taken from the
@@ -1836,23 +2274,12 @@ ${injectSharedFunctions()}
       groupBtn.type = "button";
       groupRow.appendChild(groupBtn);
 
-      // Rename group. Only offered on a card that is inside a group, because
-      // that is the group it would rename. A group has no card of its own —
-      // every member card carries the group's badge — so the member's menu is
-      // where a group-level action belongs. See README.md.
-      var renameBtn = null;
-      if (atom.groupId) {
-        renameBtn = el("button", "board-menu-item");
-        renameBtn.type = "button";
-        renameBtn.textContent = "Rename group";
-        renameBtn.title =
-          "Give this group a readable name. Its id (" + atom.groupId +
-          ") does not change - a name is an alias, not the identity.";
-        renameBtn.style.marginTop = "4px";
-        groupRow.appendChild(renameBtn);
-      }
-
-      // One naming form, shared by Group and Rename group.
+      // There is deliberately no group-rename item here any more. That item
+      // only existed because a group had no UI of its own; the group container
+      // now has a header bar, and Rename and Ungroup live on it. A card's menu
+      // holds card-level things: Group, and the attribute editor below.
+      //
+      // The naming form for Group.
       //
       // Prompt affordance: this is a form INSIDE the popover that is already
       // open, not window.prompt and not a second modal. window.prompt is
@@ -1884,8 +2311,6 @@ ${injectSharedFunctions()}
       popoverEl.appendChild(groupRow);
       popoverEl.boardGroupBtn = groupBtn;
 
-      var slugMode = null;
-
       // Live preview of exactly what will be written, plus the duplicate
       // warning. The warning never disables the button: Atomdown permits two
       // blocks with the same slug, so the board reports it and writes anyway.
@@ -1896,10 +2321,9 @@ ${injectSharedFunctions()}
             "No name. The group will show its id instead.";
           return;
         }
-        var owner = slugMode === "rename" ? atom.groupId : null;
-        var owners = (KNOWN_SLUGS[clean] || []).filter(function (id) {
-          return id !== owner;
-        });
+        // This form only ever names a NEW group, so every existing owner of
+        // the name is somebody else.
+        var owners = KNOWN_SLUGS[clean] || [];
         slugHint.textContent = 'Writes slug="' + clean + '".' +
           (owners.length
             ? " Already used by " + owners.join(", ") +
@@ -1908,27 +2332,17 @@ ${injectSharedFunctions()}
       }
 
       function closeSlugForm() {
-        slugMode = null;
         slugForm.setAttribute("hidden", "");
         groupBtn.removeAttribute("hidden");
-        if (renameBtn) renameBtn.removeAttribute("hidden");
       }
 
-      function openSlugForm(mode) {
-        slugMode = mode;
-        if (mode === "rename") {
-          slugLabel.textContent = "Name for this group (id " + atom.groupId + ")";
-          slugInput.value = atom.groupSlug || "";
-          slugConfirm.textContent = "Rename";
-        } else {
-          slugLabel.textContent = "Name for this group";
-          // Defaulted from the first heading in the selection so one confirm
-          // is enough - the user is not made to invent a name.
-          slugInput.value = deriveGroupSlug(selectedCardTexts());
-          slugConfirm.textContent = "Group";
-        }
+      function openSlugForm() {
+        slugLabel.textContent = "Name for this group";
+        // Defaulted from the first heading in the selection so one confirm
+        // is enough - the user is not made to invent a name.
+        slugInput.value = deriveGroupSlug(selectedCardTexts());
+        slugConfirm.textContent = "Group";
         groupBtn.setAttribute("hidden", "");
-        if (renameBtn) renameBtn.setAttribute("hidden", "");
         slugForm.removeAttribute("hidden");
         updateSlugHint();
         slugInput.focus();
@@ -1952,32 +2366,21 @@ ${injectSharedFunctions()}
 
       slugConfirm.addEventListener("click", async function (e) {
         e.stopPropagation();
-        var mode = slugMode;
         var clean = sanitizeSlug(slugInput.value);
         slugConfirm.disabled = true;
-        slugConfirm.textContent = mode === "rename" ? "Renaming..." : "Grouping...";
+        slugConfirm.textContent = "Grouping...";
         try {
-          var result;
-          if (mode === "rename") {
-            result = await syscall(
-              "system.invokeFunction",
-              "atomdown-board.setGroupSlug",
-              atom.groupId,
-              clean,
-            );
-          } else {
-            result = await syscall(
-              "system.invokeFunction",
-              "atomdown-board.groupAtoms",
-              JSON.stringify(selectedUnitKeys()),
-              clean,
-            );
-          }
+          var result = await syscall(
+            "system.invokeFunction",
+            "atomdown-board.groupAtoms",
+            JSON.stringify(selectedUnitKeys()),
+            clean,
+          );
           if (!result || !result.ok) {
             slugHint.textContent = "Failed: " +
               ((result && result.error) || "unknown error");
             slugConfirm.disabled = false;
-            slugConfirm.textContent = mode === "rename" ? "Rename" : "Group";
+            slugConfirm.textContent = "Group";
             return;
           }
           // On success the worker re-renders this whole panel, so this
@@ -1985,16 +2388,9 @@ ${injectSharedFunctions()}
         } catch (err) {
           slugHint.textContent = "Failed: " + err.message;
           slugConfirm.disabled = false;
-          slugConfirm.textContent = mode === "rename" ? "Rename" : "Group";
+          slugConfirm.textContent = "Group";
         }
       });
-
-      if (renameBtn) {
-        renameBtn.addEventListener("click", function (e) {
-          e.stopPropagation();
-          openSlugForm("rename");
-        });
-      }
 
       groupBtn.addEventListener("click", async function (e) {
         e.stopPropagation();
@@ -2004,7 +2400,7 @@ ${injectSharedFunctions()}
         // Grouping asks for a name first. Ungrouping does not - there is
         // nothing to name, and the group id is already known.
         if (state.action === "group") {
-          openSlugForm("group");
+          openSlugForm();
           return;
         }
         groupBtn.disabled = true;
@@ -2172,6 +2568,10 @@ ${injectSharedFunctions()}
       // which stops propagation before it reaches here.
       var onCard = target && target.closest && target.closest(".board-card");
       if (onCard) return;
+      // The field inside a group container is that group's own surface, not
+      // board background. It clears nothing: a click in the gap between two
+      // member cards must not throw away a selection the user just built.
+      if (target && target.closest && target.closest(".board-group")) return;
       if (lassoJustSelected) { lassoJustSelected = false; return; }
       if (e.metaKey || e.ctrlKey || e.shiftKey) return;
       clearSelection();
@@ -2199,6 +2599,29 @@ ${injectSharedFunctions()}
       document.querySelectorAll(".board-card-dropbefore, .board-card-dropafter").forEach(function (c) {
         c.classList.remove("board-card-dropbefore", "board-card-dropafter");
       });
+    }
+
+    // Fades every card in the unit being dragged, and the group container
+    // itself when the unit is a group, so the whole object reads as in flight.
+    function markUnitDragging(unitKey) {
+      CARD_ELS.forEach(function (c) {
+        if (unitKeyForCard(cardDatum(c)) === unitKey) {
+          c.classList.add("board-card-dragging");
+        }
+      });
+      GROUP_ELS.forEach(function (groupEl) {
+        if ("group:" + groupEl.getAttribute("data-group-id") === unitKey) {
+          groupEl.classList.add("board-card-dragging");
+        }
+      });
+    }
+
+    function clearDragging() {
+      document.querySelectorAll(".board-card-dragging").forEach(function (c) {
+        c.classList.remove("board-card-dragging");
+      });
+      clearDropMarkers();
+      dragState = null;
     }
 
     async function performDrop(movedUnitKey, targetUnitKey, placement) {
@@ -2230,20 +2653,26 @@ ${injectSharedFunctions()}
         dragState = { unitKey: unitKey };
         e.dataTransfer.effectAllowed = "move";
         try { e.dataTransfer.setData("text/plain", unitKey); } catch (err) {}
-        CARD_ELS.forEach(function (c) {
-          if (unitKeyForCard(cardDatum(c)) === unitKey) {
-            c.classList.add("board-card-dragging");
-          }
-        });
+        markUnitDragging(unitKey);
       });
 
-      header.addEventListener("dragend", function () {
-        document.querySelectorAll(".board-card-dragging").forEach(function (c) {
-          c.classList.remove("board-card-dragging");
-        });
-        clearDropMarkers();
-        dragState = null;
+      header.addEventListener("dragend", clearDragging);
+    });
+
+    // The group header's own drag handle. Without it a collapsed group would
+    // be unmovable, because every member card's drag handle is hidden. It
+    // carries the group's unit key, which is the same key a member card's
+    // header resolves to, so the worker sees no difference.
+    document.querySelectorAll("[data-drag-unit]").forEach(function (handle) {
+      var unitKey = handle.getAttribute("data-drag-unit");
+      handle.addEventListener("dragstart", function (e) {
+        e.stopPropagation();
+        dragState = { unitKey: unitKey };
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", unitKey); } catch (err) {}
+        markUnitDragging(unitKey);
       });
+      handle.addEventListener("dragend", clearDragging);
     });
 
     // One dragover/drop pair for the whole panel, decided by geometry.
@@ -2255,16 +2684,39 @@ ${injectSharedFunctions()}
     // block went to the end of the document. pickDropTarget() reads the
     // cards' own rectangles instead, so the space between two cards resolves
     // to the seam between them, which is what the pointer was over.
+    //
+    // A COLLAPSED group contributes its container's rectangle once, under the
+    // group's unit key, instead of its hidden member cards. A hidden element
+    // reports an all-zero rectangle, which would otherwise sit above every
+    // real card and make every drop land before it. pickDropTarget itself
+    // stays untouched and pure — it is fed the right rectangles.
     function cardGeometry() {
-      return CARD_ELS.map(function (card) {
+      var out = [];
+      var seenCollapsed = {};
+      CARD_ELS.forEach(function (card) {
+        var groupEl = card.closest(".board-group[data-group-id]");
+        if (groupEl && isCollapsedGroup(groupEl)) {
+          var groupId = groupEl.getAttribute("data-group-id");
+          if (seenCollapsed[groupId]) return;
+          seenCollapsed[groupId] = true;
+          var groupRect = groupEl.getBoundingClientRect();
+          out.push({
+            unitKey: "group:" + groupId,
+            top: groupRect.top,
+            bottom: groupRect.bottom,
+            el: groupEl,
+          });
+          return;
+        }
         var rect = card.getBoundingClientRect();
-        return {
+        out.push({
           unitKey: unitKeyForCard(cardDatum(card)),
           top: rect.top,
           bottom: rect.bottom,
           el: card,
-        };
+        });
       });
+      return out;
     }
 
     // Marks the seam the drop would land on. A group is several cards sharing
@@ -2327,25 +2779,89 @@ ${injectSharedFunctions()}
     attrs: atom.attrs || [],
   }));
 
-  const script = `var ATOMDOWN_BOARD_DATA = ${JSON.stringify(clientData)};\n${clientScript}`;
+  // The page name only scopes this panel's presentation state (which groups
+  // are collapsed, and whether the board was open). It never reaches the
+  // document.
+  const script = `var ATOMDOWN_BOARD_DATA = ${JSON.stringify(clientData)};\n` +
+    `var ATOMDOWN_BOARD_PAGE = ${JSON.stringify(pageName || "")};\n` +
+    `var ATOMDOWN_BOARD_COLLAPSED = ${JSON.stringify(collapsed)};\n` +
+    clientScript;
 
   return { html, script };
 }
 
-async function toggleBoard() {
-  if (boardOpen) {
-    await syscall("editor.hidePanel", "modal");
-    boardOpen = false;
-    return;
+// ---------------------------------------------------------------------------
+// Presentation state: the client's key-value store, never the document.
+//
+// Two things are remembered between visits: whether the board was open on a
+// page, and which of that page's groups are collapsed. Neither is content.
+// Atomdown carries no layout, position, card or board metadata, so NONE of
+// this may ever become an attribute on a directive — see iugum-w6y.
+//
+// The store is SilverBullet's own `clientStore` (client/plugos/syscalls/
+// clientStore.ts): a per-browser key-value store, durable across a reload,
+// invisible to the space's files and to every other device. It is used rather
+// than localStorage because a plug's code runs in a Web Worker, and a worker
+// has no localStorage at all — clientStore is reachable from both the worker
+// and the panel iframe through the one syscall bridge, so there is a single
+// persistence mechanism in this file rather than two. It is durable rather
+// than session-scoped on purpose: "do not lose it on refresh" is what Steve
+// asked for, and Close deletes the key, so closed stays closed.
+//
+// Every read and every write is failure-tolerant. A store that is missing or
+// throwing (private browsing, an older host, a test stub) degrades to "not
+// remembered", which means a closed board and expanded groups — never an
+// error in the user's face.
+// ---------------------------------------------------------------------------
+
+function boardOpenKey(pageName) {
+  return "atomdown-board.open:" + (pageName || "");
+}
+
+function collapsedKey(pageName) {
+  return "atomdown-board.collapsed:" + (pageName || "");
+}
+
+/** Remembers, or forgets, that the board is showing for this page. */
+async function rememberBoardOpen(pageName, open) {
+  if (!pageName) return;
+  try {
+    if (open) await syscall("clientStore.set", boardOpenKey(pageName), true);
+    else await syscall("clientStore.delete", boardOpenKey(pageName));
+  } catch (e) {
+    // Not remembering is acceptable; failing the user's action is not.
   }
+}
 
-  const [sourceText, pageName] = await Promise.all([
-    syscall("editor.getText"),
-    syscall("editor.getCurrentPage").catch(() => undefined),
-  ]);
+/** True only when this exact page was left with the board showing. */
+async function wasBoardOpen(pageName) {
+  if (!pageName) return false;
+  try {
+    return (await syscall("clientStore.get", boardOpenKey(pageName))) === true;
+  } catch (e) {
+    return false;
+  }
+}
 
+/** The ids of this page's collapsed groups. Always an array. */
+async function loadCollapsedGroups(pageName) {
+  if (!pageName) return [];
+  try {
+    const stored = await syscall("clientStore.get", collapsedKey(pageName));
+    return Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Draws the board for one page's text. Shared by the toggle command and by
+ * the reopen-on-load path, so those cannot drift apart.
+ */
+async function showBoard(sourceText, pageName) {
   const atoms = parseAtoms(sourceText);
-  const { html, script } = buildBoardHtml(atoms, pageName);
+  const collapsed = await loadCollapsedGroups(pageName);
+  const { html, script } = buildBoardHtml(atoms, pageName, collapsed);
 
   // Inset 0: this reads as a page VIEW, not a floating dialog, matching
   // Steve's expectation ("an option in the UI" that switches the current
@@ -2363,11 +2879,83 @@ async function toggleBoard() {
   boardOpen = true;
 }
 
+/**
+ * The "Atomdown: Toggle Board" command. Opening remembers that this page is
+ * showing the board; closing forgets it, so Close means closed and stays
+ * closed across a reload.
+ */
+async function toggleBoard() {
+  const currentPage = await syscall("editor.getCurrentPage").catch(() => undefined);
+  if (boardOpen) {
+    await syscall("editor.hidePanel", "modal");
+    boardOpen = false;
+    await rememberBoardOpen(currentPage, false);
+    return;
+  }
+  const sourceText = await syscall("editor.getText");
+  await showBoard(sourceText, currentPage);
+  await rememberBoardOpen(currentPage, true);
+}
+
+/**
+ * Reopens the board after a page load, but ONLY on a page it was left open on.
+ * Wired to editor:pageLoaded and editor:pageReloaded (see the manifest).
+ *
+ * This is the answer to "every refresh and I have to go re-apply the atomdown
+ * view". It is not a default: a page whose key was never written, or whose key
+ * Close deleted, gets nothing, and the key is scoped to the page name, so
+ * opening the board on one page never opens it on another.
+ *
+ * Three things keep a reopen from racing the editor:
+ *   - SilverBullet dispatches these events AFTER it has set the editor state
+ *     for the new page (client/content_manager.ts), so editor.getText already
+ *     holds that page's text.
+ *   - the text is read once and checked: an empty buffer means the editor is
+ *     not ready after all, and the board stays closed rather than drawing an
+ *     empty one. The remembered state survives, so the next load reopens.
+ *   - the page is re-read just before drawing, so a second navigation that
+ *     overtakes this one cannot leave the previous page's board on screen.
+ *
+ * Every failure path ends with the board closed, never with an error dialog.
+ */
+async function restoreBoard(pageName) {
+  try {
+    const page = pageName ||
+      await syscall("editor.getCurrentPage").catch(() => undefined);
+    if (!(await wasBoardOpen(page))) {
+      // Navigated to a page the board was not open on. A panel still showing
+      // from the previous page would now be describing the wrong document.
+      if (boardOpen) {
+        try {
+          await syscall("editor.hidePanel", "modal");
+        } catch (e) {
+          // Nothing to hide.
+        }
+        boardOpen = false;
+      }
+      return { ok: true, opened: false };
+    }
+    const sourceText = await syscall("editor.getText");
+    if (!sourceText) return { ok: true, opened: false, reason: "no text yet" };
+    const stillHere = await syscall("editor.getCurrentPage").catch(() => page);
+    if (stillHere !== page) return { ok: true, opened: false, reason: "navigated away" };
+    await showBoard(sourceText, page);
+    return { ok: true, opened: true };
+  } catch (e) {
+    boardOpen = false;
+    return { ok: false, opened: false, error: e.message };
+  }
+}
+
 // Called back from the panel's own close button (see buildBoardHtml's
 // script above) so a click-to-close and re-running the toggle command agree
-// on whether the board is open. Not a user-facing command itself.
-function notifyClosed() {
+// on whether the board is open. Closing by the button must forget the page
+// too, or the next reload would bring back a board the user just dismissed.
+// Not a user-facing command itself.
+async function notifyClosed() {
   boardOpen = false;
+  const currentPage = await syscall("editor.getCurrentPage").catch(() => undefined);
+  await rememberBoardOpen(currentPage, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -2423,9 +3011,9 @@ async function warnUser(message) {
  * so a successful action does not feel like the board closed on you.
  */
 async function rerenderBoard(sourceText, pageName) {
-  const atoms = parseAtoms(sourceText);
-  const { html, script } = buildBoardHtml(atoms, pageName);
-  await syscall("editor.showPanel", "modal", 0, html, script);
+  // Through showBoard, so a redraw after Rename or Ungroup re-reads the
+  // collapse state instead of springing every group open again.
+  await showBoard(sourceText, pageName);
 }
 
 /**
@@ -2622,6 +3210,7 @@ async function ungroupAtoms(groupId) {
 
 const functionMapping = {
   toggleBoard,
+  restoreBoard,
   notifyClosed,
   saveAttrs,
   reorderAtom,
@@ -2637,6 +3226,14 @@ const manifest = {
     toggleBoard: {
       path: "./atomdown-board.js:toggleBoard",
       command: { name: "Atomdown: Toggle Board" },
+    },
+    // Reopens the board after a page load, on a page it was left open on.
+    // Both events matter: pageLoaded fires for a browser reload and for
+    // navigating to a different page, pageReloaded for reloading the page
+    // already open (silverbullet client/content_manager.ts).
+    restoreBoard: {
+      path: "./atomdown-board.js:restoreBoard",
+      events: ["editor:pageLoaded", "editor:pageReloaded"],
     },
     notifyClosed: {
       path: "./atomdown-board.js:notifyClosed",
@@ -2685,6 +3282,10 @@ const internals = {
   removeLineCollapsingSeam,
   parseAtoms,
   injectSharedFunctions,
+  buildBoardHtml,
+  buildStripHtml,
+  boardOpenKey,
+  collapsedKey,
 };
 
 const plugExport = { manifest, functionMapping, internals };

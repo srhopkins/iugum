@@ -12,6 +12,15 @@ functions:
     command:
       name: "Atomdown: Toggle Board"
 
+  # Reopens the board after a page load, but only on a page it was left open
+  # on. The remembered flag lives in clientStore, keyed by page name - it is
+  # presentation state and never touches the document.
+  restoreBoard:
+    path: "./atomdown-board.js:restoreBoard"
+    events:
+      - "editor:pageLoaded"
+      - "editor:pageReloaded"
+
   notifyClosed:
     path: "./atomdown-board.js:notifyClosed"
 
