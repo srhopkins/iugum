@@ -80,7 +80,7 @@ html {
   --board-accent-color: var(--ui-accent-color, #4a7dc7);
   --board-card-radius: 6px;
   --board-card-border-width: 1px;
-  --board-card-padding: 8px;
+  --board-card-padding: 14px;
   --board-card-header-padding: 4px 8px;
   --board-card-gap: 14px;
   --board-group-border-width: 2px;
@@ -114,15 +114,26 @@ html {
   --ad-inset: var(--board-group-padding);
 }
 
-/* THE PADDING NEEDS THE ID PREFIX, and that is not a style choice.
-   client/styles/editor.scss carries `#sb-main .cm-editor .cm-line { padding: 0 }`,
-   which is specificity (1,0,2) and beats any two-class rule no matter how late
-   it is injected. Without this prefix the body text of every card sits flush
-   against - and for a member card, LEFT OF - its own border, while the header
-   widget (not a .cm-line, so not covered by that rule) is correctly inset. */
+/* THE HORIZONTAL PADDING NEEDS BOTH THE ID PREFIX AND !important, and neither
+   is a style choice.
+     - `#sb-main .cm-editor .cm-line { padding: 0 }` in the client's own
+       editor.scss is specificity (1,0,2) and beats any two-class rule however
+       late it is injected.
+     - client/codemirror/list_indent.ts writes `padding-left:Nch;
+       text-indent:-Nch` as an INLINE STYLE on every line of every list item,
+       and an inline style beats any stylesheet rule that is not !important.
+       That hanging indent is what put the `1.` of an ordered list in the
+       gutter, OUTSIDE the card's left border, while the wrapped text sat
+       correctly inside.
+   `text-indent: 0` is the price: wrapped list text now aligns under the
+   marker instead of after it. The alternative would need the marker's width in
+   CSS, which is per line and not knowable there. The same override also pulls
+   in the negative text-indent the client puts on a blockquote line and on a
+   heading whose `#` markers are showing. */
 #sb-main .cm-editor .cm-line.atomdown-card-line {
-  padding-left: calc(var(--ad-inset) + var(--board-card-padding));
-  padding-right: calc(var(--ad-inset) + var(--board-card-padding));
+  padding-left: calc(var(--ad-inset) + var(--board-card-padding)) !important;
+  padding-right: calc(var(--ad-inset) + var(--board-card-padding)) !important;
+  text-indent: 0 !important;
 }
 
 #sb-main .cm-editor .cm-line.atomdown-card-line.atomdown-card-first {
@@ -201,6 +212,7 @@ html {
   --ad-inset: 0px;
   padding: 0;
   margin: 0;
+  position: relative;
 }
 
 .sb-decoration-widget.atomdown-card-header.atomdown-nested {
@@ -225,7 +237,11 @@ html {
   gap: 6px;
   margin-left: var(--ad-inset);
   margin-right: var(--ad-inset);
-  padding: var(--board-card-header-padding);
+  position: relative;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-left: var(--board-card-padding);
+  padding-right: var(--board-card-padding);
   background: var(--board-card-surface);
   border: var(--board-card-border-width) solid var(--board-card-border-color);
   border-bottom: none;
@@ -300,15 +316,29 @@ html {
   );
 }
 
-/* No border-top: the header bar above the opening marker line is the box's
-   top edge. The opening marker is a hidden directive, so its collapsed height
-   becomes the group's interior top padding. */
+/* THE GROUP'S TOP AND BOTTOM INTERIOR PADDING.
+   No border-top here: the header bar above the opening marker line is the
+   box's top edge. The opening and closing markers are the group's -first and
+   -last lines, and both are directives, so this padding is what puts a gap
+   between the header bar and the first card, and between the last card and
+   the group's bottom border.
+
+   `!important` and four classes, and BOTH are needed. The directive rule
+   further down zeroes every side's padding with `!important` - it has to, or
+   a collapsed directive would still reserve space - and these two lines are
+   directives. Among `!important` declarations specificity decides, so this
+   4-class selector beats that 3-class one. Without it the first and last
+   member cards butt against the group's inner edges while the ones in the
+   middle look right, because the middle gaps come from blank source lines and
+   the two ends have no blank line to come from. The value is
+   --board-group-padding, the same one that insets the sides, so all four
+   sides match and match the panel. */
 #sb-main .cm-editor .cm-line.atomdown-group-line.atomdown-group-first {
-  padding-top: var(--board-group-padding);
+  padding-top: var(--board-group-padding) !important;
 }
 
 #sb-main .cm-editor .cm-line.atomdown-group-line.atomdown-group-last {
-  padding-bottom: var(--board-group-padding);
+  padding-bottom: var(--board-group-padding) !important;
 }
 
 .cm-line.atomdown-group-line.atomdown-group-last {
@@ -334,6 +364,7 @@ html {
 /* ----------------------------------------------------- */
 
 .sb-decoration-widget.atomdown-group-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -399,24 +430,14 @@ html {
   opacity: 0.8;
 }
 
-.atomdown-group-actions {
-  display: flex;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.atomdown-group-btn {
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1.2;
-  padding: 2px 8px;
-  border-radius: 4px;
-  border: 1px solid currentColor;
-  user-select: none;
-}
-
-.atomdown-group-collapse,
-.atomdown-group-menu {
+/* ONE MENU, NOT TWO BUTTONS. The panel shows Rename and Ungroup as buttons at
+   comfortable density and folds them into a menu at compact. The inline view
+   has ONE density - there is no density switch on a page - and its narrowest
+   editor width is 720px, where two text buttons plus the kind, the name, the
+   id and the count do not fit on one row. So the inline view always uses the
+   menu, which is also the same control the cards use, so there is one
+   mechanism rather than two. */
+.atomdown-group-collapse {
   cursor: pointer;
   font-size: 12px;
   line-height: 1.2;
@@ -426,7 +447,6 @@ html {
 }
 
 /* Hover inverts the two accent tokens rather than mixing in a new value. */
-.atomdown-group-btn:hover,
 .atomdown-group-collapse:hover,
 .atomdown-group-menu:hover {
   background: var(--ui-accent-contrast-color, #fff);
@@ -449,8 +469,82 @@ html {
 }
 
 .atomdown-card-head:hover .atomdown-grip,
-.atomdown-group-header:hover .atomdown-grip {
+.sb-decoration-widget.atomdown-card-header:has(+ .cm-line.atomdown-card-hover)
+  .atomdown-grip,
+.atomdown-group-header:hover .atomdown-grip,
+.atomdown-grip:focus-visible {
   opacity: 0.5;
+}
+
+/* ------------------------------------------------------------------ */
+/* THE CARD'S TWO CONTROLS: grip top-LEFT, three-dot menu top-RIGHT,   */
+/* the same sides the panel uses.                                      */
+/*                                                                     */
+/* Both are absolutely positioned inside the header's own padding, and  */
+/* that is what reconciles two rules that otherwise fight: the grip has */
+/* to be on the left (this rule) while the slug still starts on the     */
+/* same left edge as the body text (R2). An in-flow grip ahead of the   */
+/* slug pushes the slug right by the grip's width even at opacity 0,    */
+/* because its box is still laid out. Out of flow, it pushes nothing -  */
+/* which is also why neither control moves anything when it appears.    */
+/* --board-card-padding is 14px so the gutter is wide enough to hold    */
+/* the glyph without it crossing the card's border.                    */
+/* ------------------------------------------------------------------ */
+
+.atomdown-card-head .atomdown-grip,
+.atomdown-card-head .atomdown-card-menu {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  line-height: 1;
+}
+
+.atomdown-card-head .atomdown-grip {
+  left: 1px;
+}
+
+.atomdown-card-head .atomdown-card-menu {
+  right: 1px;
+}
+
+.atomdown-card-menu,
+.atomdown-group-menu {
+  opacity: 0;
+  cursor: pointer;
+  font-size: 14px;
+  letter-spacing: 0;
+  color: var(--board-header-quiet-color);
+  user-select: none;
+}
+
+/* Revealed by a hover anywhere on the card - not only on the header row -
+   which needs the seam's hover class, because the header is the card's
+   previous sibling and CSS cannot look backwards. Keyboard focus reveals it
+   too, so the control is reachable without a pointer. */
+.atomdown-card-head:hover .atomdown-card-menu,
+.sb-decoration-widget.atomdown-card-header:has(+ .cm-line.atomdown-card-hover)
+  .atomdown-card-menu,
+.atomdown-card-menu:focus-visible {
+  opacity: 0.6;
+}
+
+.atomdown-card-menu:hover,
+.atomdown-card-menu:focus-visible {
+  opacity: 1 !important;
+  color: var(--board-header-active-color);
+}
+
+/* The group's menu sits at the right end of its bar, in flow, because the bar
+   has room for it and it is the bar's only action control now. */
+.atomdown-group-menu {
+  margin-left: auto;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.atomdown-group-header:hover .atomdown-group-menu,
+.atomdown-group-menu:focus-visible {
+  opacity: 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -470,26 +564,104 @@ html {
 /* ------------------------------------------------------------------ */
 
 #sb-main .cm-editor .cm-line.atomdown-directive {
-  font-size: 1px;
-  line-height: 3px;
+  font-size: 0;
+  line-height: 0;
   color: transparent;
   overflow: hidden;
-  padding-top: 0;
-  padding-bottom: 0;
-  text-indent: 0;
+  /* Zeroed so a collapsed directive reserves no space. A group's own marker
+     lines override the vertical halves of this - see the group padding rule
+     above, which carries one more class so it wins among !important. */
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  text-indent: 0 !important;
 }
 
-#sb-main .cm-editor .cm-focused .cm-line.atomdown-directive.cm-activeLine,
-#sb-main .cm-editor .cm-line.atomdown-directive:hover {
-  font-size: 0.72em;
+/* THE LINE ITSELF NEVER REVEALS. There is no :hover rule here on purpose:
+   a pointer passing over a card's top border used to unfold a 64-character
+   digest, which moved the card and everything under it. And the line sits
+   ABOVE the card's top edge, so its text appeared outside the box.
+   The reveal is the peek below instead: a copy of the directive text carried
+   by the card's header widget, absolutely positioned, so it costs no layout
+   and is clipped to the card's own padding. */
+.atomdown-directive-peek {
+  display: none;
+  position: absolute;
+  z-index: 6;
+  top: 100%;
+  left: calc(var(--ad-inset) + var(--board-card-border-width));
+  right: calc(var(--ad-inset) + var(--board-card-border-width));
+  box-sizing: border-box;
+  padding: 3px var(--board-card-padding);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66em;
   line-height: 1.35;
   color: var(--board-header-quiet-color);
-  overflow: visible;
+  background: var(--board-card-surface);
+  border-bottom: var(--board-card-border-width) solid
+    var(--board-card-border-color);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+/* The ONLY reveal: the text cursor is in that directive's own line and the
+   editor has focus. The directive line is the header widget's previous
+   sibling, which is why the adjacent-sibling combinator reaches it. */
+#sb-main .cm-editor.cm-focused
+  .cm-line.atomdown-directive.cm-activeLine
+  + .sb-decoration-widget.atomdown-card-header
+  .atomdown-directive-peek {
+  display: block;
+}
+
+/* A group's opening marker sits AFTER its header bar, so the bar looks
+   forward for it instead. */
+#sb-main .cm-editor.cm-focused
+  .sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-group-first.cm-activeLine
+  )
+  .atomdown-directive-peek {
+  display: block;
+}
+
+.sb-decoration-widget.atomdown-group-header .atomdown-directive-peek {
+  --ad-inset: 0px;
+  background: var(--board-accent-color);
+  color: var(--ui-accent-contrast-color, #fff);
+  border-bottom: none;
 }
 
 /* CodeMirror's own active-line background would fight the card surface. */
 .cm-line.cm-activeLine {
   background-color: transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* A COLLAPSED GROUP.                                                  */
+/*                                                                     */
+/* The editor's fold placeholder lands inside the group's opening       */
+/* marker line, which is a directive and therefore collapsed to         */
+/* nothing - so the placeholder would be an unreadable sliver, and      */
+/* showing it would mean un-hiding a directive line. It is hidden       */
+/* instead: the header bar IS the collapsed group's representation,     */
+/* its caret turns from a down triangle to a right one, and the bar     */
+/* never recedes while the group is shut, because it is then the only   */
+/* thing on screen standing for the contents.                          */
+/* ------------------------------------------------------------------ */
+
+#sb-main .cm-editor .cm-line.atomdown-directive .cm-foldPlaceholder {
+  display: none;
+}
+
+.sb-decoration-widget.atomdown-group-header.atomdown-group-collapsed {
+  background: var(--board-accent-color);
+  color: var(--ui-accent-contrast-color, #fff);
+  border-color: var(--board-accent-color);
+  border-bottom: var(--board-group-border-width) solid
+    var(--board-accent-color);
+  border-bottom-left-radius: var(--board-card-radius);
+  border-bottom-right-radius: var(--board-card-radius);
 }
 
 /* ------------------------------- */
