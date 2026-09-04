@@ -17,8 +17,10 @@ NOT implemented" below.
 2. A full-screen modal opens over the current page, with one card per
    Atomdown atom found in the document (see "How parsing works" below).
    Each card shows its readable name (its `slug`) when it has one, its id
-   when it does not, and its raw Markdown text. The id stays on the card
-   either way -- see "Names (slugs)".
+   when it does not, and its block **rendered as CommonMark** — a heading
+   as a heading, a table as a table, a link as a link. The id stays on the
+   card either way -- see "Names (slugs)" and "Rendered CommonMark, and the
+   raw option".
 3. Click the three-dot (`⋮`) menu on a card to see every XML attribute
    present on that atom's directive, as plain name/value pairs — whatever
    they happen to be. There is no list of known attribute names anywhere
@@ -56,6 +58,10 @@ NOT implemented" below.
 9. If the board was open on a page when you reload it, it reopens by itself.
    It never opens on a page you did not open it on, and Close means closed.
    See "Remembering the view".
+10. The toolbar's **Raw markdown** button switches every card to its
+   markdown source, and back. One card's three-dot menu carries **Show raw
+   markdown** for that card alone. Rendered is the default at both levels.
+   See "Rendered CommonMark, and the raw option".
 
 The `id` attribute is shown but is never editable and can never be
 removed — Atomdown Core requires every atom to have one
@@ -560,6 +566,151 @@ were then re-checked with the real binary: `go run ./cmd/atomdown lint`
 printed `ok` (exit 0), and `go run ./cmd/atomdown strip` produced the same
 prose, reordered, with no doubled blank lines and no lost content.
 
+## Rendered CommonMark, and the raw option
+
+Steve: *"the view I have does not render the markdown in the individual cards,
+which I do want an option to view raw markdown but it should also display
+rendered markdown/commonmark by default"*.
+
+Before this, a card showed its block's raw markdown in a monospace font. A
+heading read as `## RESEA tickets - due tonight`, a table read as pipes, and a
+link read as bracket-paren syntax. On a 291-line page that reads as a cluster
+rather than as the document it came from.
+
+### The renderer is the host's, not ours
+
+Rendering goes through **SilverBullet's own markdown pipeline**, reached with
+the `markdown.markdownToHtml` syscall:
+
+| piece | where |
+|-------|-------|
+| syscall declaration | `silverbullet/plug-api/syscalls/markdown.ts` |
+| implementation | `silverbullet/client/plugos/syscalls/markdown.ts` |
+| registered for plugs | `silverbullet/client/client_system.ts` |
+| parser | `client/markdown_parser/`, with the space's own `syntaxExtensions` |
+| renderer | `client/markdown_renderer/markdown_render.ts` |
+
+That is the same call upstream's own configuration-manager plug uses to render
+library descriptions, so this is the supported path and not a private door.
+Reusing it buys three things a hand-written renderer could not: correct
+CommonMark, the space's own syntax extensions, and a card that looks like the
+editor.
+
+**No markdown library is bundled into this plug, and none should ever be.**
+There was no need to investigate a fallback — the syscall exists, is registered
+for plug workers, and works. `renderAtomBodies` calls it once per atom in
+`showBoard`, because rendering needs a syscall and `buildBoardHtml` is pure
+markup assembly.
+
+A host that does not have the syscall, or one block the renderer refuses, is
+not fatal: that card carries `data-no-rendered="1"`, falls back to its raw
+markdown, and the board still draws.
+
+### Sanitizing
+
+`renderMarkdownToHtml` serializes through `renderHtml`
+(`client/markdown_renderer/html_render.ts`), which puts every **text node** and
+every **attribute value** through `htmlEscape`. So markdown *text* can never
+inject markup, and that part needs nothing from us.
+
+The hole is deliberate on upstream's side: a **raw HTML tag in the markdown
+source** is re-emitted verbatim as a `RawHtml` tag. The page content is Steve's
+own today, but it will hold pasted text, and this panel iframe is loaded via
+`srcDoc` with no `sandbox` attribute — it is same-origin with the app. So
+`sanitizeRenderedHtml` filters the host's output before it reaches the markup:
+
+- a **tag allowlist** (`SAFE_TAGS`) — everything CommonMark produces, nothing
+  that can run code or load a remote document;
+- an **attribute allowlist** (`SAFE_ATTRS`) — which makes every `on*` handler
+  impossible without a rule of its own. No `style` (a fixed-position overlay is
+  a clickjack) and no `id` (it would collide with the panel's own element ids);
+- a **URL scheme allowlist** (`SAFE_URL_SCHEMES`) on `href` and `src`, tested
+  after decoding entities and stripping control characters, so neither
+  `&#106;avascript:` nor `java<tab>script:` survives;
+- **strip-with-contents** for `script`, `style`, `iframe`, `svg` and friends;
+  any other disallowed tag loses the tag but keeps its text, because that text
+  is content the user wrote;
+- **balance**. Every close tag must match an open tag the sanitizer itself
+  emitted, and anything still open at the end is closed. A stray `</div>` in
+  the document would otherwise close the *card's* own element and put the rest
+  of the board inside one card — which would break the card rectangles
+  `pickDropTarget` reads.
+
+Text runs are passed through untouched rather than re-escaped, because the
+input is already-escaped HTML and escaping it twice would show `&amp;` to the
+user. A `<` that does not begin a tag *is* escaped, so a malformed or
+unterminated tag degrades to visible text.
+
+### The raw affordance: board-wide, plus a per-card override
+
+Both, and the board-wide one is the primary. Steve wants to read the document
+and *occasionally* inspect one block's syntax, so:
+
+| control | scope | where |
+|---------|-------|-------|
+| **Raw markdown** / **Rendered** | the whole board | the toolbar, beside Close |
+| **Show raw markdown** / **Show rendered** | one card | that card's three-dot menu |
+
+**Rendered is the default at both levels.** An absent stored value, a stored
+value in a shape `loadViewState` does not recognise, and a store that throws
+all mean rendered.
+
+The board-wide switch is the master: flipping it **clears every per-card
+override**, so "show me the whole document as markdown" means the whole
+document and not "the whole document except the four cards I poked". Setting a
+card's override to the board-wide value clears it rather than storing a
+redundant copy, so a later flip of the board switch still moves that card.
+
+Both bodies are in the markup — a visible one and a hidden one — rather than
+one being fetched on demand. Three reasons:
+
+- toggling is a hidden flag, not a redraw and not a round trip to the worker;
+- a card the renderer could not handle falls back with no extra path;
+- the panel still holds each block's **exact** original text, which is what
+  `deriveGroupSlug` reads when it defaults a new group's name. Reading a
+  rendered heading would have lost the `##` it matches on. `selectedCardTexts`
+  reads `.board-card-raw` for exactly this reason.
+
+### Keeping the interactions alive over a much richer DOM
+
+A rendered card is a far richer DOM than a `<pre>`, and this is where it would
+break:
+
+- **A rendered link must not hijack a card-selecting click.** A card link is a
+  real `<a>` with a real `href`, so it looks and hovers like the link in the
+  document, but a capture-phase handler calls `preventDefault()` on it. The
+  click then falls through to the card's own handler and **selection wins**.
+  Following the link would have replaced the board with the target page. The
+  sanitizer also puts `target="_blank"` and a rel that blocks `window.opener`
+  on an absolute link, so a click that somehow escapes that handler opens a tab
+  instead of destroying the board.
+- **A rendered table must not change the card's rectangle.** `pickDropTarget`
+  decides a drop from each card's own rectangle, so a card that grew wider than
+  the column would change the geometry. The table scrolls inside its own box
+  (`max-width: 100%; overflow-x: auto`), which leaves the card's box exactly
+  where the flex column put it.
+- **A rendered task checkbox is a picture, not a control** — `pointer-events:
+  none`. This board never writes a byte from a card body, so letting it be
+  clicked would promise an edit that cannot happen.
+- **Text selection is off in the rendered body**, because selecting a card is a
+  click gesture and dragging text would fight it. The *raw* body keeps text
+  selectable, since copying the source is the reason to open it.
+
+### It is presentation, like the collapse state
+
+Which body a card shows is presentation and **never reaches the document**. It
+lives in the same client-local key-value store as the collapse state and the
+remembered view, under one more page-scoped key:
+
+| key | value |
+|-----|-------|
+| `atomdown-board.view:<page>` | `{ boardView: "rendered" \| "raw", cardViews: { <atomId>: "rendered" \| "raw" } }` |
+
+`clientStore` and not `localStorage`: a plug's code runs in a Web Worker, which
+has no `localStorage` at all, and `clientStore` is reachable from both the
+worker and the panel iframe through the one syscall bridge. There is one
+persistence mechanism in this file, not two.
+
 ## Theme
 
 The board renders inside an iframe (`client/components/panel.tsx`'s
@@ -641,8 +792,10 @@ go test ./plugs/atomdown-board        # same tests, through go test ./...
   `pickDropTarget`, `unitOrderFromCards`, `isContiguousUnitSelection`,
   `groupMenuState`, `rectsIntersect`, `minimalEdit`, `newAtomdownId`,
   `insertGroupMarkers`, `removeGroupMarkers`, `setGroupSlugInSource`,
-  `sanitizeSlug`, `slugConflict`, `deriveGroupSlug`, `slugOrId`. These are the
-  seams whose absence let the drop bug ship.
+  `sanitizeSlug`, `slugConflict`, `deriveGroupSlug`, `slugOrId`,
+  `effectiveCardView`, `sanitizeRenderedHtml`, `isSafeUrl`,
+  `decodeUrlEntities`. These are the seams whose absence let the drop bug
+  ship.
 - **The exported plug functions**, driven with a recording `syscall` stub, so
   the tests assert the real syscall sequence: exactly one
   `editor.replaceRange` per action, and no `space.writePage`, `space.readPage`
@@ -734,6 +887,61 @@ ever adds a `"github:.../atomdown-board.plug.js"` entry to `CONFIG.md`
 for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
+
+## What was verified — rendered CommonMark and the raw option
+
+**In a real browser**, driving the panel with real DOM events against the real
+291-line `Todo/running` (82 cards, 11 named groups, a 10-row markdown table),
+served by `iugum wiki` with the plug installed. The **host's own renderer**, not
+a stub:
+
+- A heading card's rendered body is `<h2>RESEA tickets - due tonight</h2>` — a
+  real `H2` element, with the raw `<pre>` hidden beside it.
+- The table card holds a real `<table>`: 10 `<tr>`, 30 `<td>`. Its rendered
+  width is 784px inside an 802px card, so it does **not** widen the card the
+  drop geometry measures.
+- The link card holds one `<a href="https://ffai.atlassian.net/browse/
+  FFAI-62016" target="_blank">`. Bold, inline code and the ordered list all
+  render (6 `<strong>`, 3 `<code>`, 6 `<li>` in one card). Zero `<script>`
+  elements anywhere in a card body.
+- **A click on a rendered link selects the card and does not navigate.**
+  `dispatchEvent` returns `false` (so `preventDefault` ran), `defaultPrevented`
+  is `true`, `location.href` is unchanged, and the card is the one selected
+  card afterwards.
+- Selection over the rich DOM: plain click replaces the selection,
+  modifier-click adds (2 selected), shift-click selects the range (3 cards),
+  and a lasso drawn from empty background selects both cards it crossed.
+- Drag geometry over the rendered table: `dragstart` marks one card dragging,
+  `dragover` in a top-level card's upper half draws `dropbefore` on that card
+  and in its lower half draws it on the next unit, and `dragover` over the
+  table card draws one indicator on its group's first card (the whole group is
+  one unit). `dragend` clears every marker.
+- The three-dot menu opens and now carries **Ungroup** and **Show raw
+  markdown**. Clicking the view item flips that card to `data-card-view="raw"`,
+  showing `## RESEA tickets - due tonight`, and leaves its neighbour rendered.
+  Clicking it again flips back.
+- The group header still selects all 7 member cards, and its collapse toggle
+  still collapses and expands.
+- The toolbar switch moves **all 82** cards to raw and back, and the button
+  relabels itself `Rendered` / `Raw markdown` each time.
+- The raw bodies of all 82 cards, compared against the page fetched from the
+  server, are **byte-exact** matches for the page's 82 blocks.
+- Left in raw, then the browser reloaded: the board reopened by itself, all 82
+  cards raw, button reading `Rendered`. Persistence works.
+- Dark theme: the rendered body's link is `rgb(126, 153, 252)` and its inline
+  code background `rgb(32, 32, 32)` — both read from the parent's live tokens,
+  so the card has no palette of its own.
+
+**Document integrity.** The live page is **byte-identical** to the copy taken
+before any of this, and the real `atomdown` binary reports `lint` **ok** and
+`verify` **ok - no drift** on it.
+
+Separately, against a scratch copy of the same page driven through the plug's
+exported functions: opening the board rendered, flipping the stored view to raw
+and back, and applying a per-card override made **zero** `editor.replaceRange`
+calls and **zero** space writes. A real group reorder and its reverse on that
+copy kept `lint` ok and `verify` ok - no drift at every step, left every `id`,
+`slug` and `digest` untouched, and the round trip came back byte-identical.
 
 ## What was verified — the group container, the header bar and view persistence
 
@@ -978,6 +1186,13 @@ one Chromium-based browser this was exercised in.
   selects that card only; its *unit* is the group, which is what the Group and
   Ungroup decision uses.
 - **Keyboard selection.** No arrow-key or Ctrl-A selection; mouse only.
+- **Following a link from a card.** A rendered link looks and hovers like a
+  link but does not navigate, because a click on it is a card-selecting
+  gesture — see "Keeping the interactions alive" above. Open the link from the
+  page itself, or from the raw view.
+- **Editing in a rendered card.** The rendered body is read-only. Every write
+  this plug makes is a directive line or a group marker; a card body is never
+  a source of a change.
 - **Locking.** No atom is treated as non-draggable or protected on the
   basis of any attribute — see "Drag-to-reorder" above for why that is
   deliberate, not a gap.
