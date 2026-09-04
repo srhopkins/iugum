@@ -63,7 +63,12 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { foldService } from "@codemirror/language";
+import {
+  foldedRanges,
+  foldEffect,
+  foldService,
+  unfoldEffect,
+} from "@codemirror/language";
 import { safeRun } from "@silverbulletmd/silverbullet/lib/async";
 import type { Client } from "../client.ts";
 import { lineWrapper } from "./line_wrapper.ts";
@@ -186,6 +191,21 @@ export type DecorationFoldRule = {
   from: number;
   /** Where the hidden part ends. */
   to: number;
+  /**
+   * Whether the region should be collapsed right now.
+   *
+   * This makes collapsing DECLARATIVE. A caller says what it wants and the
+   * seam makes the editor's own fold set match, so the same value applied
+   * twice is the same result: a control driven by it is idempotent, cannot
+   * desynchronise, and needs no read of the fold state that the syscall
+   * surface does not offer. It also means the caller never has to move the
+   * cursor into a line to fold it, which would otherwise trip any
+   * reveal-on-the-cursor's-line rule the caller has.
+   *
+   * A fold made from the gutter or by a command still works; the next time
+   * the caller writes this value, the editor is reconciled back to it.
+   */
+  collapsed?: boolean;
 };
 
 export type DecorationConfig = {
@@ -393,7 +413,11 @@ export function normalizeDecorationConfig(value: unknown): DecorationConfig {
     const from = offset(entry.from);
     const to = offset(entry.to);
     if (from === undefined || to === undefined || to <= from) continue;
-    folds.push({ from, to });
+    folds.push({
+      from,
+      to,
+      ...(entry.collapsed === true ? { collapsed: true } : {}),
+    });
   }
 
   const eventsValue = isRecord(value.events) ? value.events : {};
@@ -609,6 +633,7 @@ export function buildFoldRanges(
     .map((fold) => ({
       from: Math.min(fold.from, docLength),
       to: Math.min(fold.to, docLength),
+      ...(fold.collapsed ? { collapsed: true } : {}),
     }))
     .filter((fold) => fold.to > fold.from);
 }
@@ -653,6 +678,7 @@ function seamStateField(client: Client) {
         folds: value.folds.map((fold) => ({
           from: tr.changes.mapPos(fold.from, 1),
           to: tr.changes.mapPos(fold.to, -1),
+          ...(fold.collapsed ? { collapsed: true } : {}),
         })),
       };
     },
@@ -768,6 +794,70 @@ function selectionWatcher(
         safeRun(async () => {
           await client.dispatchAppEvent("editor:decorationSelect", payload);
         });
+      }
+    },
+  );
+}
+
+/**
+ * Make the editor's own fold set match the `collapsed` flags in the config.
+ *
+ * The reconciliation runs after a state build and after any transaction that
+ * brought a new config value, and it dispatches its own transaction, so it is
+ * queued to a microtask rather than run inside the update it observed.
+ *
+ * Only ranges the caller actually configured are touched. A fold the reader
+ * made somewhere else in the document is never disturbed.
+ */
+function foldReconciler(field: StateField<SeamState>) {
+  return ViewPlugin.fromClass(
+    class {
+      private queued = false;
+
+      constructor(readonly view: EditorView) {
+        this.schedule();
+      }
+
+      update(update: ViewUpdate) {
+        const before = update.startState.field(field, false);
+        const after = update.state.field(field, false);
+        if (!after) return;
+        // A new config value, or a doc change that moved the ranges.
+        if (!before || before.source !== after.source || update.docChanged) {
+          this.schedule();
+        }
+      }
+
+      private schedule() {
+        if (this.queued) return;
+        this.queued = true;
+        Promise.resolve().then(() => {
+          this.queued = false;
+          this.reconcile();
+        });
+      }
+
+      private reconcile() {
+        const state = this.view.state;
+        const seam = state.field(field, false);
+        if (!seam) return;
+        const folded: { from: number; to: number }[] = [];
+        foldedRanges(state).between(0, state.doc.length, (from, to) => {
+          folded.push({ from, to });
+        });
+        const isFolded = (fold: DecorationFoldRule) =>
+          folded.some((r) => r.from === fold.from && r.to === fold.to);
+        const effects = [];
+        for (const fold of seam.folds) {
+          const want = fold.collapsed === true;
+          const have = isFolded(fold);
+          if (want && !have) {
+            effects.push(foldEffect.of({ from: fold.from, to: fold.to }));
+          } else if (!want && have) {
+            effects.push(unfoldEffect.of({ from: fold.from, to: fold.to }));
+          }
+        }
+        if (effects.length > 0) this.view.dispatch({ effects });
       }
     },
   );
@@ -1244,9 +1334,10 @@ export function decorationSeam(client: Client, pageName: string): Extension[] {
     extensions.push(hoverClassField(config), hoverWatcher(config, field));
   }
   if (config.folds.length > 0) {
-    // The editor's own folding does the collapsing. This only tells it that a
-    // caller-named range is one region.
+    // The editor's own folding does the collapsing. The seam only says which
+    // ranges are regions, and reconciles their state to the config.
     extensions.push(
+      foldReconciler(field),
       foldService.of((state, lineStart, lineEnd) => {
         const folds = state.field(field, false)?.folds ??
           buildFoldRanges(state, config);
