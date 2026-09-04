@@ -255,6 +255,31 @@ test("normalize: a fold needs two offsets and a positive span", () => {
   expect(cfg.folds).toEqual([{ from: 4, to: 20 }]);
 });
 
+test("normalize: a fold's collapsed flag is opt-in", () => {
+  const cfg = normalizeDecorationConfig({
+    folds: [
+      { from: 1, to: 9, collapsed: true },
+      { from: 1, to: 9, collapsed: "yes" },
+      { from: 1, to: 9 },
+    ],
+  });
+  expect(cfg.folds.map((f) => f.collapsed)).toEqual([
+    true,
+    undefined,
+    undefined,
+  ]);
+});
+
+test("a fold's collapsed flag survives clamping", () => {
+  const state = EditorState.create({ doc: "aaa\nbbb" });
+  expect(
+    buildFoldRanges(
+      state,
+      config({ folds: [{ from: 3, to: 9999, collapsed: true }] }),
+    ),
+  ).toEqual([{ from: 3, to: 7, collapsed: true }]);
+});
+
 test("fold ranges are clamped, and an empty one is dropped", () => {
   const state = EditorState.create({ doc: "aaa\nbbb" });
   expect(
