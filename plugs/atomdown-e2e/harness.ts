@@ -1648,7 +1648,36 @@ export function signatureDiff(a: Signature, b: Signature): string[] {
  */
 export async function cardTop(view: View, id: string): Promise<number | null> {
   const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
-  await settle(view.page);
+
+  // Find the card first, by scrolling to it.
+  //
+  // Inline virtualises, so a reference card 60 atoms down the page is simply
+  // not in the DOM until it is on screen, and the first version of rule 3
+  // reported "reference card not found" rather than measuring anything. The
+  // returned position is scroll-independent, so scrolling to find the card
+  // does not change the number this reports — which is exactly why the
+  // measurement is document-relative in the first place.
+  if (view.kind === "inline") {
+    await view.ev.evaluate(
+      async ({ id, scr }) => {
+        const el = document.querySelector(scr)!;
+        const has = () =>
+          Array.from(document.querySelectorAll(".atomdown-card-id")).some(
+            (c) => c.textContent?.trim() === id,
+          );
+        if (has()) return;
+        for (let y = 0; y <= el.scrollHeight; y += 300) {
+          el.scrollTop = y;
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+          if (has()) return;
+        }
+      },
+      { id, scr: scroller },
+    );
+  }
+
+  await settle(view.page, 4);
   return view.ev.evaluate(
     ({ id, scr, kind }) => {
       const base = document.querySelector(scr);

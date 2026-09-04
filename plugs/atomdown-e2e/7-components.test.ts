@@ -1049,7 +1049,7 @@ for (const theme of THEMES) {
 
         const card = view.ev.locator(".board-card").nth(2);
         const atomId = await card.getAttribute("data-atom-id");
-        const body = card.locator(".board-card-body");
+        const body = card.locator("[data-card-rendered]");
         const renderedHeight = (await body.boundingBox())!.height;
 
         // --- Double-click enters edit mode with the exact markdown --------
@@ -1134,7 +1134,7 @@ for (const theme of THEMES) {
         }
 
         // --- Cmd-Enter SAVES ---------------------------------------------
-        await view.ev.locator(`.board-card[data-atom-id="${atomId}"] .board-card-body`).dblclick();
+        await view.ev.locator(`.board-card[data-atom-id="${atomId}"] [data-card-rendered]`).dblclick();
         await editor.waitFor({ timeout: 10_000 });
         const kept = `${blockFromFile ?? "text"} SAVED-BY-COMPONENT-TEST`;
         await editor.fill(kept);
@@ -1183,7 +1183,7 @@ for (const theme of THEMES) {
 
         const card = view.ev.locator(".board-card").nth(4);
         const atomId = await card.getAttribute("data-atom-id");
-        await card.locator(".board-card-body").dblclick();
+        await card.locator("[data-card-rendered]").dblclick();
         const editor = view.ev.locator(`[data-card-edit="${atomId}"]`);
         await editor.waitFor({ timeout: 10_000 });
         await editor.fill("Edited so that this atom's digest no longer matches.");
