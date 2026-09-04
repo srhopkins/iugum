@@ -97,7 +97,9 @@ export type AppEvent =
   | "hooks:renderBottomWidgets"
   // Editor decoration seam, see client/codemirror/decoration_seam.ts
   | "editor:decorationClick"
-  | "editor:decorationSelect";
+  | "editor:decorationSelect"
+  | "editor:decorationDrag"
+  | "editor:decorationLasso";
 
 export type ClickEvent = {
   page: string;

@@ -1,9 +1,11 @@
 import { EditorState } from "@codemirror/state";
 import { expect, test } from "vitest";
 import {
+  buildMarkRanges,
   buildRangeDecorations,
   type DecorationConfig,
   emptyDecorationConfig,
+  marksIn,
   normalizeDecorationConfig,
 } from "./decoration_seam.ts";
 
@@ -145,6 +147,107 @@ test("widgets: side decides the start or the end of the target line", () => {
     config({ widgets: [{ at: 5, html: "<b>h</b>", side: "after" }] }),
   );
   expect(after).toEqual([{ from: 7, to: 7, class: undefined, block: true }]);
+});
+
+test("widgets: inline is opt-in and keeps the exact offset", () => {
+  const state = EditorState.create({ doc: "aaa\nbbb\nccc" });
+  const inline = collect(
+    state,
+    config({
+      widgets: [{ at: 5, html: "<b>h</b>", side: "before", inline: true }],
+    }),
+  );
+  expect(inline).toEqual([{ from: 5, to: 5, class: undefined, block: true }]);
+  // `block` in this helper means "is a widget"; check the CodeMirror flag too.
+  const set = buildRangeDecorations(
+    state,
+    config({
+      widgets: [{ at: 5, html: "<b>h</b>", side: "before", inline: true }],
+    }),
+  );
+  expect((set.iter().value!.spec as any).block).toBe(false);
+});
+
+test("normalize: an inline widget keeps the flag, a block widget has none", () => {
+  const cfg = normalizeDecorationConfig({
+    widgets: [
+      { at: 1, html: "a", inline: true },
+      { at: 2, html: "b", inline: "yes" },
+    ],
+  });
+  expect(cfg.widgets).toEqual([
+    { at: 1, html: "a", side: "before", inline: true },
+    { at: 2, html: "b", side: "before" },
+  ]);
+});
+
+test("normalize: gestures are off unless asked for", () => {
+  expect(normalizeDecorationConfig({}).gestures).toEqual({});
+  expect(normalizeDecorationConfig({ gestures: "nope" }).gestures).toEqual({});
+});
+
+test("normalize: a drag with no handle and no modifier is dropped", () => {
+  expect(
+    normalizeDecorationConfig({ gestures: { drag: {} } }).gestures.drag,
+  ).toBeUndefined();
+  expect(
+    normalizeDecorationConfig({ gestures: { drag: { modifier: "none" } } })
+      .gestures.drag,
+  ).toBeUndefined();
+  expect(
+    normalizeDecorationConfig({ gestures: { drag: { modifier: "sideways" } } })
+      .gestures.drag,
+  ).toBeUndefined();
+  expect(
+    normalizeDecorationConfig({ gestures: { drag: { handleClass: "grip" } } })
+      .gestures.drag,
+  ).toEqual({ handleClass: "grip" });
+});
+
+test("normalize: a lasso defaults to alt, and none turns it off", () => {
+  expect(
+    normalizeDecorationConfig({ gestures: { lasso: {} } }).gestures.lasso,
+  ).toEqual({ modifier: "alt" });
+  expect(
+    normalizeDecorationConfig({ gestures: { lasso: { modifier: "shift" } } })
+      .gestures.lasso,
+  ).toEqual({ modifier: "shift" });
+  expect(
+    normalizeDecorationConfig({ gestures: { lasso: { modifier: "none" } } })
+      .gestures.lasso,
+  ).toBeUndefined();
+});
+
+test("mark ranges are clamped to the document and keep their name", () => {
+  const state = EditorState.create({ doc: "aaa" });
+  expect(
+    buildMarkRanges(
+      state,
+      config({
+        marks: [
+          { from: 0, to: 9999, class: "ad-card", id: "unit:1" },
+          { from: 1, to: 2, class: "ad-card" },
+        ],
+      }),
+    ),
+  ).toEqual([
+    { from: 0, to: 3, name: "unit:1" },
+    { from: 1, to: 2, name: "ad-card" },
+  ]);
+});
+
+test("overlapping marks report outermost first", () => {
+  const ranges = [
+    { from: 10, to: 20, name: "inner" },
+    { from: 0, to: 40, name: "outer" },
+    { from: 100, to: 110, name: "elsewhere" },
+    { from: 12, to: 14, name: "" },
+  ];
+  expect(marksIn(ranges, 13, 13).map((r) => r.name)).toEqual([
+    "outer",
+    "inner",
+  ]);
+  expect(marksIn(ranges, 60, 60)).toEqual([]);
 });
 
 test("marks map through an edit instead of going stale", () => {
