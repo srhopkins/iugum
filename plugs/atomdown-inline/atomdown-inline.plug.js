@@ -839,6 +839,9 @@ function buildDecorations(sourceText, selectedKeys) {
       to: box.to,
       class: "atomdown-card",
       lineClasses: true,
+      // So the card's header text can be muted at rest and normal when the
+      // pointer is anywhere in the card, not only on the header row itself.
+      hoverClasses: true,
     });
     widgets.push({
       id: boxKey,
@@ -876,6 +879,12 @@ function buildDecorations(sourceText, selectedKeys) {
         to: unitSpan.to,
         class: "atomdown-group",
         lineClasses: true,
+        // The whole reason the seam grew hover classes: the group's chrome is
+        // subdued at rest and comes forward when the pointer is anywhere
+        // inside the group, including over a member card. A group is a run of
+        // sibling line elements with nothing wrapping them, so CSS :hover
+        // cannot express that.
+        hoverClasses: true,
       });
       widgets.push({
         id: "unit:" + unit.unitKey,

@@ -64,6 +64,17 @@ inset by `--board-group-padding`, which is what makes a member card float
 inside the group with a gap on all four sides. A top-level card sets that inset
 to zero and is otherwise the identical box.
 
+## Why the group's hover scope needs a class from the client
+
+The panel's group chrome is subdued at rest and comes forward when the pointer
+is anywhere inside that group, including over a member card. Inline, a group is
+a run of sibling line elements with **nothing wrapping them**, and CSS has no
+previous-sibling combinator, so `:hover` cannot reach the lines above the
+pointer. The seam therefore puts `atomdown-group-hover` on every line of the
+group the pointer is in, and the rules below use that. The header bar reaches
+the same state through `:has(+ .atomdown-group-hover)`, because the bar's next
+sibling is its own group's first line.
+
 ```space-style
 html {
   --board-accent-color: var(--ui-accent-color, #4a7dc7);
@@ -71,17 +82,18 @@ html {
   --board-card-border-width: 1px;
   --board-card-padding: 8px;
   --board-card-header-padding: 4px 8px;
+  --board-card-gap: 14px;
   --board-group-border-width: 2px;
   --board-group-padding: 8px;
   --board-group-header-padding: 5px 8px;
-  --board-card-gap: 14px;
+  --board-group-quiet-border: 40%;
   --board-group-quiet-header: 16%;
   --board-grip-size: 14px;
   --board-id-size: 11px;
   --board-header-quiet-color: var(--subtle-color, #888);
+  --board-header-active-color: var(--root-color, #222);
   --board-card-surface: var(--ui-surface-section-background-color, #f7f7f7);
   --board-card-border-color: var(--ui-surface-border-color, #ddd);
-  --board-group-field: var(--ui-surface-background-color, #fff);
 }
 
 /* ------------------------------------------------------------------ */
@@ -94,14 +106,31 @@ html {
 .cm-line.atomdown-card-line {
   --ad-inset: 0px;
   position: relative;
-  padding-left: calc(var(--ad-inset) + var(--board-card-padding));
-  padding-right: calc(var(--ad-inset) + var(--board-card-padding));
 }
 
 /* A card inside a group is inset by the group's interior padding. Two
    classes, so this beats the single-class rule above. */
 .cm-line.atomdown-card-line.atomdown-group-line {
   --ad-inset: var(--board-group-padding);
+}
+
+/* THE PADDING NEEDS THE ID PREFIX, and that is not a style choice.
+   client/styles/editor.scss carries `#sb-main .cm-editor .cm-line { padding: 0 }`,
+   which is specificity (1,0,2) and beats any two-class rule no matter how late
+   it is injected. Without this prefix the body text of every card sits flush
+   against - and for a member card, LEFT OF - its own border, while the header
+   widget (not a .cm-line, so not covered by that rule) is correctly inset. */
+#sb-main .cm-editor .cm-line.atomdown-card-line {
+  padding-left: calc(var(--ad-inset) + var(--board-card-padding));
+  padding-right: calc(var(--ad-inset) + var(--board-card-padding));
+}
+
+#sb-main .cm-editor .cm-line.atomdown-card-line.atomdown-card-first {
+  padding-top: var(--board-card-padding);
+}
+
+#sb-main .cm-editor .cm-line.atomdown-card-line.atomdown-card-last {
+  padding-bottom: var(--board-card-padding);
 }
 
 .cm-line.atomdown-card-line::before {
@@ -121,24 +150,8 @@ html {
 }
 
 /* The card's top edge and top corners live on the header widget, which sits
-   directly above this line - so -first adds padding only. */
-.cm-line.atomdown-card-line.atomdown-card-first {
-  padding-top: var(--board-card-padding);
-}
-
-.cm-line.atomdown-card-line.atomdown-card-last {
-  padding-bottom: var(--board-card-padding);
-}
-
-.cm-line.atomdown-card-line.atomdown-card-last::before {
-  border-bottom: var(--board-card-border-width) solid
-    var(--board-card-border-color);
-  border-bottom-left-radius: var(--board-card-radius);
-  border-bottom-right-radius: var(--board-card-radius);
-}
-
-/* THE ONE-LINE BLOCK. Both -first and -last, so it must close the box by
-   itself. It still has no top edge, because its header widget carries it. */
+   directly above this line - so -first adds padding only, above. */
+.cm-line.atomdown-card-line.atomdown-card-last::before,
 .cm-line.atomdown-card-line.atomdown-card-first.atomdown-card-last::before {
   border-bottom: var(--board-card-border-width) solid
     var(--board-card-border-color);
@@ -147,9 +160,41 @@ html {
 }
 
 /* ------------------------------------------------------------------ */
-/* THE CARD HEADER ROW: a shaded strip at the top of the box, with the */
-/* name in body text and the id in small grey monospace. It is also    */
-/* the box's top edge and top corners.                                 */
+/* A WIDE TABLE STAYS INSIDE ITS CARD.                                 */
+/*                                                                     */
+/* Fixed layout with wrapped cells, not a horizontal scroller. A card's */
+/* body is a run of .cm-line elements that CodeMirror owns and measures; */
+/* making a line scroll horizontally would put text outside the box     */
+/* posAtCoords reads from and break cursor placement. Wrapping keeps    */
+/* every column reachable with no scrolling at all, and the table can    */
+/* then never cross the card's border or the group's.                   */
+/* ------------------------------------------------------------------ */
+
+#sb-main .cm-editor .cm-line.atomdown-card-line table {
+  table-layout: fixed;
+  width: 100%;
+  max-width: 100%;
+}
+
+#sb-main .cm-editor .cm-line.atomdown-card-line th,
+#sb-main .cm-editor .cm-line.atomdown-card-line td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 6px;
+  vertical-align: top;
+}
+
+/* Belt and braces: the widget SilverBullet wraps a table in keeps its own
+   scrollbar for anything the fixed layout still cannot fit. */
+#sb-main .cm-editor .cm-line.atomdown-card-line .sb-table-widget {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* THE CARD HEADER ROW: a strip at the top of the box, with the name   */
+/* in body text and the id in small grey monospace. It is also the     */
+/* box's top edge and top corners.                                     */
 /* ------------------------------------------------------------------ */
 
 .sb-decoration-widget.atomdown-card-header {
@@ -161,9 +206,17 @@ html {
 .sb-decoration-widget.atomdown-card-header.atomdown-nested {
   --ad-inset: var(--board-group-padding);
   border-left: var(--board-group-border-width) solid
-    var(--board-accent-color);
+    color-mix(
+      in srgb,
+      var(--board-accent-color) var(--board-group-quiet-border),
+      transparent
+    );
   border-right: var(--board-group-border-width) solid
-    var(--board-accent-color);
+    color-mix(
+      in srgb,
+      var(--board-accent-color) var(--board-group-quiet-border),
+      transparent
+    );
 }
 
 .atomdown-card-head {
@@ -179,13 +232,18 @@ html {
   border-top-left-radius: var(--board-card-radius);
   border-top-right-radius: var(--board-card-radius);
   line-height: 1.3;
-}
-
-/* A hairline under the strip, separating it from the body. Drawn as a shadow
-   so it costs no height and cannot break the box's own border run. */
-.atomdown-card-head {
+  /* A hairline under the strip. A shadow, so it costs no height and cannot
+     break the box's own border run. */
   box-shadow: inset 0 calc(-1 * var(--board-card-border-width)) 0
     var(--board-card-border-color);
+}
+
+/* QUIET AT REST, like the panel's card header. A token, never opacity:
+   opacity applies to an element and all its descendants, so on a group it
+   would fade every member card inside it. */
+.atomdown-card-slug,
+.atomdown-card-id {
+  color: var(--board-header-quiet-color);
 }
 
 .atomdown-card-slug {
@@ -196,7 +254,16 @@ html {
 .atomdown-card-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--board-id-size);
-  color: var(--board-header-quiet-color);
+}
+
+/* Full contrast when the pointer is on the header, or anywhere in the card
+   the header belongs to. `atomdown-card-hover` is put on that card's lines by
+   the seam, because CSS cannot reach a previous sibling. */
+.atomdown-card-head:hover .atomdown-card-slug,
+.sb-decoration-widget.atomdown-card-header:has(
+    + .cm-line.atomdown-card-hover
+  ) .atomdown-card-slug {
+  color: var(--board-header-active-color);
 }
 
 .atomdown-card-badge {
@@ -210,13 +277,14 @@ html {
 /* ------------------------------------------------------------------ */
 /* THE GROUP BOX: one closed rounded 2px accent box around its cards.  */
 /* The real border, because the group is the outer of the two boxes.   */
+/*                                                                     */
+/* SUBDUED AT REST at --board-group-quiet-border of the accent, full   */
+/* strength when the pointer is anywhere inside the group. color-mix,  */
+/* never opacity, for the reason above. A browser with no color-mix()  */
+/* drops the resting declaration and the group is simply always at     */
+/* full strength, never at an unreadable half state.                   */
 /* ------------------------------------------------------------------ */
 
-/* Deliberately NO background here. The card box is an absolutely positioned
-   ::before at z-index -1, and a negative-z child paints BELOW every other
-   descendant's background - so a background on this line would hide the card
-   surface of every member card. The group's field is therefore the page's own
-   background, which is what --ui-surface-background-color resolves to anyway. */
 .cm-line.atomdown-group-line {
   border-left: var(--board-group-border-width) solid
     var(--board-accent-color);
@@ -224,24 +292,45 @@ html {
     var(--board-accent-color);
 }
 
+.cm-line.atomdown-group-line:not(.atomdown-group-hover):not(.atomdown-selected-line) {
+  border-color: color-mix(
+    in srgb,
+    var(--board-accent-color) var(--board-group-quiet-border),
+    transparent
+  );
+}
+
 /* No border-top: the header bar above the opening marker line is the box's
    top edge. The opening marker is a hidden directive, so its collapsed height
    becomes the group's interior top padding. */
-.cm-line.atomdown-group-line.atomdown-group-first {
+#sb-main .cm-editor .cm-line.atomdown-group-line.atomdown-group-first {
   padding-top: var(--board-group-padding);
 }
 
-.cm-line.atomdown-group-line.atomdown-group-last {
+#sb-main .cm-editor .cm-line.atomdown-group-line.atomdown-group-last {
   padding-bottom: var(--board-group-padding);
+}
+
+.cm-line.atomdown-group-line.atomdown-group-last {
   border-bottom: var(--board-group-border-width) solid
     var(--board-accent-color);
   border-bottom-left-radius: var(--board-card-radius);
   border-bottom-right-radius: var(--board-card-radius);
 }
 
+/* The member cards' own nested-header side borders follow the group. */
+.sb-decoration-widget.atomdown-card-header.atomdown-nested:has(
+    + .cm-line.atomdown-group-hover
+  ) {
+  border-left-color: var(--board-accent-color);
+  border-right-color: var(--board-accent-color);
+}
+
 /* ----------------------------------------------------- */
-/* THE GROUP HEADER BAR. Solid accent, contrast text, and */
-/* the group box's top edge, exactly as the panel draws it. */
+/* THE GROUP HEADER BAR. The group box's top edge, and    */
+/* the panel's own two states: a --board-group-quiet-      */
+/* header tint at rest, solid accent when the group is    */
+/* under the pointer.                                     */
 /* ----------------------------------------------------- */
 
 .sb-decoration-widget.atomdown-group-header {
@@ -256,8 +345,13 @@ html {
     var(--board-accent-color) var(--board-group-quiet-header),
     transparent
   );
-  color: var(--root-color, #222);
-  border: var(--board-group-border-width) solid var(--board-accent-color);
+  color: var(--board-header-active-color);
+  border: var(--board-group-border-width) solid
+    color-mix(
+      in srgb,
+      var(--board-accent-color) var(--board-group-quiet-border),
+      transparent
+    );
   border-bottom: none;
   border-top-left-radius: var(--board-card-radius);
   border-top-right-radius: var(--board-card-radius);
@@ -266,13 +360,20 @@ html {
   user-select: none;
 }
 
-/* Full strength when the pointer is on the bar itself, per group, the same
-   way the panel's group bar comes forward on hover. Written after the resting
-   rule, so a browser with no color-mix() drops the resting one and the bar is
-   simply always at full strength rather than left unreadable. */
-.sb-decoration-widget.atomdown-group-header:hover {
+/* Full strength for THIS group only. The bar's next sibling is its group's
+   own first line, so if that line carries the seam's hover class the pointer
+   is inside this group - including over a member card, which is exactly the
+   scope the panel has and plain :hover cannot reach. */
+.sb-decoration-widget.atomdown-group-header:hover,
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-group-hover
+  ),
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-selected-line
+  ) {
   background: var(--board-accent-color);
   color: var(--ui-accent-contrast-color, #fff);
+  border-color: var(--board-accent-color);
 }
 
 .atomdown-group-kind {
@@ -355,29 +456,31 @@ html {
 /* ------------------------------------------------------------------ */
 /* THE DIRECTIVE COMMENTS.                                            */
 /*                                                                    */
-/* HIDDEN at rest. On a real page every atom carries a 64-character   */
-/* sha256 digest that wraps over three or four rows, and 93 of those   */
-/* are the single biggest reason this stopped reading as cards.        */
+/* HIDDEN at rest - every one of them, including the document-level    */
+/* `<atomdown version="1"/>` marker, which is the same Lezer node and  */
+/* takes the same rule.                                                */
 /*                                                                    */
-/* Collapsed, not `display: none`: the line element stays in the       */
+/* Collapsed, not `display: none`: the line element stays in the        */
 /* layout so CodeMirror's own coordinate and cursor maths are          */
 /* untouched, and the text is revealed in full the moment the cursor   */
-/* is ON that line. So an edit can never land somewhere invisible -    */
-/* which was the reason for dimming instead of hiding in the first     */
-/* place. That property is kept; only the resting state changed.       */
+/* is ON that line WITH THE EDITOR FOCUSED. The focus condition        */
+/* matters: SilverBullet puts the cursor at offset 0 on a page load,   */
+/* which is the document marker's own line, so without it that one     */
+/* directive would always be revealed on arrival and look like a bug.  */
 /* ------------------------------------------------------------------ */
 
-.cm-line.atomdown-directive {
+#sb-main .cm-editor .cm-line.atomdown-directive {
   font-size: 1px;
   line-height: 3px;
   color: transparent;
   overflow: hidden;
   padding-top: 0;
   padding-bottom: 0;
+  text-indent: 0;
 }
 
-.cm-line.atomdown-directive.cm-activeLine,
-.cm-line.atomdown-directive:hover {
+#sb-main .cm-editor .cm-focused .cm-line.atomdown-directive.cm-activeLine,
+#sb-main .cm-editor .cm-line.atomdown-directive:hover {
   font-size: 0.72em;
   line-height: 1.35;
   color: var(--board-header-quiet-color);
