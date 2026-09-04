@@ -653,7 +653,17 @@ function recordingSyscall(text, options) {
     store: opts.store || {},
   };
   globalThis.syscall = async function (name, ...args) {
+    // Models the real panel bridge: hiding the modal unmounts the panel
+    // iframe, and the host drops its postMessage listener at the same moment
+    // (silverbullet client/components/panel.tsx), so any syscall made after
+    // that is simply lost. This is what turns "forget the page after hiding
+    // it" into a silent no-op, which was the reopen bug.
+    if (state.bridgeDead) throw new Error("panel bridge is gone");
     calls.push({ name, args });
+    if (name === "editor.hidePanel" && opts.dieAfterHidePanel) {
+      state.bridgeDead = true;
+      return;
+    }
     if (name === "editor.getText") return state.text;
     if (name === "editor.getCurrentPage") return state.page;
     if (name === "editor.replaceRange") {
@@ -3911,4 +3921,246 @@ test("the three editor knobs travel to the panel and are documented", async () =
     // find is not a knob.
     assert.ok(readme.includes("`" + name + "`"), name + " must be in the README");
   }
+});
+
+// --- the reopen bug: closed must stay closed -------------------------------
+//
+// Steve left the board on Todo/running, reloaded, and the board came back.
+// Root cause: the panel's Close button hid the modal and THEN asked the
+// worker to forget the page. Hiding the modal unmounts the panel iframe and
+// the host drops its postMessage bridge with it, so that second syscall was
+// never delivered and never even rejected. The board closed, the flag stayed
+// set, and every reload reopened it.
+//
+// The fix is an ordering one - forget first, hide second - so these tests pin
+// the order itself, not just the end state.
+
+test("the close handler forgets the page BEFORE it hides the panel", () => {
+  const script = buildBoardHtml(parseAtoms(TIGHT_GROUP), "Board", []).script;
+  const at = script.indexOf('getElementById("atomdown-board-close")');
+  assert.ok(at > 0, "expected a close button handler");
+  const handler = script.slice(at, at + 2000);
+  const forget = handler.indexOf("atomdown-board.notifyClosed");
+  const hide = handler.indexOf('"editor.hidePanel"');
+  assert.ok(forget > 0, "close must invoke notifyClosed");
+  assert.ok(hide > 0, "close must still hide the panel");
+  assert.ok(
+    forget < hide,
+    "notifyClosed must be invoked before hidePanel, or the forget is lost",
+  );
+});
+
+test("notifyClosed forgets the page even when hiding kills the bridge", async () => {
+  const store = {};
+  store[boardOpenKey(GROUP_PAGE)] = true;
+  const { calls, state } = recordingSyscall(TIGHT_GROUP, {
+    page: GROUP_PAGE,
+    store,
+    dieAfterHidePanel: true,
+  });
+  await plug.functionMapping.notifyClosed();
+  // The delete landed, and it landed before the hide.
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+  const names = calls.map((c) => c.name);
+  assert.ok(
+    names.indexOf("clientStore.delete") < names.indexOf("editor.hidePanel"),
+    "the forget must precede the hide: " + names.join(","),
+  );
+});
+
+test("notifyClosed takes the panel down itself", async () => {
+  const { calls } = recordingSyscall(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.notifyClosed();
+  assert.ok(calls.some((c) => c.name === "editor.hidePanel"));
+});
+
+test("a hidePanel that throws still forgets the page", async () => {
+  const store = {};
+  store[boardOpenKey(GROUP_PAGE)] = true;
+  const { state } = recordingSyscall(TIGHT_GROUP, {
+    page: GROUP_PAGE,
+    store,
+    dieAfterHidePanel: true,
+  });
+  // dieAfterHidePanel makes every later call throw, including the one the
+  // close path makes last. The forget must already be done by then.
+  await plug.functionMapping.notifyClosed();
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+});
+
+test("the toggle command closes through the same path as the button", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.toggleBoard();
+  assert.equal(state.store[boardOpenKey(GROUP_PAGE)], true);
+  const before = calls.length;
+  await plug.functionMapping.toggleBoard();
+  const names = calls.slice(before).map((c) => c.name);
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+  assert.ok(names.includes("editor.hidePanel"));
+  assert.ok(
+    names.indexOf("clientStore.delete") < names.indexOf("editor.hidePanel"),
+    "the toggle must forget before it hides: " + names.join(","),
+  );
+});
+
+// --- the whole matrix ------------------------------------------------------
+
+test("MATRIX open, reload: open", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.toggleBoard();
+  assert.equal(state.store[boardOpenKey(GROUP_PAGE)], true);
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.opened, true);
+  assert.ok(calls.slice(before).some((c) => c.name === "editor.showPanel"));
+});
+
+test("MATRIX open, close, reload: CLOSED", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.toggleBoard();
+  // Close exactly the way the panel's button does it, on a bridge that dies
+  // the moment the panel is hidden. This is the reported bug, end to end.
+  await plug.functionMapping.notifyClosed();
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+    "a dismissed board must not come back",
+  );
+});
+
+test("MATRIX never opened, reload: closed", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  assert.deepEqual(Object.keys(state.store), []);
+  const before = calls.length;
+  assert.equal((await plug.functionMapping.restoreBoard(GROUP_PAGE)).opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("MATRIX open on A, go to B: B closed unless B was opened before", async () => {
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: "PageA" });
+  await plug.functionMapping.toggleBoard();
+  assert.equal(state.store[boardOpenKey("PageA")], true);
+
+  // Navigate to B, which was never opened.
+  state.page = "PageB";
+  let before = calls.length;
+  assert.equal((await plug.functionMapping.restoreBoard("PageB")).opened, false);
+  let after = calls.slice(before).map((c) => c.name);
+  assert.ok(after.includes("editor.hidePanel"), "A's stale panel must come down");
+  assert.equal(after.includes("editor.showPanel"), false);
+  // A is still remembered, so going back reopens it.
+  assert.equal(state.store[boardOpenKey("PageA")], true);
+  state.page = "PageA";
+  before = calls.length;
+  assert.equal((await plug.functionMapping.restoreBoard("PageA")).opened, true);
+  assert.ok(calls.slice(before).some((c) => c.name === "editor.showPanel"));
+
+  // Now open B too, and both are remembered independently.
+  state.page = "PageB";
+  await plug.functionMapping.restoreBoard("PageB");
+  await plug.functionMapping.toggleBoard();
+  assert.equal(state.store[boardOpenKey("PageB")], true);
+  assert.equal(state.store[boardOpenKey("PageA")], true);
+  before = calls.length;
+  assert.equal((await plug.functionMapping.restoreBoard("PageB")).opened, true);
+  assert.ok(calls.slice(before).some((c) => c.name === "editor.showPanel"));
+});
+
+test("MATRIX storage unavailable or throwing: closed", async () => {
+  const { calls } = await closedStart(TIGHT_GROUP, {
+    page: GROUP_PAGE,
+    storeThrows: true,
+  });
+  const before = calls.length;
+  const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+  assert.equal(result.ok, true);
+  assert.equal(result.opened, false);
+  assert.equal(
+    calls.slice(before).some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("only the literal boolean true reopens the board", async () => {
+  // Anything else - a leftover from another feature, a stringified flag, a
+  // number - reads as closed. Reopening a full-screen view the user did not
+  // ask for is the worse failure.
+  for (const junk of [undefined, null, "", 0, 1, "true", "1", {}, [], false, "open"]) {
+    const store = {};
+    store[boardOpenKey(GROUP_PAGE)] = junk;
+    const { calls } = recordingSyscall(TIGHT_GROUP, { page: GROUP_PAGE, store });
+    await plug.functionMapping.notifyClosed();
+    store[boardOpenKey(GROUP_PAGE)] = junk;
+    const before = calls.length;
+    const result = await plug.functionMapping.restoreBoard(GROUP_PAGE);
+    assert.equal(result.opened, false, "junk value: " + JSON.stringify(junk));
+    assert.equal(
+      calls.slice(before).some((c) => c.name === "editor.showPanel"),
+      false,
+      "junk value: " + JSON.stringify(junk),
+    );
+  }
+});
+
+// --- key inventory: nothing else may write the open flag -------------------
+
+test("every clientStore key the plug uses is distinct and page-scoped", () => {
+  const page = "Todo/running";
+  const keys = [
+    boardOpenKey(page),
+    collapsedKey(page),
+    viewKey(page),
+    densityKey(page),
+  ];
+  assert.deepEqual(keys, [
+    "atomdown-board.open:Todo/running",
+    "atomdown-board.collapsed:Todo/running",
+    "atomdown-board.view:Todo/running",
+    "atomdown-board.density:Todo/running",
+  ]);
+  assert.equal(new Set(keys).size, keys.length);
+  // No key is a prefix of another up to the page name, so a get on one can
+  // never read another's value.
+  for (const a of keys) {
+    for (const b of keys) {
+      if (a !== b) assert.ok(!a.startsWith(b) && !b.startsWith(a));
+    }
+  }
+});
+
+test("persisting any other view state never writes the open flag", () => {
+  // The panel writes the density, the raw/rendered view and the collapsed
+  // groups. Each must use its own key: a truthy value landing in the open key
+  // would reopen a dismissed board.
+  const script = buildBoardHtml(parseAtoms(TIGHT_GROUP), "Board", []).script;
+  const writes = script.match(/"clientStore\.set",\s*\n?\s*"atomdown-board\.[a-z]+:"/g) || [];
+  assert.ok(writes.length >= 3, "expected the panel to persist view state");
+  for (const w of writes) {
+    assert.ok(!w.includes("atomdown-board.open:"), w);
+  }
+  // And the panel never writes the open key by any spelling.
+  assert.ok(!script.includes("atomdown-board.open"));
+});
+
+test("a redraw after an edit never re-writes the open flag", async () => {
+  // Hypothesis: a redraw triggered around close time could re-set the flag
+  // after the close cleared it. Nothing but toggleBoard's open branch writes
+  // it, so a redraw must not touch it.
+  const { calls, state } = await closedStart(TIGHT_GROUP, { page: GROUP_PAGE });
+  await plug.functionMapping.notifyClosed();
+  const before = calls.length;
+  const result = await plug.functionMapping.setGroupSlug("KF53ASNE", "Redrawn");
+  assert.equal(result.ok, true);
+  const sets = calls.slice(before).filter((c) =>
+    c.name === "clientStore.set" && c.args[0] === boardOpenKey(GROUP_PAGE)
+  );
+  assert.deepEqual(sets, []);
+  assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
 });
