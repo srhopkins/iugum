@@ -1,0 +1,6 @@
+{
+  "name": "atomdown-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Front-end suite for the atomdown-board and atomdown-inline views. Declares ES modules; dependencies come from the silverbullet subtree through the node_modules symlink beside this file, so there is one Playwright and one Chromium on the machine."
+}
