@@ -182,6 +182,14 @@ test("normalize: an inline widget keeps the flag, a block widget has none", () =
   ]);
 });
 
+test("normalize: the active-line class is opt-in", () => {
+  expect(normalizeDecorationConfig({}).activeLine).toBe(false);
+  expect(normalizeDecorationConfig({ activeLine: "yes" }).activeLine).toBe(
+    false,
+  );
+  expect(normalizeDecorationConfig({ activeLine: true }).activeLine).toBe(true);
+});
+
 test("normalize: gestures are off unless asked for", () => {
   expect(normalizeDecorationConfig({}).gestures).toEqual({});
   expect(normalizeDecorationConfig({ gestures: "nope" }).gestures).toEqual({});
