@@ -16,7 +16,9 @@ NOT implemented" below.
    this plug does not bind a key by default).
 2. A full-screen modal opens over the current page, with one card per
    Atomdown atom found in the document (see "How parsing works" below).
-   Each card shows the atom's id and its raw Markdown text.
+   Each card shows its readable name (its `slug`) when it has one, its id
+   when it does not, and its raw Markdown text. The id stays on the card
+   either way -- see "Names (slugs)".
 3. Click the three-dot (`⋮`) menu on a card to see every XML attribute
    present on that atom's directive, as plain name/value pairs — whatever
    they happen to be. There is no list of known attribute names anywhere
@@ -39,7 +41,10 @@ NOT implemented" below.
    several, or lasso them by dragging on empty background. With a valid
    selection, the three-dot menu's **Group** item wraps those blocks in an
    Atomdown `atom-group`; on a card that is already in a group the item
-   reads **Ungroup**. Cmd-Z undoes either. See "Selection and grouping".
+   reads **Ungroup**. **Group** first asks for a readable name for the
+   group, defaulted from the first heading in the selection, so one
+   confirm is usually enough. Cmd-Z undoes either. See "Selection and
+   grouping" and "Names (slugs)".
 6. Closing the modal (the **Close** button, or running the toggle command
    again) returns to the normal page. The document is otherwise
    unchanged unless you explicitly clicked Save on an attribute edit or
@@ -58,8 +63,9 @@ document text (see `parseAtoms()`), per `atomdown/SPEC.md`:
 - A line matching `<!-- <atom id="..." .../> -->` starts a new atom. All
   attributes on that tag are captured generically.
 - A line matching `<!-- <atom-group id="..."> -->` / `<!-- </atom-group>
-  -->` tags every atom between the markers with that group's id (shown
-  as a badge on the card). Groups do not get their own card.
+  -->` tags every atom between the markers with that group's id and, if
+  the marker carries one, its `slug` (the badge on the card shows the
+  slug, or the id when there is none). Groups do not get their own card.
 - Any blank-line-delimited block that has no atom marker in front of it
   (for example a `---` divider) becomes an "implicit atom" card, per
   SPEC.md: "A tool must not discard the block or attach it to the
@@ -208,6 +214,108 @@ drops one blank when removing a marker leaves two against each other.
 The markers go hard against the run, with no blank line of their own, which is
 the shape `atomdown materialize --split list-item` already writes
 (`atomdown/testdata/valid/split-list.md`).
+
+## Names (slugs)
+
+Steve's problem, in his words: "need the ability to have human friendly
+grouping slugs, as a human it is hard for me to group ids". An eight-character
+Crockford Base32 id is the right identity and the wrong label.
+
+Atomdown already has the answer. `SPEC.md` ("Identity") makes `slug` an
+optional attribute on both `atom` and `atom-group`, and says outright that
+"the slug is not identity". So the board writes and reads that attribute and
+nothing else -- no sidecar file, no new attribute, no change to the format.
+
+**Identity never moves.** Every structural decision in this plug still keys on
+the id: unit keys (`atom:<id>`, `group:<id>`), the group lookup an ungroup
+does, the drop target, the collision check on a generated id. A slug only ever
+changes what a human reads. Naming or renaming therefore cannot change any
+`id` and cannot change any `digest`: creating a group inserts two lines and
+touches no block text, renaming a group rewrites that group's one opening
+marker line, and naming an atom rewrites that atom's one directive line with
+its id and digest carried through unchanged.
+
+### Where the name shows, and how the id stays reachable
+
+- A card's header shows the slug first, in the body font, then the id in small
+  subtle monospace. A card with no slug shows just the id, as before. The id
+  is on the card either way, because it is the value Steve needs when citing
+  an atom from another page, and its tooltip says so.
+- A group badge reads `group <slug>`, falling back to `group <id>`. The real
+  group id is always in the badge's tooltip.
+
+### Naming a group at creation
+
+**Group** does not act immediately any more. It swaps the popover's group row
+for a small naming form: a label, one text input, **Group** and **Cancel**,
+and a hint line that previews the exact `slug="..."` that will be written.
+
+The prompt affordance is a form *inside the popover that is already open*.
+Not `window.prompt`: some browsers suppress it inside an iframe, and where it
+does run it renders as browser chrome rather than as part of the page. Not a
+second modal either -- the board itself is already a modal panel. The popover
+already holds text inputs for the attribute editor, so this reuses that
+pattern.
+
+The input is prefilled by `deriveGroupSlug()`, which reads the selected
+blocks' own text and takes the first heading it finds -- an ATX heading
+(`## Email PRs`) first, then a setext heading, then the first non-blank line
+of any kind, and `group` if nothing survives. So the usual gesture is select,
+Group, Enter. The user is never made to invent a name.
+
+Enter confirms, Escape cancels.
+
+### Renaming
+
+For an **atom**, the slug is the first row of the attribute editor that
+already exists, with a real label ("Name (slug) - readable alias, not the
+id") and its own input rather than a generic name/value pair. There is
+deliberately no second rename editor: `slug` *is* an ordinary directive
+attribute, and the attribute editor already rewrites exactly one directive
+line. Saving a changed name redraws the board so the card relabels itself;
+saving with the name unchanged leaves the popover open, as it always did.
+
+For a **group**, a member card's menu gains **Rename group**, which opens the
+same naming form prefilled with the current name. A group has no card of its
+own -- each member card carries its badge -- so a member's menu is where a
+group-level action belongs, next to Ungroup. Clearing the field removes the
+`slug` attribute; the group then shows its id again.
+
+### Shape and collisions
+
+Typed text is sanitized by `sanitizeSlug()` into the shape atomdown itself
+generates: lowercase kebab-case ASCII. Accented letters fold to their base
+("Décisions" -> `decisions`) rather than being dropped, every other run of
+characters outside `[a-z0-9]` becomes one hyphen, leading, trailing and
+doubled hyphens go, and a very long name truncates at a word boundary. The
+function is idempotent, so sanitizing an already-clean slug changes nothing.
+An empty result means "no slug" -- `slug=""` is never written.
+
+`slugConflict()` reports a name already carried by another atom or group in
+the same document. It **warns and still writes**: the format permits duplicate
+slugs, because a slug is not identity, so refusing the edit would be the
+tooling overruling the format. The naming form previews the clash as you type,
+and after the write the worker re-checks the live buffer and shows an
+`editor.flashNotification`.
+
+These two are deliberately the **only** places this plug decides slug shape
+and slug collision, and each carries a `DELEGATION POINT` comment. atomdown is
+growing a `materialize --slugs` generator and a duplicate-slug lint
+diagnostic; when those land, each function becomes a one-line delegation
+rather than a second opinion scattered through the plug. Nothing here depends
+on them landing.
+
+Both `sanitizeSlug()` and `deriveGroupSlug()` are in `CLIENT_SHARED_FUNCTIONS`,
+so the panel and the worker share one copy by source injection and cannot
+disagree about what a typed name becomes. A test drives the injected copies
+against the tested ones.
+
+### Attribute order
+
+A slug is written immediately after the id -- `id`, `slug`, then everything
+else -- which is the order `emit.go` itself uses for both an atom directive
+and a group marker. So running the document through `atomdown` afterwards does
+not reshuffle the line the board wrote.
 
 ## Drag-to-reorder
 
@@ -401,13 +509,17 @@ go test ./plugs/atomdown-board        # same tests, through go test ./...
 - **The pure decision functions**, exported for tests as `plug.internals`:
   `pickDropTarget`, `unitOrderFromCards`, `isContiguousUnitSelection`,
   `groupMenuState`, `rectsIntersect`, `minimalEdit`, `newAtomdownId`,
-  `insertGroupMarkers`, `removeGroupMarkers`. These are the seams whose
-  absence let the drop bug ship.
+  `insertGroupMarkers`, `removeGroupMarkers`, `setGroupSlugInSource`,
+  `sanitizeSlug`, `slugConflict`, `deriveGroupSlug`, `slugOrId`. These are the
+  seams whose absence let the drop bug ship.
 - **The exported plug functions**, driven with a recording `syscall` stub, so
   the tests assert the real syscall sequence: exactly one
   `editor.replaceRange` per action, and no `space.writePage`, `space.readPage`
   or `editor.reloadPage` at all. That is the check that keeps Cmd-Z working —
   a future change that reaches for `space.writePage` fails the suite.
+- **The rendered panel**, read back from the `editor.showPanel` call the worker
+  makes to redraw the board, so "the badge shows the name and keeps the id
+  reachable" is asserted rather than eyeballed.
 
 The panel script is not duplicated for testing. `injectSharedFunctions()`
 stringifies those same functions into the panel script at render time, and a
@@ -415,7 +527,9 @@ test evaluates the injected source and checks it answers identically, so the
 panel and the worker cannot drift.
 
 `board_test.go` is the only Go file in this directory. It shells out to
-`node --test`, and skips when node is absent, so the JavaScript is covered by
+`node --test`, checks the summary reports zero failures and at least a floor
+of passing tests (so a suite that silently stops loading is caught, not just
+one that fails), and skips when node is absent, so the JavaScript is covered by
 `go test ./...` on a machine that has node without making node a build
 dependency (CONTRIBUTING.md rule 1). It also runs `node --check` on the plug
 file, because nothing else in the repo would catch a syntax error in a
@@ -481,6 +595,53 @@ ever adds a `"github:.../atomdown-board.plug.js"` entry to `CONFIG.md`
 for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
+
+## What was verified — names (slugs)
+
+Against a copy of Steve's real live page (`Todo/running.md`, 291 lines, 82
+atoms, 11 hand-written group slugs) and the real `atomdown` binary. The copy
+was driven through the plug's own exported functions with the recording
+syscall stub, then handed to the binary.
+
+- **Baseline:** `atomdown lint` reports `ok`, `atomdown verify` reports
+  `ok - no drift`.
+- **Three board actions applied:** grouped two adjacent atoms with the typed
+  name "My New Section", renamed the existing `resea` group to "RESEA Work",
+  and named one atom "Header Note" through the attribute editor path.
+- **After:** `atomdown lint` still `ok`, `atomdown verify` still
+  `ok - no drift`.
+- **Exactly 3 `editor.replaceRange` calls, one per action, and 0
+  `space.writePage` / `space.readPage` / `editor.reloadPage`.** Cmd-Z reaches
+  each action.
+- **One id added** (the new group's) and **no id lost**. All 82 digests
+  byte-identical. Ungrouping the new group afterwards still lints and verifies
+  clean.
+- **Attribute order confirmed stable:** `atomdown parse | atomdown emit` writes
+  the same `id`, `slug`, `digest` order the board wrote. (That round trip is
+  not byte-stable on this page even at baseline — emit adds blank lines around
+  every directive — so the comparison is the attribute order, not the bytes.)
+
+The panel script itself was verified in a real browser, by serving the exact
+`html` and `script` the worker hands `editor.showPanel` for that page and
+driving it with real DOM events:
+
+- No load errors. 82 cards. Every group badge reads its slug with the real
+  group id in the tooltip; a named atom shows its slug span with the id
+  beside it and in the tooltip.
+- Selecting two cards and clicking **Group** opens the naming form prefilled
+  `running-todo`, derived from the page's own `# Running todo` heading, with
+  the hint `Writes slug="running-todo".`
+- Typing `Decisions` (already used) changes the hint to
+  `Already used by KATZ94NM - allowed, just harder to read.` and leaves the
+  confirm button enabled. Typing `!!!` reads
+  `No name. The group will show its id instead.`
+- Confirming calls `atomdown-board.groupAtoms` with the sanitized
+  `my-new-section`, not the raw typed text.
+- On a grouped card the menu offers **Ungroup** and **Rename group**; Rename
+  opens the same form prefilled `decisions`, and confirming "RESEA Work" calls
+  `atomdown-board.setGroupSlug` with `KATZ94NM` and `resea-work`.
+- In the attribute editor the labelled slug row is the first row, ahead of the
+  generic name/value list.
 
 ## What was verified — the drop fix, the popover fix, selection and grouping
 
