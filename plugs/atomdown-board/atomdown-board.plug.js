@@ -175,6 +175,7 @@ function parseAtoms(sourceText) {
   let pendingId = null;
   let pendingAttrs = null;
   let currentGroupId = null;
+  let currentGroupSlug = null;
   let bufferLines = [];
   let implicitCounter = 0;
 
@@ -204,10 +205,18 @@ function parseAtoms(sourceText) {
         implicit = true;
         attrs = [];
       }
+      // slug is SPEC.md's optional readable alias ("The slug is not
+      // identity"). It is lifted out of the generic attribute list here so
+      // the board can label a card with it, but it is NOT removed from
+      // `attrs`: the attribute editor still owns it like any other
+      // attribute, which is what makes a rename a plain attribute save.
+      const slugAttr = (attrs || []).find((a) => a.name === "slug");
       atoms.push({
         id,
+        slug: slugAttr ? slugAttr.value : null,
         implicit,
         groupId: currentGroupId,
+        groupSlug: currentGroupSlug,
         text: blockLines.join("\n"),
         attrs,
       });
@@ -242,12 +251,15 @@ function parseAtoms(sourceText) {
       flush();
       const groupAttrs = parseAttrs(groupOpenMatch[1]);
       const groupIdAttr = groupAttrs.find((a) => a.name === "id");
+      const groupSlugAttr = groupAttrs.find((a) => a.name === "slug");
       currentGroupId = groupIdAttr ? groupIdAttr.value : null;
+      currentGroupSlug = groupSlugAttr ? groupSlugAttr.value : null;
       continue;
     }
     if (GROUP_CLOSE_RE.test(line)) {
       flush();
       currentGroupId = null;
+      currentGroupSlug = null;
       continue;
     }
     bufferLines.push(line);
@@ -383,7 +395,9 @@ function computeUnits(sourceText) {
       const startLine = i;
       const groupAttrs = parseAttrs(groupOpenMatch[1]);
       const groupIdAttr = groupAttrs.find((a) => a.name === "id");
+      const groupSlugAttr = groupAttrs.find((a) => a.name === "slug");
       const groupId = groupIdAttr ? groupIdAttr.value : null;
+      const groupSlug = groupSlugAttr ? groupSlugAttr.value : null;
       i++;
       const atomIds = [];
       while (i < n && !GROUP_CLOSE_RE.test(lines[i])) {
@@ -406,6 +420,7 @@ function computeUnits(sourceText) {
         endLine,
         atomIds,
         groupId,
+        groupSlug,
       });
       if (i < n) i++; // step past the close marker line itself
       continue;
@@ -802,6 +817,159 @@ function existingIds(sourceText) {
   return found;
 }
 
+// ---------------------------------------------------------------------------
+// Slugs: the readable alias, not identity.
+//
+// SPEC.md ("Identity") makes `slug` an optional readable alias on both `atom`
+// and `atom-group`, and says outright that "the slug is not identity". So
+// everything structural in this file still keys on `id` — unit keys, group
+// lookups, the drop decision — and a slug only ever changes what a human
+// reads. Steve's reason for wanting them (iugum-w6y.4) is that he cannot
+// group by eight-character ids.
+//
+// The two functions below are deliberately the ONLY places this plug decides
+// slug shape and slug collision. atomdown is growing a `materialize --slugs`
+// generator and a duplicate-slug lint diagnostic; when those land, each of
+// these becomes a one-line delegation to the binary's answer rather than a
+// second opinion scattered through the plug.
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitizes typed text into the shape atomdown generates: lowercase
+ * kebab-case ASCII. Accented letters fold to their ASCII base ("Décisions"
+ * -> "decisions") rather than being dropped; every other run of characters
+ * outside [a-z0-9] becomes one hyphen, and leading, trailing and doubled
+ * hyphens are removed.
+ *
+ * Returns "" when nothing usable survives, which every caller reads as
+ * "no slug" — writing an empty slug attribute is never right.
+ *
+ * DELEGATION POINT: replace the body with the atomdown binary's own slug
+ * generator once `materialize --slugs` exists. Keep the signature.
+ */
+function sanitizeSlug(input) {
+  // Long enough for "plumbing-research" with room to spare, short enough that
+  // a slug stays readable in a card header. Declared inside the function on
+  // purpose: this function is injected into the panel script by source (see
+  // CLIENT_SHARED_FUNCTIONS), so it must not depend on a module constant the
+  // panel would not have.
+  const SLUG_MAX_LENGTH = 48;
+  let text = String(input == null ? "" : input);
+  if (typeof text.normalize === "function") {
+    // NFKD splits an accented letter into base + combining mark, so removing
+    // the marks leaves the ASCII base letter.
+    text = text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  }
+  let slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (slug.length > SLUG_MAX_LENGTH) {
+    // Cut at a word boundary when there is one inside the limit, so a long
+    // heading truncates to whole words rather than mid-word.
+    const cut = slug.slice(0, SLUG_MAX_LENGTH);
+    const atBoundary = cut.replace(/-[^-]*$/, "");
+    slug = (atBoundary !== "" ? atBoundary : cut).replace(/-+$/, "");
+  }
+  return slug;
+}
+
+/**
+ * Reports whether `slug` is already carried by some OTHER atom or group in
+ * this document, by which ids, and as one ready-to-show sentence in
+ * `warning` (null when there is no conflict), so every caller phrases a
+ * duplicate the same way.
+ *
+ * This warns; it never blocks. Atomdown Core permits duplicate slugs — a slug
+ * is not identity, so two blocks sharing one is legal, merely unhelpful. The
+ * board therefore writes the slug the user typed and says what it noticed,
+ * rather than refusing an edit the format allows.
+ *
+ * ownerId is the id of the atom or group being named, so renaming something
+ * to the slug it already has is not a conflict with itself.
+ *
+ * DELEGATION POINT: replace the body with the atomdown binary's duplicate-slug
+ * lint diagnostic once that lands. Keep the signature.
+ */
+function slugConflict(sourceText, slug, ownerId) {
+  const wanted = String(slug || "");
+  if (!wanted) return { duplicate: false, ids: [], warning: null };
+  const ids = [];
+  String(sourceText || "").split("\n").forEach(function (line) {
+    const atomMatch = line.match(ATOM_TAG_RE);
+    const groupMatch = line.match(GROUP_OPEN_RE);
+    if (!atomMatch && !groupMatch) return;
+    const attrs = parseAttrs(atomMatch ? atomMatch[2] : groupMatch[1]);
+    const idAttr = attrs.find(function (a) { return a.name === "id"; });
+    const slugAttr = attrs.find(function (a) { return a.name === "slug"; });
+    if (!slugAttr || slugAttr.value !== wanted) return;
+    const id = idAttr ? idAttr.value : "";
+    if (ownerId && id === ownerId) return;
+    if (ids.indexOf(id) === -1) ids.push(id);
+  });
+  return {
+    duplicate: ids.length > 0,
+    ids,
+    warning: ids.length > 0
+      ? 'The name "' + wanted + '" is already used in this page (' +
+        ids.join(", ") + "). Atomdown permits that, and the name was written. " +
+        "A name used once is easier to read."
+      : null,
+  };
+}
+
+/**
+ * The default name to offer for a new group, derived from the blocks the user
+ * selected so one confirm is enough.
+ *
+ * `texts` is each selected block's source text, in document order. The first
+ * heading inside the selection wins — an ATX heading ("## Decisions") first,
+ * then a setext heading, then the first non-blank line of any kind. That is
+ * the line a reader would call the section's name.
+ *
+ * Falls back to "group", never to "", so the confirm button is never offered
+ * with an empty field.
+ */
+function deriveGroupSlug(texts) {
+  const lines = [];
+  (texts || []).forEach(function (text) {
+    String(text == null ? "" : text).split("\n").forEach(function (line) {
+      lines.push(line);
+    });
+  });
+  for (let i = 0; i < lines.length; i++) {
+    const atx = lines[i].match(/^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/);
+    if (atx) {
+      const slug = sanitizeSlug(atx[1]);
+      if (slug) return slug;
+    }
+  }
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (lines[i].trim() === "") continue;
+    if (/^\s{0,3}(=+|-{2,})\s*$/.test(lines[i + 1])) {
+      const slug = sanitizeSlug(lines[i]);
+      if (slug) return slug;
+    }
+  }
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === "") continue;
+    const slug = sanitizeSlug(lines[i]);
+    if (slug) return slug;
+  }
+  return "group";
+}
+
+/**
+ * What a human should read for one card or group: its slug when it has one,
+ * its id when it does not. The id never stops being the identity — the board
+ * keeps it visible next to the slug and in the tooltip (see buildBoardHtml),
+ * because Steve needs it when citing an atom from another page.
+ */
+function slugOrId(slug, id) {
+  const trimmed = String(slug == null ? "" : slug).trim();
+  return trimmed !== "" ? trimmed : String(id == null ? "" : id);
+}
+
 /**
  * Wraps a contiguous run of units in one atom-group, and returns the whole
  * rewritten document.
@@ -818,8 +986,15 @@ function existingIds(sourceText) {
  * already writes (atomdown/testdata/valid/split-list.md). It also makes an
  * ungroup an exact inverse: removing those two lines restores the original
  * bytes.
+ *
+ * `slug` is the optional readable name the user typed. It is sanitized here
+ * (sanitizeSlug) and written immediately after the id, which is the attribute
+ * order `atomdown emit` itself uses for a group marker (emit.go: id, then
+ * slug, then everything else) — so emitting the document afterwards does not
+ * reshuffle the line. A slug already used elsewhere in the document is
+ * written anyway and reported in `warning`; the format permits duplicates.
  */
-function insertGroupMarkers(sourceText, unitKeys, groupId) {
+function insertGroupMarkers(sourceText, unitKeys, groupId, slug) {
   const { lines, units } = computeUnits(sourceText);
   const keys = dedupeKeys(unitKeys);
   if (keys.length < 2) {
@@ -853,14 +1028,80 @@ function insertGroupMarkers(sourceText, unitKeys, groupId) {
     };
   }
 
+  const cleanSlug = sanitizeSlug(slug);
+  const conflict = slugConflict(sourceText, cleanSlug, groupId);
+  const marker = cleanSlug === ""
+    ? '<!-- <atom-group id="' + groupId + '"> -->'
+    : '<!-- <atom-group id="' + groupId + '" slug="' +
+      escapeAttrValue(cleanSlug) + '"> -->';
+
   const first = units[positions[0]];
   const last = units[positions[positions.length - 1]];
   const out = lines.slice(0, first.startLine)
-    .concat(['<!-- <atom-group id="' + groupId + '"> -->'])
+    .concat([marker])
     .concat(lines.slice(first.startLine, last.endLine + 1))
     .concat(["<!-- </atom-group> -->"])
     .concat(lines.slice(last.endLine + 1));
-  return { ok: true, text: out.join("\n"), groupId };
+  return {
+    ok: true,
+    text: out.join("\n"),
+    groupId,
+    slug: cleanSlug,
+    warning: conflict.warning,
+  };
+}
+
+/**
+ * Renames one group: rewrites its opening marker line and nothing else.
+ *
+ * The id stays exactly as it was — a slug is not identity (SPEC.md) — so the
+ * group keeps every reference to it, and no atom inside it is touched, so no
+ * `digest` can go stale. An empty slug removes the attribute rather than
+ * writing slug="".
+ *
+ * Attribute order on the rewritten line is id, slug, then whatever else the
+ * marker carried, matching emit.go so a later `atomdown emit` is a no-op.
+ */
+function setGroupSlugInSource(sourceText, groupId, slug) {
+  const lines = String(sourceText || "").split("\n");
+  let lineIndex = -1;
+  let attrs = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(GROUP_OPEN_RE);
+    if (!m) continue;
+    const parsed = parseAttrs(m[1]);
+    const idAttr = parsed.find(function (a) { return a.name === "id"; });
+    if (idAttr && idAttr.value === groupId) {
+      lineIndex = i;
+      attrs = parsed;
+      break;
+    }
+  }
+  if (lineIndex === -1) {
+    return {
+      ok: false,
+      error: "Could not find that group (document changed since the board opened?)",
+    };
+  }
+
+  const cleanSlug = sanitizeSlug(slug);
+  const rest = attrs.filter(function (a) {
+    return a.name !== "id" && a.name !== "slug";
+  });
+  const ordered = [{ name: "id", value: groupId }];
+  if (cleanSlug !== "") ordered.push({ name: "slug", value: cleanSlug });
+  const attrText = ordered.concat(rest)
+    .map(function (a) { return a.name + '="' + escapeAttrValue(a.value) + '"'; })
+    .join(" ");
+  lines[lineIndex] = "<!-- <atom-group " + attrText + "> -->";
+
+  const conflict = slugConflict(sourceText, cleanSlug, groupId);
+  return {
+    ok: true,
+    text: lines.join("\n"),
+    slug: cleanSlug,
+    warning: conflict.warning,
+  };
 }
 
 /**
@@ -935,7 +1176,8 @@ const THEME_VAR_NAMES = [
 // that script by source (Function.prototype.toString) rather than duplicated,
 // so the panel and the worker cannot disagree about where a drop lands or
 // whether a selection can be grouped. Every function listed here must stay
-// self-contained — see the PURE DECISION FUNCTIONS block above.
+// self-contained — see the PURE DECISION FUNCTIONS block above, and the
+// same rule stated on sanitizeSlug in the Slugs block.
 const CLIENT_SHARED_FUNCTIONS = [
   pickDropTarget,
   unitKeyForCard,
@@ -944,6 +1186,8 @@ const CLIENT_SHARED_FUNCTIONS = [
   isContiguousUnitSelection,
   groupMenuState,
   rectsIntersect,
+  sanitizeSlug,
+  deriveGroupSlug,
 ];
 
 function injectSharedFunctions() {
@@ -961,15 +1205,33 @@ function buildBoardHtml(atoms, pageName) {
       badges.push('<span class="board-badge board-badge-implicit">implicit</span>');
     }
     if (atom.groupId) {
+      // The badge reads the group's slug when it has one, its id when it does
+      // not — the same slug-first, id-as-fallback rule the card name uses. The
+      // real group id is always in the tooltip, because that is the value
+      // Steve needs when citing the group from another page.
+      const groupLabel = slugOrId(atom.groupSlug, atom.groupId);
+      const groupTitle = atom.groupSlug
+        ? `Group "${atom.groupSlug}" — id ${atom.groupId}`
+        : `Group id ${atom.groupId} (no name yet)`;
       badges.push(
-        `<span class="board-badge board-badge-group">group ${escapeHtml(atom.groupId)}</span>`,
+        `<span class="board-badge board-badge-group" title="${escapeHtml(groupTitle)}">group ${escapeHtml(groupLabel)}</span>`,
       );
     }
+    // Name first, identity second. A slug gets the readable name span; the id
+    // stays on the line either way, in small subtle monospace, so it is never
+    // more than a glance away.
+    const nameHtml = atom.slug
+      ? `<span class="board-card-slug" title="${escapeHtml(`Name (slug) "${atom.slug}" — the atom's id is ${atom.id}`)}">${escapeHtml(atom.slug)}</span>`
+      : "";
+    const idTitle = atom.implicit
+      ? "This block has no directive yet, so it has no id of its own."
+      : `Atom id ${atom.id} — this is the identity. A name (slug) is only an alias.`;
     return `
       <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}">
         <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
           <span class="board-drag-handle" aria-hidden="true">&#10021;&#10021;</span>
-          <span class="board-card-id">${escapeHtml(atom.id)}</span>
+          ${nameHtml}
+          <span class="board-card-id" title="${escapeHtml(idTitle)}">${escapeHtml(atom.id)}</span>
           ${badges.join("")}
           <div class="board-card-menu">
             <button type="button" class="board-menu-btn" data-menu-toggle="${escapeHtml(atom.id)}" title="Attributes" aria-haspopup="true">&#8942;</button>
@@ -1106,6 +1368,14 @@ function buildBoardHtml(atoms, pageName) {
       line-height: 1;
       user-select: none;
     }
+    /* The readable name (slug) is the primary label: normal body font, full
+       contrast, first on the line. The id keeps the small subtle monospace
+       treatment it always had, so name-then-identity reads in that order at a
+       glance without the id ever disappearing. */
+    .board-card-slug {
+      font-size: 13px;
+      font-weight: 600;
+    }
     .board-card-id {
       font-family: ui-monospace, monospace;
       font-size: 11px;
@@ -1220,6 +1490,38 @@ function buildBoardHtml(atoms, pageName) {
       opacity: 0.45;
       color: var(--subtle-color);
     }
+    /* Naming a group. This is a form INSIDE the existing popover, not a new
+       modal and not window.prompt: window.prompt is blocked in a sandboxed
+       iframe in some browsers and looks like a browser dialog rather than
+       part of the app, and the popover already holds inputs (the attribute
+       editor), so this reuses that pattern. */
+    .board-slug-form[hidden] { display: none; }
+    .board-slug-label {
+      display: block;
+      font-size: 11px;
+      color: var(--subtle-color);
+      margin-bottom: 3px;
+    }
+    .board-slug-input {
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 12px;
+      padding: 3px 5px;
+      background: var(--ui-surface-section-background-color);
+      border: 1px solid var(--ui-surface-border-color);
+      color: inherit;
+      border-radius: 3px;
+      font-family: ui-monospace, monospace;
+    }
+    .board-slug-hint {
+      font-size: 11px;
+      margin-top: 4px;
+      color: var(--subtle-color);
+      min-height: 14px;
+    }
+    /* The slug row of the attribute editor. It is the first row and it is
+       labelled, because it is the only attribute a human reads. */
+    .board-attr-slug { margin-bottom: 8px; }
   `;
 
   const html = `
@@ -1477,6 +1779,35 @@ ${injectSharedFunctions()}
     // worker apply the same contiguity and nesting rules.
     var UNIT_ORDER = unitOrderFromCards(ATOMDOWN_BOARD_DATA);
 
+    // Every readable name already in this page, mapped to the ids that carry
+    // it, so the naming form can warn about a duplicate as the user types.
+    // The worker checks the live buffer again before it writes; this copy is
+    // only for the hint, and neither check ever blocks the write.
+    var KNOWN_SLUGS = {};
+    ATOMDOWN_BOARD_DATA.forEach(function (a) {
+      if (a.slug) {
+        KNOWN_SLUGS[a.slug] = KNOWN_SLUGS[a.slug] || [];
+        if (KNOWN_SLUGS[a.slug].indexOf(a.id) === -1) KNOWN_SLUGS[a.slug].push(a.id);
+      }
+      if (a.groupSlug && a.groupId) {
+        KNOWN_SLUGS[a.groupSlug] = KNOWN_SLUGS[a.groupSlug] || [];
+        if (KNOWN_SLUGS[a.groupSlug].indexOf(a.groupId) === -1) {
+          KNOWN_SLUGS[a.groupSlug].push(a.groupId);
+        }
+      }
+    });
+
+    // The selected blocks' own text, in document order, which is what
+    // deriveGroupSlug() reads to find the first heading. Taken from the
+    // rendered card bodies rather than shipped in ATOMDOWN_BOARD_DATA, so the
+    // panel payload does not carry a second copy of the whole page.
+    function selectedCardTexts() {
+      return selectedCards().map(function (card) {
+        var body = card.querySelector(".board-card-body");
+        return body ? body.textContent : "";
+      });
+    }
+
     function groupMenuStateFor(atom) {
       return groupMenuState(UNIT_ORDER, selectedUnitKeys(), unitKeyForCard(atom));
     }
@@ -1484,6 +1815,7 @@ ${injectSharedFunctions()}
     function refreshGroupItem(atom, popoverEl) {
       var btn = popoverEl.boardGroupBtn;
       if (!btn) return;
+      if (popoverEl.boardCloseSlugForm) popoverEl.boardCloseSlugForm();
       var state = groupMenuStateFor(atom);
       btn.textContent = state.label;
       btn.disabled = !state.enabled;
@@ -1503,32 +1835,186 @@ ${injectSharedFunctions()}
       var groupBtn = el("button", "board-menu-item");
       groupBtn.type = "button";
       groupRow.appendChild(groupBtn);
+
+      // Rename group. Only offered on a card that is inside a group, because
+      // that is the group it would rename. A group has no card of its own —
+      // every member card carries the group's badge — so the member's menu is
+      // where a group-level action belongs. See README.md.
+      var renameBtn = null;
+      if (atom.groupId) {
+        renameBtn = el("button", "board-menu-item");
+        renameBtn.type = "button";
+        renameBtn.textContent = "Rename group";
+        renameBtn.title =
+          "Give this group a readable name. Its id (" + atom.groupId +
+          ") does not change - a name is an alias, not the identity.";
+        renameBtn.style.marginTop = "4px";
+        groupRow.appendChild(renameBtn);
+      }
+
+      // One naming form, shared by Group and Rename group.
+      //
+      // Prompt affordance: this is a form INSIDE the popover that is already
+      // open, not window.prompt and not a second modal. window.prompt is
+      // suppressed in some browsers inside an iframe, and even where it works
+      // it renders as browser chrome rather than as part of the page. The
+      // popover already holds text inputs for the attribute editor, so this
+      // reuses that pattern rather than inventing one.
+      var slugForm = el("div", "board-slug-form");
+      slugForm.setAttribute("hidden", "");
+      var slugLabel = el("label", "board-slug-label");
+      var slugInput = el("input", "board-slug-input");
+      slugInput.type = "text";
+      slugInput.setAttribute("spellcheck", "false");
+      var slugActions = el("div", "board-menu-actions");
+      var slugConfirm = el("button", "board-attr-save");
+      slugConfirm.type = "button";
+      var slugCancel = el("button", "board-attr-add");
+      slugCancel.type = "button";
+      slugCancel.textContent = "Cancel";
+      slugActions.appendChild(slugConfirm);
+      slugActions.appendChild(slugCancel);
+      var slugHint = el("div", "board-slug-hint");
+      slugForm.appendChild(slugLabel);
+      slugForm.appendChild(slugInput);
+      slugForm.appendChild(slugActions);
+      slugForm.appendChild(slugHint);
+      groupRow.appendChild(slugForm);
+
       popoverEl.appendChild(groupRow);
       popoverEl.boardGroupBtn = groupBtn;
 
-      groupBtn.addEventListener("click", async function (e) {
+      var slugMode = null;
+
+      // Live preview of exactly what will be written, plus the duplicate
+      // warning. The warning never disables the button: Atomdown permits two
+      // blocks with the same slug, so the board reports it and writes anyway.
+      function updateSlugHint() {
+        var clean = sanitizeSlug(slugInput.value);
+        if (!clean) {
+          slugHint.textContent =
+            "No name. The group will show its id instead.";
+          return;
+        }
+        var owner = slugMode === "rename" ? atom.groupId : null;
+        var owners = (KNOWN_SLUGS[clean] || []).filter(function (id) {
+          return id !== owner;
+        });
+        slugHint.textContent = 'Writes slug="' + clean + '".' +
+          (owners.length
+            ? " Already used by " + owners.join(", ") +
+              " - allowed, just harder to read."
+            : "");
+      }
+
+      function closeSlugForm() {
+        slugMode = null;
+        slugForm.setAttribute("hidden", "");
+        groupBtn.removeAttribute("hidden");
+        if (renameBtn) renameBtn.removeAttribute("hidden");
+      }
+
+      function openSlugForm(mode) {
+        slugMode = mode;
+        if (mode === "rename") {
+          slugLabel.textContent = "Name for this group (id " + atom.groupId + ")";
+          slugInput.value = atom.groupSlug || "";
+          slugConfirm.textContent = "Rename";
+        } else {
+          slugLabel.textContent = "Name for this group";
+          // Defaulted from the first heading in the selection so one confirm
+          // is enough - the user is not made to invent a name.
+          slugInput.value = deriveGroupSlug(selectedCardTexts());
+          slugConfirm.textContent = "Group";
+        }
+        groupBtn.setAttribute("hidden", "");
+        if (renameBtn) renameBtn.setAttribute("hidden", "");
+        slugForm.removeAttribute("hidden");
+        updateSlugHint();
+        slugInput.focus();
+        slugInput.select();
+      }
+
+      // Reopening the menu must not show a naming form the user walked away
+      // from, so refreshGroupItem() closes it (see the call site below).
+      popoverEl.boardCloseSlugForm = closeSlugForm;
+
+      slugInput.addEventListener("input", updateSlugHint);
+      slugInput.addEventListener("keydown", function (e) {
         e.stopPropagation();
-        if (groupBtn.disabled) return;
-        var state = groupMenuStateFor(atom);
-        if (!state.enabled) return;
-        var busyLabel = state.action === "ungroup" ? "Ungrouping..." : "Grouping...";
-        groupBtn.disabled = true;
-        groupBtn.textContent = busyLabel;
+        if (e.key === "Enter") { e.preventDefault(); slugConfirm.click(); }
+        if (e.key === "Escape") { e.preventDefault(); closeSlugForm(); }
+      });
+      slugCancel.addEventListener("click", function (e) {
+        e.stopPropagation();
+        closeSlugForm();
+      });
+
+      slugConfirm.addEventListener("click", async function (e) {
+        e.stopPropagation();
+        var mode = slugMode;
+        var clean = sanitizeSlug(slugInput.value);
+        slugConfirm.disabled = true;
+        slugConfirm.textContent = mode === "rename" ? "Renaming..." : "Grouping...";
         try {
           var result;
-          if (state.action === "ungroup") {
+          if (mode === "rename") {
             result = await syscall(
               "system.invokeFunction",
-              "atomdown-board.ungroupAtoms",
+              "atomdown-board.setGroupSlug",
               atom.groupId,
+              clean,
             );
           } else {
             result = await syscall(
               "system.invokeFunction",
               "atomdown-board.groupAtoms",
               JSON.stringify(selectedUnitKeys()),
+              clean,
             );
           }
+          if (!result || !result.ok) {
+            slugHint.textContent = "Failed: " +
+              ((result && result.error) || "unknown error");
+            slugConfirm.disabled = false;
+            slugConfirm.textContent = mode === "rename" ? "Rename" : "Group";
+            return;
+          }
+          // On success the worker re-renders this whole panel, so this
+          // popover and this form no longer exist.
+        } catch (err) {
+          slugHint.textContent = "Failed: " + err.message;
+          slugConfirm.disabled = false;
+          slugConfirm.textContent = mode === "rename" ? "Rename" : "Group";
+        }
+      });
+
+      if (renameBtn) {
+        renameBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          openSlugForm("rename");
+        });
+      }
+
+      groupBtn.addEventListener("click", async function (e) {
+        e.stopPropagation();
+        if (groupBtn.disabled) return;
+        var state = groupMenuStateFor(atom);
+        if (!state.enabled) return;
+        // Grouping asks for a name first. Ungrouping does not - there is
+        // nothing to name, and the group id is already known.
+        if (state.action === "group") {
+          openSlugForm("group");
+          return;
+        }
+        groupBtn.disabled = true;
+        groupBtn.textContent = "Ungrouping...";
+        try {
+          var result = await syscall(
+            "system.invokeFunction",
+            "atomdown-board.ungroupAtoms",
+            atom.groupId,
+          );
           if (!result || !result.ok) {
             window.alert(
               state.label + " failed: " + ((result && result.error) || "unknown error"),
@@ -1554,8 +2040,27 @@ ${injectSharedFunctions()}
         return;
       }
 
+      // Renaming an atom: slug is an ordinary directive attribute, so this
+      // is the attribute editor, promoted rather than duplicated. It gets its
+      // own labelled row FIRST because it is the one attribute a human reads;
+      // every other attribute keeps the generic name/value row below. There
+      // is deliberately no second rename editor for an atom.
+      var slugRow = el("div", "board-attr-slug");
+      var atomSlugLabel = el("label", "board-slug-label");
+      atomSlugLabel.textContent = "Name (slug) - readable alias, not the id";
+      var atomSlugInput = el("input", "board-slug-input");
+      atomSlugInput.type = "text";
+      atomSlugInput.setAttribute("spellcheck", "false");
+      atomSlugInput.placeholder = "unnamed - the card shows " + atom.id;
+      atomSlugInput.value = atom.slug || "";
+      slugRow.appendChild(atomSlugLabel);
+      slugRow.appendChild(atomSlugInput);
+      popoverEl.appendChild(slugRow);
+
       var listEl = el("div", "board-attrs-list");
       (atom.attrs || []).forEach(function (a) {
+        // id travels separately (disabled row), slug has its own row above.
+        if (a.name === "slug") return;
         addAttrRow(listEl, a.name, a.value, a.name === "id");
       });
       popoverEl.appendChild(listEl);
@@ -1602,6 +2107,12 @@ ${injectSharedFunctions()}
           attrs.push({ name: name, value: valueInput.value });
         });
         if (!ok) return;
+        // slug goes first, so the rewritten directive reads id, slug, then
+        // the rest - the order emit.go itself writes. The worker sanitizes it
+        // and drops it when it is empty; an empty slug attribute is never
+        // written.
+        var typedSlug = sanitizeSlug(atomSlugInput.value);
+        if (typedSlug !== "") attrs.unshift({ name: "slug", value: typedSlug });
         status.textContent = "Saving...";
         try {
           var result = await syscall(
@@ -1809,8 +2320,10 @@ ${injectSharedFunctions()}
 
   const clientData = atoms.map((atom) => ({
     id: atom.id,
+    slug: atom.slug || null,
     implicit: atom.implicit,
     groupId: atom.groupId || null,
+    groupSlug: atom.groupSlug || null,
     attrs: atom.attrs || [],
   }));
 
@@ -1888,6 +2401,24 @@ async function applyBufferEdit(oldText, newText) {
 }
 
 /**
+ * Shows a warning to the user without blocking the write that produced it.
+ *
+ * A duplicate slug is the only case today: Atomdown Core permits two blocks
+ * with the same slug, so refusing the edit would be the tooling overruling the
+ * format. The write happens, and this says what was noticed. Failure to show
+ * the notification is never allowed to fail the action.
+ */
+async function warnUser(message) {
+  if (!message) return;
+  try {
+    await syscall("editor.flashNotification", message, "error");
+  } catch (e) {
+    // No notification surface (a test stub, an older host). The action itself
+    // already succeeded; there is nothing to roll back.
+  }
+}
+
+/**
  * Redraws the still-open board from the document text a write just produced,
  * so a successful action does not feel like the board closed on you.
  */
@@ -1933,7 +2464,11 @@ async function saveAttrs(atomId, attrsJson) {
     };
   }
 
-  const cleaned = requested.filter((a) => a && a.name && a.name !== "id");
+  const cleaned = requested.filter((a) => a && a.name && a.name !== "id")
+    .map((a) =>
+      a.name === "slug" ? { name: "slug", value: sanitizeSlug(a.value) } : a
+    )
+    .filter((a) => a.name !== "slug" || a.value !== "");
   const newAttrs = [{ name: "id", value: atomId }, ...cleaned];
   const newLine = serializeAtomLine(found.prefix, newAttrs, found.suffix);
 
@@ -1942,7 +2477,23 @@ async function saveAttrs(atomId, attrsJson) {
 
   await applyBufferEdit(currentText, newText);
 
-  return { ok: true };
+  const slugAttr = cleaned.find((a) => a.name === "slug");
+  const newSlug = slugAttr ? slugAttr.value : "";
+  const oldSlugAttr = found.attrs.find((a) => a.name === "slug");
+  const oldSlug = oldSlugAttr ? oldSlugAttr.value : "";
+  await warnUser(slugConflict(newText, newSlug, atomId).warning);
+
+  // A renamed atom must relabel its card, and the card's label comes from the
+  // rendered panel, so redraw. Only when the name actually changed: an
+  // ordinary attribute save keeps the popover open, which is what lets the
+  // user save twice in a row.
+  if (newSlug !== oldSlug) {
+    const pageName = await syscall("editor.getCurrentPage").catch(() => undefined);
+    await rerenderBoard(newText, pageName);
+    return { ok: true, slug: newSlug, rerendered: true };
+  }
+
+  return { ok: true, slug: newSlug };
 }
 
 /**
@@ -1988,8 +2539,13 @@ async function reorderAtom(movedUnitKey, targetUnitKey, placement) {
  * so every `id` and every extension attribute is preserved byte for byte.
  * The contiguity and nesting rules are enforced here as well as in the menu,
  * because the document may have changed since the board was drawn.
+ *
+ * `slug` is the readable name the user typed in the popover's naming form. It
+ * is optional: an empty one just means the group shows its id. It is written
+ * as a `slug` attribute next to the id, never instead of it, because a slug
+ * is not identity (SPEC.md).
  */
-async function groupAtoms(unitKeysJson) {
+async function groupAtoms(unitKeysJson, slug) {
   let unitKeys;
   try {
     unitKeys = JSON.parse(unitKeysJson);
@@ -2009,13 +2565,39 @@ async function groupAtoms(unitKeysJson) {
     groupId = newAtomdownId();
   }
 
-  const result = insertGroupMarkers(currentText, unitKeys, groupId);
+  const result = insertGroupMarkers(currentText, unitKeys, groupId, slug);
   if (!result.ok) return result;
 
   await applyBufferEdit(currentText, result.text);
+  await warnUser(result.warning);
   await rerenderBoard(result.text, pageName);
 
-  return { ok: true, groupId };
+  return { ok: true, groupId, slug: result.slug, warning: result.warning };
+}
+
+/**
+ * Renames one group, called from the Rename group item in a member card's
+ * menu. Rewrites that group's opening marker line and nothing else.
+ *
+ * The group's id is untouched, so nothing that cites the group breaks, and no
+ * atom inside it is rewritten, so no `digest` can go stale. An empty name
+ * removes the slug attribute; the group then shows its id again.
+ */
+async function setGroupSlug(groupId, slug) {
+  if (!groupId) return { ok: false, error: "No group id" };
+
+  const pageName = await syscall("editor.getCurrentPage");
+  const currentText = await syscall("editor.getText");
+
+  const result = setGroupSlugInSource(currentText, groupId, slug);
+  if (!result.ok) return result;
+  if (result.text === currentText) return { ok: true, unchanged: true };
+
+  await applyBufferEdit(currentText, result.text);
+  await warnUser(result.warning);
+  await rerenderBoard(result.text, pageName);
+
+  return { ok: true, slug: result.slug, warning: result.warning };
 }
 
 /**
@@ -2045,6 +2627,7 @@ const functionMapping = {
   reorderAtom,
   groupAtoms,
   ungroupAtoms,
+  setGroupSlug,
 };
 
 const manifest = {
@@ -2070,6 +2653,9 @@ const manifest = {
     ungroupAtoms: {
       path: "./atomdown-board.js:ungroupAtoms",
     },
+    setGroupSlug: {
+      path: "./atomdown-board.js:setGroupSlug",
+    },
   },
 };
 
@@ -2091,6 +2677,11 @@ const internals = {
   reorderUnit,
   insertGroupMarkers,
   removeGroupMarkers,
+  setGroupSlugInSource,
+  sanitizeSlug,
+  slugConflict,
+  deriveGroupSlug,
+  slugOrId,
   removeLineCollapsingSeam,
   parseAtoms,
   injectSharedFunctions,
