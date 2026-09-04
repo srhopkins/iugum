@@ -1,6 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { expect, test } from "vitest";
 import {
+  buildFoldRanges,
   buildMarkRanges,
   buildRangeDecorations,
   type DecorationConfig,
@@ -216,6 +217,34 @@ test("normalize: a lasso defaults to alt, and none turns it off", () => {
     normalizeDecorationConfig({ gestures: { lasso: { modifier: "none" } } })
       .gestures.lasso,
   ).toBeUndefined();
+});
+
+test("normalize: a fold needs two offsets and a positive span", () => {
+  const cfg = normalizeDecorationConfig({
+    folds: [
+      { from: 4, to: 4 },
+      { from: 9, to: 2 },
+      { from: 4 },
+      "junk",
+      { from: 4, to: 20 },
+    ],
+  });
+  expect(cfg.folds).toEqual([{ from: 4, to: 20 }]);
+});
+
+test("fold ranges are clamped, and an empty one is dropped", () => {
+  const state = EditorState.create({ doc: "aaa\nbbb" });
+  expect(
+    buildFoldRanges(
+      state,
+      config({
+        folds: [
+          { from: 3, to: 9999 },
+          { from: 7, to: 9999 },
+        ],
+      }),
+    ),
+  ).toEqual([{ from: 3, to: 7 }]);
 });
 
 test("mark ranges are clamped to the document and keep their name", () => {

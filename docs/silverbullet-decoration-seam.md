@@ -43,20 +43,31 @@ load, on the `editor:reloadState` event, and on `editor.rebuildEditorState`.
 A malformed entry is dropped. The other entries still apply. No JSON schema is
 registered for the key, so a writer is never blocked by validation.
 
-## The four capabilities
+## The six capabilities
 
-All four are delivered.
+All six are delivered.
 
 1. **Line classes.** `lines` puts CSS classes on the lines of any top-level
    block, selected by Lezer node name. Nesting depth is available.
 2. **Range marks.** `marks` puts a class on a source range. `lineClasses` adds
    `-first`, `-mid` and `-last` per line, so a caller can draw one continuous
    outline across several blocks.
-3. **Block widgets.** `widgets` attaches a rendered element above or below a
-   block. No fenced code block and no `${}` directive is needed.
+3. **Widgets.** `widgets` attaches a rendered element above or below a block, or
+   `inline` at one offset. No fenced code block and no `${}` directive is
+   needed.
 4. **Events.** `events` turns on the `editor:decorationClick` and
    `editor:decorationSelect` app events. Interactive features share one DOM
    listener.
+5. **Folds.** `folds` names a source range the editor's own folding can
+   collapse, for a region that is not a syntax node.
+6. **Gestures.** `gestures` turns on a drag of one decorated range onto another
+   (`editor:decorationDrag`) and a rubber-band sweep over decorated ranges
+   (`editor:decorationLasso`).
+
+Capabilities 5 and 6 were added for the inline atomdown card view
+(`plugs/atomdown-inline/`). They are the reason the seam was built generic: the
+feature needed drag-to-reorder and lasso selection in the page, and the seam
+grew one section each instead of the fork growing a second patch.
 
 ## Exact config shape
 
@@ -73,7 +84,14 @@ config.set("editorDecorations", {
     { id = "bar-1", at = 120, side = "before", class = "my-bar",
       html = "<span>3 items</span>" },
   },
+  folds = {
+    { from = 152, to = 245 },
+  },
   events = { click = true, selection = true },
+  gestures = {
+    drag = { handleClass = "my-grip" },
+    lasso = { modifier = "alt" },
+  },
 })
 ```
 
@@ -89,20 +107,53 @@ config.set("editorDecorations", {
 | `widgets[].at` | integer | any source offset in the target block |
 | `widgets[].html` | string | HTML for the element's content |
 | `widgets[].side` | `before` or `after` | above (default) or below the line at `at` |
+| `widgets[].inline` | boolean | render at exactly `at`, on the same line as the text |
 | `widgets[].class` | string | class on the element, next to `sb-decoration-widget` |
 | `widgets[].id` | string | name reported on a click in the widget |
+| `folds[].from`, `.to` | integer | source range the editor's folding can collapse |
 | `events.click` | boolean | dispatch `editor:decorationClick` |
 | `events.selection` | boolean | dispatch `editor:decorationSelect` |
+| `gestures.drag.handleClass` | string | a press on an element with this class starts a drag |
+| `gestures.drag.modifier` | modifier | a press with this modifier held, inside a decorated range, starts a drag |
+| `gestures.lasso.modifier` | modifier | arms the rubber band. Defaults to `alt` |
+
+A modifier is `alt`, `shift`, `ctrl`, `meta` or `none`. A `drag` with neither a
+handle nor a usable modifier is dropped, because it could never fire.
 
 Event payloads:
 
 | Event | Fields |
 |---|---|
-| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
+| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
 | `editor:decorationSelect` | `page`, `from`, `to`, `marks` |
+| `editor:decorationDrag` | `page`, `from`, `to`, `marks`, `targetFrom`, `targetTo`, `targetMarks`, `targetLine`, `placement`, modifier flags |
+| `editor:decorationLasso` | `page`, `from`, `to`, `fromLine`, `toLine`, `marks`, `ranges`, modifier flags |
 
-Mark and widget offsets are read once, at editor state build time. The seam then
-maps them through your edits, so a mark stays on the text it was put on.
+`marks` lists are **outermost first**, so a caller that nests ranges reads
+element 0 and gets the outer one.
+
+Mark, widget and fold offsets are read once, at editor state build time. The
+seam then maps them through your edits, so a mark stays on the text it was put
+on.
+
+## Two things a caller must know
+
+**A gesture never writes the document.** The seam reports the drag or the sweep
+and stops. That is deliberate: the document mutation belongs to the plug, so it
+can go through `editor.replaceRange` as ONE transaction, which is ONE entry in
+the editor's own undo history. Native Cmd-Z then reverts a whole reorder in one
+step, and nothing needs a private undo stack.
+
+**Do not rebuild the editor after your own edit.** `marks`, `widgets` and
+`folds` refresh on their own: the seam holds them in one StateField that
+compares the config value's identity on every transaction and rebuilds from the
+new state when it changed. So write the new config FIRST and then apply the
+edit, and the edit's own transaction carries the refresh.
+`editor.rebuildEditorState` calls `setState`, which discards the undo history,
+so calling it after an edit makes that edit un-undoable. Rebuild only when
+`lines`, `events` or `gestures` change - when a feature is turned on or off -
+and use `editor.dispatch({})` to nudge the editor when the config changed with
+no edit behind it.
 
 The seam ships no CSS. Style the classes from `space-style`.
 Feature logic stays in the plug and in that CSS.
@@ -112,12 +163,18 @@ Feature logic stays in the plug and in that CSS.
 | File | Change |
 |---|---|
 | `silverbullet/client/codemirror/decoration_seam.ts` | new. The whole seam. |
-| `silverbullet/client/codemirror/decoration_seam.test.ts` | new. 10 vitest cases. |
+| `silverbullet/client/codemirror/decoration_seam.test.ts` | new. 19 vitest cases. |
 | `silverbullet/docs/Editor Decorations.md` | new. The user-facing page. |
 | `silverbullet/client/codemirror/editor_state.ts` | 2 hunks: 1 import line, 1 spread line with a comment. |
-| `silverbullet/plug-api/types/client.ts` | 1 hunk: 2 event names appended to the `AppEvent` union. |
+| `silverbullet/plug-api/types/client.ts` | 1 hunk: 4 event names appended to the `AppEvent` union. |
 
-Only the last two files can conflict on a subtree pull. Both are appends.
+Three new files, two hunks in one upstream file, one hunk in another. A new file
+cannot conflict on a subtree pull. Both hunks are appends.
+
+The gesture and fold work of 2026-09 added **no new file and no new hunk**: it
+grew `decoration_seam.ts`, which is already ours, and added two more event names
+inside the hunk that was already in `plug-api/types/client.ts`. That is the
+whole point of the seam's shape.
 
 ## Re-derive the patch after a subtree pull
 
@@ -146,7 +203,9 @@ In `silverbullet/plug-api/types/client.ts`, at the end of the `AppEvent` union:
 ```ts
   // Editor decoration seam, see client/codemirror/decoration_seam.ts
   | "editor:decorationClick"
-  | "editor:decorationSelect";
+  | "editor:decorationSelect"
+  | "editor:decorationDrag"
+  | "editor:decorationLasso";
 ```
 
 Then verify:
@@ -160,6 +219,16 @@ npm run check
 `npm run check` is `tsc --noEmit` and must stay silent. `biome check` is dirty
 in the upstream tree at the pin, so it is not a gate. The seam's own files are
 biome clean.
+
+## One trap worth remembering
+
+CodeMirror ignores every DOM event that starts inside a widget
+(`WidgetType.ignoreEvent` defaults to `true`). With that default, a click on a
+seam widget and a drag from a handle rendered as one never reach the seam's own
+handlers at all, and nothing in the console says so. `DecorationWidget` now
+overrides `ignoreEvent` to let `mousedown` and `click` through and to keep
+ignoring everything else. If a widget control ever goes dead after an upstream
+merge, check that override first.
 
 ## Upstream
 
