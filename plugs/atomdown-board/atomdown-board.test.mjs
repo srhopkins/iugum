@@ -17,6 +17,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 // The plug's worker shim needs `self` before the module body runs. It only
 // registers a message listener and posts its manifest, so a pair of no-ops is
@@ -3767,4 +3768,147 @@ test("a card being edited cannot be dragged out from under the cursor", async ()
   assert.ok(html.includes(".board-card-editing .board-drag-handle { pointer-events: none; }"));
   // The menu stays reachable, so identity and Update digest are still there.
   assert.ok(html.includes(".board-card-editing .board-card-menu { pointer-events: auto; }"));
+});
+
+// --- The editor's size and type ------------------------------------------
+//
+// The bug these pin down: a textarea's natural height is its rows attribute,
+// which has nothing to do with the block it replaces. A six-item list about
+// 500px tall came up two lines tall, everything below it jumped UP the page,
+// and only the tail of the text was visible because the box also opened
+// scrolled to the end.
+//
+// The numeric proof is in a real browser over all 82 cards of a real page,
+// at both densities - see README "What was verified". These assert the
+// mechanism that produces those numbers.
+
+test("the editor's height floor is the MEASURED body, taken before hiding it", async () => {
+  const { script } = await staleBoard();
+  const begin = script.slice(
+    script.indexOf("function beginEditing(cardEl)"),
+    script.indexOf("async function saveEditing()"),
+  );
+  // Measured from whichever body is on screen, so a card left in raw view is
+  // measured against its <pre> and not against a hidden rendered node.
+  assert.ok(script.includes("function visibleBody(cardEl)"));
+  assert.ok(begin.includes("var body = visibleBody(cardEl);"));
+  assert.ok(begin.includes("body.getBoundingClientRect().height"));
+  assert.ok(begin.includes("textarea.style.minHeight = floor > 0 ? floor + \"px\" : \"\";"));
+  // ORDER IS LOAD-BEARING: a hidden element measures 0, so the measurement
+  // must happen before the bodies are hidden.
+  const measureAt = begin.indexOf("var floor = body ?");
+  const hideAt = begin.indexOf("rendered.hidden = true");
+  assert.ok(measureAt > 0 && hideAt > 0);
+  assert.ok(measureAt < hideAt, "measure before hiding");
+});
+
+test("the editor never renders shorter than its floor, and grows past it", async () => {
+  const { script } = await staleBoard();
+  const fn = script.slice(
+    script.indexOf("function autosize(textarea)"),
+    script.indexOf("function endEditing()"),
+  );
+  // Content height OR the floor, whichever is larger. Taller than the
+  // rendering is fine and expected - raw markdown is longer than its
+  // rendering - but shorter is the bug.
+  assert.ok(fn.includes("Math.max(textarea.scrollHeight, floor)"));
+  // The floor is read BEFORE height is collapsed to auto, or scrollHeight
+  // would be measured against a height this function just discarded.
+  const readAt = fn.indexOf('parseFloat(textarea.style.minHeight)');
+  const collapseAt = fn.indexOf('textarea.style.height = "auto"');
+  assert.ok(readAt > 0 && collapseAt > 0 && readAt < collapseAt);
+});
+
+test("the editor is taken out of flex sizing, or its height is ignored", async () => {
+  const { html } = await staleBoard();
+  // .board-card-body sets flex: 1, and the card is a flex column, so the flex
+  // algorithm sizes the item from a 0% basis and IGNORES its height. That
+  // silently clamped the textarea to the card's height: it stopped growing as
+  // the user typed and kept an internal scrollbar instead.
+  const rule = html.slice(
+    html.indexOf(".board-card-edit {"),
+    html.indexOf("}", html.indexOf(".board-card-edit {")),
+  );
+  assert.ok(rule.includes("flex: none"));
+  assert.ok(rule.includes("box-sizing: border-box"));
+});
+
+test("a short block gets a small editor: the floor is measured, never a constant", async () => {
+  const { html, script } = await staleBoard();
+  // Nothing in the stylesheet imposes a minimum on the editor, so a one-line
+  // heading's editor is one-line-plus-padding tall. The ONLY minimum is the
+  // measured body, set inline by the script.
+  const rule = html.slice(
+    html.indexOf(".board-card-edit {"),
+    html.indexOf("}", html.indexOf(".board-card-edit {")),
+  );
+  assert.ok(!rule.includes("min-height"));
+  assert.ok(!/rows=/.test(html));
+  // And the inline floor is 0-guarded, so a body that measures nothing (a
+  // card inside a collapsed group) leaves no stale floor behind.
+  assert.ok(script.includes('floor > 0 ? floor + "px" : ""'));
+});
+
+test("the editor opens at the TOP, with the cursor at the start", async () => {
+  const { script } = await staleBoard();
+  const begin = script.slice(
+    script.indexOf("function beginEditing(cardEl)"),
+    script.indexOf("async function saveEditing()"),
+  );
+  assert.ok(begin.includes("textarea.setSelectionRange(0, 0);"));
+  assert.ok(begin.includes("textarea.scrollTop = 0;"));
+  // Explicitly NOT the end. Opening scrolled to the end is why only the tail
+  // of a long block was visible; you are editing a block, not appending.
+  assert.ok(!begin.includes("textarea.value.length, textarea.value.length"));
+});
+
+test("leaving edit mode clears the floor, so the next open re-measures", async () => {
+  const { script } = await staleBoard();
+  for (const name of ["function endEditing()", "function cancelEditing()"]) {
+    const fn = script.slice(
+      script.indexOf(name),
+      script.indexOf(name) + 700,
+    );
+    assert.ok(fn.includes('style.minHeight = "";'), name);
+    assert.ok(fn.includes('style.height = "";'), name);
+  }
+});
+
+test("the editor's type is deliberate, and all three metrics are knobs", async () => {
+  const { html } = await staleBoard();
+  const rule = html.slice(
+    html.indexOf(".board-card-edit {"),
+    html.indexOf("}", html.indexOf(".board-card-edit {")),
+  );
+  // Set, not inherited: an inherited size made the text visibly change size
+  // on double-click.
+  assert.ok(rule.includes("font-family: var(--board-edit-font-family)"));
+  assert.ok(rule.includes("font-size: var(--board-edit-font-size)"));
+  assert.ok(rule.includes("line-height: var(--board-edit-line-height)"));
+  // Defaults on :root, so a space-style page can tune the fit.
+  assert.ok(html.includes("--board-edit-font-family: ui-monospace"));
+  assert.ok(html.includes("--board-edit-font-size: 13px"));
+  assert.ok(html.includes("--board-edit-line-height: 1.45"));
+});
+
+test("the three editor knobs travel to the panel and are documented", async () => {
+  const { script } = await staleBoard();
+  const readme = readFileSync(
+    new URL("./README.md", import.meta.url),
+    "utf8",
+  );
+  const names = [
+    "--board-edit-font-family",
+    "--board-edit-font-size",
+    "--board-edit-line-height",
+  ];
+  const list = script.slice(script.indexOf("var THEME_VAR_NAMES = ["));
+  for (const name of names) {
+    // Copied across the iframe boundary with every other knob - the one seam
+    // a parent stylesheet can reach.
+    assert.ok(list.includes(name), name + " must be copied from the parent");
+    // Documented with a default, like the other knobs. A knob nobody can
+    // find is not a knob.
+    assert.ok(readme.includes("`" + name + "`"), name + " must be in the README");
+  }
 });

@@ -750,6 +750,38 @@ select-all means one keystroke wipes it.
 A card being edited cannot be dragged — a drag would move the block out from
 under your cursor mid-edit — but its three-dot menu stays reachable.
 
+### The card must not shrink when it becomes editable
+
+A textarea's natural height is its `rows` attribute, which has nothing to do
+with the block it is replacing. Left alone, a six-item ordered list about
+500px tall came up **two lines tall**: everything below the card jumped up the
+page, and you had to scroll a tiny box to see what you were editing.
+
+So on entering edit mode the panel **measures the body it is replacing** and
+uses that as the textarea's `min-height`. Three details make that work:
+
+- **Measured, not computed.** The floor is the real rendered height, so a
+  one-line heading gets a one-line editor and a 500px list gets a 500px one.
+  There is deliberately **no minimum in the stylesheet** — a constant would
+  give a short block a giant box.
+- **Measured before hiding.** A hidden element measures 0, so the read has to
+  happen while the body is still on screen. Whichever body is showing is the
+  one measured, so a card left in raw view is measured against its `<pre>`.
+- **`flex: none` on the textarea.** `.board-card-body` sets `flex: 1` and the
+  card is a flex column, so the flex algorithm sizes the item from a 0% basis
+  and **ignores its height**. That silently clamped the textarea to the card's
+  height: it stopped growing as you typed and kept an internal scrollbar
+  instead. Taking it out of flex sizing is what lets an explicit height win.
+
+Past that floor the textarea grows with the text as you type. Ending up
+**taller** than the rendering is fine and expected — raw markdown is longer
+than its rendering. **Shorter is the bug**, and cannot happen.
+
+It also opens **scrolled to the top, with the cursor at the start**. Opening
+scrolled to the end was the other half of why only the tail of a long block
+was visible. You are editing a block, not appending to it — and with a floor
+that fits the whole block there is nothing to scroll to.
+
 ### The edit touches the block only, never the directive line
 
 `replaceAtomBlockInSource()` rewrites an atom's content lines and **cannot
@@ -1116,6 +1148,23 @@ renamed.
 | `--board-group-quiet-border` | `40%` | how much accent a resting group's outline keeps |
 | `--board-group-quiet-header` | `16%` | how much accent a resting group's header bar keeps |
 | `--board-stale-border-color` | `#b7791f` | the border of a card whose content digest is stale. **Amber, not red, and never the accent** — see below |
+| `--board-edit-font-family` | `ui-monospace, SFMono-Regular, Menlo, monospace` | the raw-markdown editor's face |
+| `--board-edit-font-size` | `13px` | the editor's size. The rendered body is `14px` |
+| `--board-edit-line-height` | `1.45` | the editor's line height. The rendered body is `1.5` |
+
+The three `--board-edit-*` knobs set the editor's type **deliberately** rather
+than inheriting it. Inheriting made the text visibly change size on
+double-click, and monospace at a different size and line height from the body
+means the same block occupies a different height — which moves the page.
+
+`13px/1.45` was chosen by measuring all 82 cards of a real page rather than by
+eye. It keeps the type comparable to the `14px/1.5` body while putting a
+block's *source* close to the body's height, so opening the editor nudges the
+page as little as possible: **29 of 81 cards shift not at all, and the largest
+shift is 19px, always downward.** `12px/1.45` fits better still (44 unshifted,
+16px worst) but reads too small beside 14px body text. Both are knobs, so that
+trade is yours to make — and **no setting can make a card jump upward**,
+because the floor is measured, not computed from the type.
 
 `--board-stale-border-color` is the nineteenth knob and the only one that is a
 hue rather than a size. Three constraints shaped its default:
@@ -1384,6 +1433,48 @@ with real DOM events, **at both densities**:
   lasso still starts on empty background and **not** on a card.
 - A card in edit mode has `pointer-events: none` on its header, so it cannot be
   dragged out from under the cursor, while its menu stays reachable.
+
+### The editor's size — measured over every card, both densities
+
+Entering and leaving edit mode on **all 81 measurable cards** of the real page,
+at each density, measuring the following card's **layout** position
+(`offsetTop` up the offset-parent chain, not `getBoundingClientRect`, which is
+viewport-relative and moves when `focus()` scrolls the page — that mistake
+produced a first round of nonsense readings in the thousands of pixels):
+
+| | comfortable | compact |
+|---|---|---|
+| cards measured | 81 | 81 |
+| **jumped up** (the bug) | **0** | **0** |
+| unchanged on open | 29 | 25 |
+| grew downward on open | 52 | 56 |
+| largest shift | 19px | 18px |
+| **wrong on close** | **0** | **0** |
+| `min-height` below the measured body | **0** | **0** |
+| not scrolled to top / cursor not at start | **0** | **0** |
+
+Closing always restores the following card's position **exactly**, at both
+densities. Nothing ever jumps up, at any of the five type settings swept
+(`14px/1.5` through `12px/1.45`) — the floor is measured, so no type setting
+can cause a shrink.
+
+Both ends of the range, checked individually at compact:
+
+- a **one-line heading**: body 42px, floor `42.25px`, editor **54px** — small,
+  as it should be
+- an **11-line table**: body 527px, floor `527px`, editor **544px**, **no
+  internal scrollbar**, `scrollTop` 0, cursor at 0, and the first visible text
+  is the block's *first* line (`| Ticket | State | Tonight |`) rather than its
+  tail
+
+Type metrics measured live: editor `13px`/`19.5px` line box in `ui-monospace`
+against the rendered body's `14px`/`21px` — comparable, and no visible size
+change on double-click.
+
+The sizing work changed no document bytes: `atomdown lint` and `atomdown
+verify` stay clean, and the save, cancel, digest and directive-rejection
+behaviour is untouched (all 271 unit tests, including every digest test, still
+pass).
 
 ## What was verified — the two densities and the CSS knobs
 
