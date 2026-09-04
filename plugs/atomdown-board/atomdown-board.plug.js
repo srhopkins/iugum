@@ -1613,7 +1613,7 @@ function buildCardHtml(atom, viewState) {
   return `
       <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}" data-card-view="${showRaw ? "raw" : "rendered"}"${hasRendered ? "" : ' data-no-rendered="1"'}>
         <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
-          <span class="board-drag-handle" aria-hidden="true">&#10021;&#10021;</span>
+          <span class="board-drag-handle" aria-hidden="true">&#10303;</span>
           ${nameHtml}
           <span class="board-card-id" title="${escapeHtml(idTitle)}">${escapeHtml(atom.id)}</span>
           ${badges.join("")}
@@ -1665,7 +1665,7 @@ function buildGroupHtml(groupId, groupSlug, members, collapsed, viewState) {
       <div class="board-group${isCollapsed ? " board-group-collapsed" : ""}" data-group-id="${escapeHtml(groupId)}">
         <div class="board-group-header" data-group-header="${escapeHtml(groupId)}" title="${escapeHtml(headerTitle)}">
           <button type="button" class="board-group-collapse" data-group-collapse="${escapeHtml(groupId)}" aria-expanded="${isCollapsed ? "false" : "true"}" title="${isCollapsed ? "Expand this group" : "Collapse this group"}">${isCollapsed ? "&#9656;" : "&#9662;"}</button>
-          <span class="board-drag-handle board-group-drag" draggable="true" data-drag-unit="group:${escapeHtml(groupId)}" title="Drag to move the whole group">&#10021;&#10021;</span>
+          <span class="board-drag-handle board-group-drag" draggable="true" data-drag-unit="group:${escapeHtml(groupId)}" title="Drag to move the whole group">&#10303;</span>
           <span class="board-group-kind">group</span>
           ${nameHtml}
           <span class="board-group-id" title="${escapeHtml(idTitle)}">${escapeHtml(groupId)}</span>
@@ -1941,9 +1941,10 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     }
     .board-card-header:active { cursor: grabbing; }
     .board-drag-handle {
-      opacity: 0.45;
-      font-size: 11px;
+      opacity: 0.5;
+      font-size: 14px;
       line-height: 1;
+      letter-spacing: -0.15em;
       user-select: none;
     }
     /* The readable name (slug) is the primary label: normal body font, full
