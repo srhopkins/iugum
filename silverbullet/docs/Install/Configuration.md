@@ -1,0 +1,72 @@
+---
+references:
+- bin/silverbullet/src/config.rs
+- bin/silverbullet/src/server.rs
+---
+SilverBullet is primarily configured via environment variables. This page gives a comprehensive overview of all configuration options. You can set these ad-hoc when running the SilverBullet server, or e.g. in your [[Install/Docker|docker-compose file]].
+
+> **note** Single-space vs. multi-space
+> The environment variables below configure a **single-space** server (one folder, one space). A fresh install pointed at an empty folder instead runs the [[Space Manager|setup wizard]] and stores per-space settings in `spaces.json` — the variables marked _single-space only_ below don’t apply there. Setting any of them (or passing `--single`) selects single-space mode. See [[Space Manager#Boot modes]].
+
+# General configuration
+
+* `SB_INDEX_PAGE`: Sets the default page to load, defaults to `index`.
+* `SB_SPACE_IGNORE`: Ignore certain path patterns based on a .gitignore style format, e.g. `SB_SPACE_IGNORE="IgnoreMe/*"`.
+* `SB_HTTP_LOGGING`: Set to any value to enable HTTP logging
+* `SB_LOG_PUSH`: Set to any value to ask clients to push their logs to the server (for debugging purposes)
+* `SB_DISABLE_SERVICE_WORKER`: Set to any value to disable the client-side service worker for all clients. In this mode, [[Sync]] is disabled (so your space is not copied into the browser) and the app will not function when offline. All loads and saves will go directly to the server. 
+
+# Network
+* `SB_HOSTNAME`: Set to the hostname to bind to (defaults to `127.0.0.0`, set to `0.0.0.0` to accept outside connections for the local setup, defaults to `0.0.0.0` for docker)
+* `SB_PORT`: Sets the port to listen to, e.g. `SB_PORT=1234`, default is `3000`
+* `SB_UNIX_SOCKET`: Instead of listening to a TCP port, listen to a Unix socket at the specified path, e.g. `SB_UNIX_SOCKET=/tmp/silverbullet.sock`. Note: when this is set, `SB_HOSTNAME` and `SB_PORT` are ignored.
+* `SB_URL_PREFIX`: Host SilverBullet on a particular URL prefix, e.g. `SB_URL_PREFIX=/notes`
+
+# Authentication
+> **note** Note
+> These variables configure authentication for a **single-space** server. In [[Space Manager|multi-space]] mode, accounts live in `users.json` and access is per space, so setting `SB_USER` alongside a `spaces.json` is an error — see [[Authentication]].
+
+* `SB_USER` (single-space only): Sets single-user credentials, e.g. `SB_USER=pete:1234` allows you to login with username “pete” and password “1234”.
+* `SB_AUTH_TOKEN` (single-space only): Enables `Authorization: Bearer <token>` style authentication on the [[HTTP API]]. In multi-space mode this is replaced by per-account [[Space Manager#API tokens|API tokens]].
+* `SB_LOCKOUT_LIMIT`: Specifies the number of failed login attempt before locking the user out (for a `SB_LOCKOUT_TIME` specified amount of seconds), defaults to `10`
+* `SB_LOCKOUT_TIME`: Specifies the amount of time (in seconds) a client will be blocked until attempting to log back in, defaults to `60`.
+* `SB_REMEMBER_ME_HOURS`: Sets the session duration in hours when "Remember me" is checked during login, defaults to 7 days.
+
+# Run mode
+* `SB_READ_ONLY`: If you want to run the SilverBullet client and server in read-only mode (you get the full SilverBullet client, but all edit functionality and commands are disabled), you can do this by setting this environment variable to a non-empty value. Upon the server start a full space index will happen, after which all write operations will be disabled.
+
+# Spaces and accounts
+Hosting more than one space is is configured through `spaces.json`, `users.json`, and the admin UI rather than environment variables — see [[Space Manager]].
+
+To force the classic single-space server on an empty folder, pass `--single` (or set any of the single-space `SB_*` variables above).
+
+# Runtime API
+* `SB_RUNTIME_API`: The [[Runtime API]] is enabled automatically when Chrome/Chromium is detected on the system. Set to `0` to explicitly disable. Not available in read-only mode.
+* `SB_CHROME_PATH`: Optional explicit path to the Chrome/Chromium binary. Falls back to the `CHROMIUM_PATH` environment variable (pre-set in the `-runtime-api` Docker image), then auto-detection.
+* `SB_CHROME_SHOW`: Set to any non-empty value to run Chrome with a visible window instead of headless (useful for debugging).
+* `SB_CHROME_DATA_DIR`: Path to persist the Chrome user profile between restarts. When not set, defaults to `.chrome-data` inside the space folder.
+* `SB_CHROME_LOG_CONSOLE`: Forward the headless Chrome page’s `console.*` output to the server log (so you can see what the runtime is doing). Enabled by default; set to `0` to disable. The same log is also available via `/.runtime/logs` (e.g. `sb logs`).
+
+# Security
+> **note** Note
+> These variables configure authentication for a **single-space** server. In [[Space Manager|multi-space]] mode, these options are enabled at a per-space level from the UI
+
+* `SB_SHELL_BACKEND`: Enable/disable running of shell commands from plugs, defaults to `local` (enabled), set to `off` to disable. It is only enabled when using a local folder for [[#Storage]]. Unlike the other variables in this section, this one still applies in [[Space Manager|multi-space]] mode, where it acts as a server-wide kill switch: setting it to `off` disables shell commands for **every** space regardless of that space's own setting. It can only ever disable — it will not enable the shell for a space that has it turned off.
+* `SB_SHELL_WHITELIST`: Allow only a specific list of shell commands (just the first command name, not arguments). When not set, allows all shell commands. Example: `SB_SHELL_WHITELIST="git pandoc"`
+
+# Docker
+Configuration only relevant to docker deployments:
+
+* `PUID`: Runs the server process with the specified UID (default: whatever user owns the `/space` mapped folder)
+* `PGID`: Runs the server process with the specified GID (default: whatever group owns the `/space` mapped folder)\
+
+# Metrics
+SilverBullet offers a few basic Prometheus metrics, these can be configured with the following environment variables:
+
+* `SB_METRICS_PORT`: HTTP port to expose metrics (under the default `/metrics` endpoint) on
+
+# Web app manifest
+Configure aspects of web app appearance as well as the authentication page:
+
+* `SB_NAME`: Sets `name` and `short_name` members of web app manifest to whatever specified in `SB_NAME`
+* `SB_DESCRIPTION`: Sets `description` member of web app manifest to whatever specified in `SB_DESCRIPTION`
