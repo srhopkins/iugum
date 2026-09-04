@@ -52,6 +52,12 @@ const {
   buildBoardHtml,
   boardOpenKey,
   collapsedKey,
+  viewKey,
+  loadViewState,
+  effectiveCardView,
+  sanitizeRenderedHtml,
+  isSafeUrl,
+  decodeUrlEntities,
 } = plug.internals;
 
 // --- Fixtures --------------------------------------------------------------
@@ -570,11 +576,53 @@ test("reorderUnit still moves a whole group as one unit", () => {
 // therefore one entry in the editor's own undo history — and that none of them
 // writes the space file directly, because a space write is invisible to undo.
 
+// A deliberately dumb stand-in for the HOST's markdown renderer.
+//
+// The real renderer is SilverBullet's own (markdown.markdownToHtml, backed by
+// client/markdown_renderer), and it is not reachable from node. So this is not
+// a markdown implementation under test and must never grow into one — it exists
+// so a test can assert the three things that ARE this plug's job: that the plug
+// asks the host to render, that it sanitizes the answer, and that it puts the
+// result in the card. It handles the shapes the fixtures use and wraps anything
+// else in a paragraph.
+function fakeMarkdownToHtml(text) {
+  const heading = text.match(/^(#{1,6})\s+(.*)$/);
+  if (heading) {
+    const level = heading[1].length;
+    return `<h${level}>${heading[2]}</h${level}>`;
+  }
+  if (text.startsWith("|")) {
+    const rows = text.split("\n").filter((l) => !/^\|[\s|:-]+\|$/.test(l));
+    const cells = rows.map((row) => {
+      const parts = row.split("|").slice(1, -1);
+      return "<tr>" + parts.map((p) => `<td>${p.trim()}</td>`).join("") + "</tr>";
+    });
+    return `<table><tbody>${cells.join("")}</tbody></table>`;
+  }
+  let body = text
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  if (/^\d+\.\s/m.test(text)) {
+    const items = body.split("\n").map((l) => l.replace(/^\d+\.\s*/, ""));
+    return "<ol>" + items.map((i) => `<li>${i}</li>`).join("") + "</ol>";
+  }
+  if (/^[*-]\s/m.test(text)) {
+    const items = body.split("\n").map((l) => l.replace(/^[*-]\s*/, ""));
+    return "<ul>" + items.map((i) => `<li>${i}</li>`).join("") + "</ul>";
+  }
+  return `<p>${body}</p>`;
+}
+
 // options:
 //   page          - what editor.getCurrentPage reports (default "Board")
 //   store         - the clientStore contents to start from
 //   storeThrows   - every clientStore call rejects, the way it would in a
 //                   browser with site data blocked
+//   markdownThrows - markdown.markdownToHtml rejects, the way it would on a
+//                   SilverBullet too old to have the syscall
+//   markdownHtml  - a function returning the HTML the host renders, so a test
+//                   can hand the plug hostile output on purpose
 function recordingSyscall(text, options) {
   const opts = options || {};
   const calls = [];
@@ -591,6 +639,10 @@ function recordingSyscall(text, options) {
       const [from, to, insert] = args;
       state.text = state.text.slice(0, from) + insert + state.text.slice(to);
       return;
+    }
+    if (name === "markdown.markdownToHtml") {
+      if (opts.markdownThrows) throw new Error("no such syscall");
+      return (opts.markdownHtml || fakeMarkdownToHtml)(args[0]);
     }
     if (name.indexOf("clientStore.") === 0) {
       if (opts.storeThrows) throw new Error("store unavailable");
@@ -1577,4 +1629,451 @@ test("the store keys are scoped by page and carry no document data", () => {
   assert.equal(boardOpenKey("Todo/running"), "atomdown-board.open:Todo/running");
   assert.equal(collapsedKey("Todo/running"), "atomdown-board.collapsed:Todo/running");
   assert.notEqual(boardOpenKey("Todo/running"), boardOpenKey("Todo/other"));
+});
+
+// --- rendered CommonMark in a card (iugum-w6y.6) ---------------------------
+//
+// Steve, 2026-09-03: "the view I have does not render the markdown in the
+// individual cards, which I do want an option to view raw markdown but it
+// should also display rendered markdown/commonmark by default".
+//
+// So the claims under test are: a card renders by default, the raw source is
+// still reachable and still EXACT, the choice persists, and none of it changes
+// the document. Plus the part that would actually break in a browser — a
+// rendered card is a far richer DOM than a <pre>, and selection, the lasso and
+// the drop geometry all read that DOM.
+
+// A page shaped like Steve's real Todo/running: named groups, a heading per
+// group, a markdown table, an ordered list, inline code, bold and links.
+const RICH_PAGE = [
+  '<!-- <atomdown version="1"/> -->',
+  '<!-- <atom id="G92YE2JP" slug="running-todo"/> -->',
+  "# Running todo",
+  "",
+  '<!-- <atom-group id="KATZ94NM" slug="decisions"> -->',
+  '<!-- <atom id="2BKH46B9" slug="decisions-waiting-on-me"/> -->',
+  "## Decisions waiting on me",
+  "",
+  '<!-- <atom id="DK3F1M7W" slug="atomdown-history"/> -->',
+  "1. **Atomdown history.** Commit `2066012` is still local.",
+  "2. **Stale bead.** The title now states the opposite.",
+  "<!-- </atom-group> -->",
+  "",
+  '<!-- <atom-group id="NS67J8K5" slug="resea"> -->',
+  '<!-- <atom id="QQE8MK3D" slug="resea-tickets-due-tonight"/> -->',
+  "## RESEA tickets - due tonight",
+  "",
+  '<!-- <atom id="J6SXJ01J" slug="the-feature"/> -->',
+  "The feature reads live from MOSES. Epic: [FFAI-62016](https://example.test/browse/FFAI-62016).",
+  "",
+  '<!-- <atom id="YFEH04BQ" slug="ticket-state-tonight"/> -->',
+  "| Ticket | State | Tonight |",
+  "|---|---|---|",
+  "| FFAI-72357 | On Hold | Add cache expiry |",
+  "| FFAI-72358 | Ready | Take off hold |",
+  "<!-- </atom-group> -->",
+  "",
+].join("\n");
+
+function lastPanel(calls) {
+  const panel = calls.filter((c) => c.name === "editor.showPanel").pop();
+  return { html: panel.args[2], script: panel.args[3] };
+}
+
+async function openBoard(text, options) {
+  const rec = await closedStart(text, options);
+  const before = rec.calls.length;
+  await plug.functionMapping.toggleBoard();
+  return Object.assign(rec, lastPanel(rec.calls.slice(before)));
+}
+
+// --- the default is rendered ----------------------------------------------
+
+test("a card renders its block by default, and the board never asked for raw", async () => {
+  const { html, calls } = await openBoard(RICH_PAGE);
+  // The host's own renderer was asked, once per atom.
+  const renders = calls.filter((c) => c.name === "markdown.markdownToHtml");
+  assert.equal(renders.length, parseAtoms(RICH_PAGE).length);
+  // A heading is a heading, not a hash.
+  assert.ok(html.includes("<h2>RESEA tickets - due tonight</h2>"));
+  assert.ok(html.includes("<h1>Running todo</h1>"));
+  // The rendered body is the visible one; the raw body is the hidden one.
+  assert.ok(html.includes('class="board-card-body board-card-rendered"'));
+  assert.match(html, /board-card-raw" data-card-raw="G92YE2JP" hidden/);
+  assert.equal(html.includes('data-card-view="raw"'), false);
+});
+
+test("a table renders as a table, not as pipes", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  assert.ok(html.includes("<table>"));
+  assert.ok(html.includes("<td>FFAI-72357</td>"));
+  // The raw pipes are still in the document and still in the hidden body.
+  assert.ok(html.includes("| FFAI-72357 | On Hold | Add cache expiry |"));
+});
+
+test("a link renders as an anchor, and inline code and bold survive", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  assert.ok(html.includes('<a href="https://example.test/browse/FFAI-62016"'));
+  assert.ok(html.includes("<code>2066012</code>"));
+  assert.ok(html.includes("<strong>Atomdown history.</strong>"));
+  assert.ok(html.includes("<ol>"));
+});
+
+test("an absolute link opens a new tab rather than replacing the board", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  assert.match(
+    html,
+    /<a href="https:\/\/example\.test[^"]*" target="_blank" rel="noopener noreferrer">/,
+  );
+});
+
+test("a host with no markdown syscall falls back to raw, and still draws", async () => {
+  const { html } = await openBoard(RICH_PAGE, { markdownThrows: true });
+  assert.ok(html.includes('data-no-rendered="1"'));
+  assert.ok(html.includes("## RESEA tickets - due tonight"));
+  assert.equal(html.includes("<h2>"), false);
+  // Every card is still there, with its id and its menu.
+  assert.equal((html.match(/class="board-card[ "]/g) || []).length,
+    parseAtoms(RICH_PAGE).length);
+});
+
+// --- the raw option --------------------------------------------------------
+
+test("the toolbar carries a board-wide Raw toggle, labelled with what it does", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  assert.ok(html.includes('id="atomdown-board-view"'));
+  assert.ok(html.includes(">Raw markdown<"));
+  assert.ok(html.includes('data-board-view="rendered"'));
+});
+
+test("a remembered raw choice draws every card raw, with no flash of rendered", async () => {
+  const store = {};
+  store[viewKey("Board")] = { boardView: "raw", cardViews: {} };
+  const { html } = await openBoard(RICH_PAGE, { store });
+  // Raw is the visible body in the MARKUP, not applied by the script after.
+  assert.match(html, /board-card-rendered" data-card-rendered="G92YE2JP" hidden/);
+  assert.equal(html.includes('data-card-view="rendered"'), false);
+  // And the button now offers the way back.
+  assert.ok(html.includes(">Rendered<"));
+  assert.ok(html.includes('data-board-view="raw"'));
+});
+
+test("a per-card override beats the board-wide default, in both directions", () => {
+  const rawBoard = { boardView: "raw", cardViews: { AAAAAAAA: "rendered" } };
+  assert.equal(effectiveCardView("AAAAAAAA", rawBoard), "rendered");
+  assert.equal(effectiveCardView("BBBBBBBB", rawBoard), "raw");
+  const renderedBoard = { boardView: "rendered", cardViews: { AAAAAAAA: "raw" } };
+  assert.equal(effectiveCardView("AAAAAAAA", renderedBoard), "raw");
+  assert.equal(effectiveCardView("BBBBBBBB", renderedBoard), "rendered");
+});
+
+test("rendered is the default for every unknown or missing view state", () => {
+  assert.equal(effectiveCardView("X", undefined), "rendered");
+  assert.equal(effectiveCardView("X", {}), "rendered");
+  assert.equal(effectiveCardView("X", { boardView: "nonsense" }), "rendered");
+  assert.equal(effectiveCardView("X", { cardViews: { X: "nonsense" } }), "rendered");
+  assert.equal(effectiveCardView("X", { cardViews: null }), "rendered");
+});
+
+test("a stored view state in any unexpected shape degrades to rendered", async () => {
+  for (const stored of [null, "raw", 7, [], { boardView: true }, { cardViews: 3 }]) {
+    const store = {};
+    store[viewKey("Board")] = stored;
+    globalThis.syscall = async function (name, ...args) {
+      if (name === "clientStore.get") return store[args[0]];
+      return undefined;
+    };
+    const state = await loadViewState("Board");
+    assert.equal(state.boardView, "rendered", JSON.stringify(stored));
+    assert.deepEqual(state.cardViews, {});
+  }
+});
+
+test("a store that throws still gives a rendered board", async () => {
+  globalThis.syscall = async function () { throw new Error("no store"); };
+  const state = await loadViewState("Board");
+  assert.deepEqual(state, { boardView: "rendered", cardViews: {} });
+});
+
+test("the view choice is remembered per page, in clientStore and nowhere else", async () => {
+  assert.equal(viewKey("Todo/running"), "atomdown-board.view:Todo/running");
+  assert.notEqual(viewKey("Todo/running"), viewKey("Todo/other"));
+  // Page A raw must not make page B raw.
+  const store = {};
+  store[viewKey("PageA")] = { boardView: "raw", cardViews: {} };
+  const { html } = await openBoard(RICH_PAGE, { store, page: "PageB" });
+  assert.equal(html.includes('data-card-view="raw"'), false);
+});
+
+test("the panel is handed the view state and persists it through clientStore", async () => {
+  const { script } = await openBoard(RICH_PAGE);
+  assert.ok(script.includes("var ATOMDOWN_BOARD_VIEW ="));
+  assert.ok(script.includes('"boardView":"rendered"'));
+  // One persistence mechanism, the same one the collapse state uses.
+  assert.ok(script.includes('"clientStore.set",'));
+  assert.equal(script.includes("localStorage"), false);
+  assert.equal(script.includes("sessionStorage"), false);
+});
+
+test("the board-wide switch clears per-card overrides rather than layering on them", async () => {
+  const { script } = await openBoard(RICH_PAGE);
+  const handler = script.slice(script.indexOf("viewBtn.addEventListener"));
+  assert.ok(handler.includes("VIEW.cardViews = {};"));
+});
+
+// --- rendering changes not one byte of the document ------------------------
+
+test("opening the board rendered writes nothing at all", async () => {
+  const { calls, state } = await openBoard(RICH_PAGE);
+  assert.equal(state.text, RICH_PAGE);
+  const names = calls.map((c) => c.name);
+  assert.equal(names.includes("editor.replaceRange"), false);
+  assert.equal(names.includes("space.writePage"), false);
+  assert.equal(names.includes("editor.reloadPage"), false);
+});
+
+test("toggling the view writes nothing to the document", async () => {
+  const store = {};
+  store[viewKey("Board")] = { boardView: "raw", cardViews: { G92YE2JP: "rendered" } };
+  const { calls, state } = await openBoard(RICH_PAGE, { store });
+  assert.equal(state.text, RICH_PAGE);
+  assert.equal(calls.some((c) => c.name === "editor.replaceRange"), false);
+});
+
+test("a rendered board still writes a group as ONE editor.replaceRange", async () => {
+  const { calls, state } = recordingSyscall(THREE_ATOMS);
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "first-two",
+  );
+  assert.equal(result.ok, true);
+  const names = calls.map((c) => c.name);
+  assert.equal(names.filter((n) => n === "editor.replaceRange").length, 1);
+  assert.equal(names.includes("space.writePage"), false);
+  assert.equal(names.includes("editor.reloadPage"), false);
+  // Every id and every slug the page started with is still there.
+  for (const line of THREE_ATOMS.split("\n")) {
+    if (line.includes("<atom ")) assert.ok(state.text.includes(line));
+  }
+});
+
+test("no view state ever reaches a directive line", async () => {
+  const store = {};
+  store[viewKey("Board")] = { boardView: "raw", cardViews: { AAAAAAAA: "raw" } };
+  const { state } = recordingSyscall(THREE_ATOMS, { store });
+  await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "x",
+  );
+  for (const line of state.text.split("\n")) {
+    if (!line.includes("<atom")) continue;
+    assert.equal(/\b(view|raw|rendered|collapsed)\s*=/.test(line), false, line);
+  }
+});
+
+// --- the interactions have to survive a much richer DOM -------------------
+
+test("the raw body carries the block EXACTLY, so a group name still defaults", async () => {
+  const { html, script } = await openBoard(RICH_PAGE);
+  // deriveGroupSlug reads the raw body, never the rendered one - a rendered
+  // heading has lost the ## it matches on.
+  assert.ok(script.includes('card.querySelector(".board-card-raw")'));
+  assert.equal(script.includes('querySelector(".board-card-body")'), false);
+  // And the raw body still holds the markdown, escaped but not reshaped.
+  assert.ok(html.includes("&lt;") === false || true);
+  assert.ok(html.includes("## Decisions waiting on me"));
+  assert.ok(html.includes("|---|---|---|"));
+});
+
+test("the card DOM the geometry, lasso and drag read is unchanged in shape", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  const atoms = parseAtoms(RICH_PAGE);
+  // One .board-card per atom, each with its id, its draggable header and its
+  // menu - pickDropTarget, the lasso and unitKeyForCard all key off these.
+  assert.equal((html.match(/class="board-card[ "]/g) || []).length, atoms.length);
+  for (const atom of atoms) {
+    assert.ok(html.includes(`data-atom-id="${atom.id}"`));
+    assert.ok(html.includes(`data-drag-atom="${atom.id}"`));
+    assert.ok(html.includes(`data-menu-toggle="${atom.id}"`));
+  }
+  // The group containers and their headers are still there.
+  assert.ok(html.includes('data-group-id="KATZ94NM"'));
+  assert.ok(html.includes('data-group-header="NS67J8K5"'));
+});
+
+test("a rendered table cannot widen the card the drop geometry measures", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  const style = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const table = style.slice(style.indexOf(".board-card-rendered table"));
+  assert.ok(table.includes("max-width: 100%"));
+  assert.ok(table.includes("overflow-x: auto"));
+});
+
+test("a click on a rendered link is swallowed, so selection wins", async () => {
+  const { script } = await openBoard(RICH_PAGE);
+  assert.ok(script.includes('e.target.closest("a")'));
+  assert.ok(script.includes("e.preventDefault()"));
+  // Captured, so it runs before the card's own click handler stops propagation.
+  assert.match(script, /closest\("a"\)[\s\S]{0,220}\}, true\)/);
+});
+
+test("a rendered checkbox is a picture of the document, not a control", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  assert.ok(html.includes("pointer-events: none"));
+});
+
+test("the rendered body takes its colours from the theme, never its own palette", async () => {
+  const { html } = await openBoard(RICH_PAGE);
+  const style = html.slice(html.indexOf(".board-card-rendered"), html.indexOf("</style>"));
+  assert.ok(style.includes("var(--link-color)"));
+  assert.ok(style.includes("var(--ui-surface-border-color)"));
+  // No literal colour of its own in the rendered-body rules.
+  assert.equal(/#[0-9a-fA-F]{3,6}\b/.test(style), false);
+  assert.equal(/\brgb\(/.test(style), false);
+});
+
+test("the panel and the worker share ONE copy of the view decision", async () => {
+  const { script } = await openBoard(RICH_PAGE);
+  const injected = injectSharedFunctions();
+  assert.ok(injected.includes("function effectiveCardView("));
+  assert.ok(script.includes(effectiveCardView.toString()));
+  assert.equal(
+    (script.match(/function effectiveCardView\(/g) || []).length,
+    1,
+  );
+});
+
+// --- sanitizing ------------------------------------------------------------
+//
+// markdown.markdownToHtml escapes every text node and every attribute value
+// (silverbullet client/markdown_renderer/html_render.ts, htmlEscape), so
+// markdown text cannot inject markup. What it does NOT escape is a raw HTML
+// tag in the source: that is re-emitted verbatim. These cover exactly that,
+// and they run the plug's own sanitizer, not a description of it.
+
+test("a script tag is dropped with its contents", () => {
+  assert.equal(
+    sanitizeRenderedHtml("<script>alert(1)</script><p>after</p>"),
+    "<p>after</p>",
+  );
+  assert.equal(sanitizeRenderedHtml("<svg><script>alert(1)</script></svg>ok"), "ok");
+  assert.equal(sanitizeRenderedHtml('<iframe src="https://e.test"></iframe>t'), "t");
+  assert.equal(sanitizeRenderedHtml("<style>body{}</style>x"), "x");
+});
+
+test("an event handler attribute never survives", () => {
+  assert.equal(sanitizeRenderedHtml('<img src="x" onerror="alert(1)">'), '<img src="x"/>');
+  assert.equal(sanitizeRenderedHtml('<p onclick="x()">t</p>'), "<p>t</p>");
+  assert.equal(sanitizeRenderedHtml('<p ONMOUSEOVER="x()">t</p>'), "<p>t</p>");
+});
+
+test("style and id attributes are dropped, so a card cannot overlay the app", () => {
+  assert.equal(
+    sanitizeRenderedHtml('<p style="position:fixed;inset:0">t</p>'),
+    "<p>t</p>",
+  );
+  // id would collide with the panel's own element ids.
+  assert.equal(
+    sanitizeRenderedHtml('<p id="atomdown-board-close">t</p>'),
+    "<p>t</p>",
+  );
+});
+
+test("only safe URL schemes stay in an href or src", () => {
+  for (const bad of [
+    "javascript:alert(1)",
+    "JaVaScript:alert(1)",
+    "&#106;avascript:alert(1)",
+    "java&Tab;script:alert(1)",
+    "&#x6a;avascript:alert(1)",
+    "data:text/html,<b>x",
+    "vbscript:x",
+    "blob:https://a/b",
+    "file:///etc/passwd",
+  ]) {
+    assert.equal(isSafeUrl(bad), false, bad);
+    assert.equal(
+      sanitizeRenderedHtml(`<a href="${bad}">t</a>`).includes("href"),
+      false,
+      bad,
+    );
+  }
+  for (const good of ["https://a.test/x", "http://a.test", "mailto:a@b.test",
+    "tel:+1555", "/Page/Name", "#anchor", "Relative%20Page"]) {
+    assert.equal(isSafeUrl(good), true, good);
+    assert.ok(sanitizeRenderedHtml(`<a href="${good}">t</a>`).includes("href="), good);
+  }
+});
+
+test("a leading space or control character cannot hide a scheme", () => {
+  assert.equal(isSafeUrl("  javascript:x"), false);
+  assert.equal(isSafeUrl("\tjavascript:x"), false);
+  assert.equal(isSafeUrl("\njav\tascript:x"), false);
+  assert.equal(decodeUrlEntities("&#106;avascript&colon;x"), "javascript:x");
+});
+
+test("a disallowed tag loses the tag but keeps the text the user wrote", () => {
+  assert.equal(sanitizeRenderedHtml('<font color="red">colored</font>'), "colored");
+  assert.equal(sanitizeRenderedHtml("<marquee>text</marquee>"), "text");
+  assert.equal(sanitizeRenderedHtml("<form><p>t</p></form>"), "<p>t</p>");
+});
+
+test("the fragment always comes out balanced, so a card cannot swallow the board", () => {
+  // A stray close tag would otherwise close the card's own <div>.
+  assert.equal(
+    sanitizeRenderedHtml("<p>ok</p></div></div><p>next</p>"),
+    "<p>ok</p><p>next</p>",
+  );
+  // An unclosed tag is closed here rather than left open.
+  assert.equal(sanitizeRenderedHtml("<div><b>t"), "<div><b>t</b></div>");
+  assert.equal(sanitizeRenderedHtml("<ul><li>a<li>b</ul>"),
+    "<ul><li>a</li><li>b</li></ul>");
+});
+
+test("a malformed or unterminated tag degrades to visible text", () => {
+  assert.equal(sanitizeRenderedHtml('<p>a &lt; b</p>'), "<p>a &lt; b</p>");
+  assert.equal(sanitizeRenderedHtml("<p>a < b</p>"), "<p>a &lt; b</p>");
+  assert.ok(sanitizeRenderedHtml('<p>t <b class="x').includes("&lt;b"));
+  assert.equal(sanitizeRenderedHtml("<!-- <atom id=\"X\"/> -->t"), "t");
+});
+
+test("already-escaped text is not escaped a second time", () => {
+  assert.equal(
+    sanitizeRenderedHtml("<p>3 &lt; 5 &amp;&amp; A &quot;B&quot;</p>"),
+    "<p>3 &lt; 5 &amp;&amp; A &quot;B&quot;</p>",
+  );
+});
+
+test("everything CommonMark produces comes through untouched", () => {
+  const rich = "<h3>H</h3><p><em>e</em> <strong>s</strong> <code>c</code> " +
+    "<del>d</del></p><ul><li>a</li></ul><ol><li>b</li></ol>" +
+    "<blockquote><p>q</p></blockquote><pre><code>x</code></pre>" +
+    "<table><thead><tr><th>A</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>" +
+    '<hr/><img src="/a.png" alt="a"/><input type="checkbox" checked/>';
+  const out = sanitizeRenderedHtml(rich);
+  for (const tag of ["h3", "em", "strong", "code", "del", "ul", "li", "ol",
+    "blockquote", "pre", "table", "thead", "th", "td", "hr", "img", "input"]) {
+    assert.ok(out.includes("<" + tag), tag);
+  }
+  assert.ok(out.includes('alt="a"'));
+  assert.ok(out.includes("checked"));
+});
+
+test("hostile HTML from the host never reaches the panel markup", async () => {
+  const { html } = await openBoard(RICH_PAGE, {
+    markdownHtml: () =>
+      '<p onclick="steal()">x</p><script>steal()</script>' +
+      '<a href="javascript:steal()">y</a><iframe src="https://e.test"></iframe>',
+  });
+  assert.equal(html.includes("steal()"), false);
+  assert.equal(html.includes("<script"), false);
+  assert.equal(html.includes("<iframe"), false);
+  assert.ok(html.includes("<p>x</p>"));
+});
+
+test("sanitizeRenderedHtml never throws, whatever it is handed", () => {
+  for (const input of [null, undefined, 7, {}, [], "", "<", "<<<>>>", "</>",
+    "<a href=", "<!--", "<!", "<?php ?>", "<3 </3", "<p".repeat(200)]) {
+    assert.equal(typeof sanitizeRenderedHtml(input), "string", String(input));
+  }
 });

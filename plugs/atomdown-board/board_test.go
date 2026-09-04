@@ -20,7 +20,7 @@ import (
 // registers no tests at all: a bad import or a stray early return would make
 // this Go test pass while covering nothing. Raise it when the suite grows by a
 // meaningful block of tests.
-const minimumPlugTests = 118
+const minimumPlugTests = 155
 
 // TestPlugJavaScript runs plugs/atomdown-board/atomdown-board.test.mjs with
 // node's built-in test runner.
