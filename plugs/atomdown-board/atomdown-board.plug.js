@@ -1519,6 +1519,89 @@ const THEME_VAR_NAMES = [
   "--link-color",
 ];
 
+// The board's OWN tweakable values, as CSS custom properties.
+//
+// Every one has a default in buildBoardHtml()'s <style> block, so the board
+// draws correctly with none of them set. They are listed here because
+// applyParentTheme() copies them from the PARENT document exactly the way it
+// copies SilverBullet's theme tokens above — which is the whole customization
+// surface: a user puts
+//
+//     html { --board-card-padding: 4px; --board-accent-color: #b5651d; }
+//
+// in their own `space-style` page, and the board picks it up. That indirection
+// is not a style choice, it is the only route in: this panel renders in an
+// iframe, so a stylesheet in the parent document cannot select anything in
+// here. Copying named properties across is the seam that already exists.
+//
+// A property the parent does not set reads back as an empty string and is not
+// copied, so an unset property keeps its default. A property the parent DOES
+// set lands as an inline declaration on this document's root, which beats both
+// the defaults and the compact overrides — a value the user asked for wins at
+// either density.
+//
+// Documented, with each default, in README.md ("Customizing the board's CSS").
+const BOARD_VAR_NAMES = [
+  "--board-card-padding",
+  "--board-card-header-padding",
+  "--board-card-header-height",
+  "--board-card-border-width",
+  "--board-card-radius",
+  "--board-accent-color",
+  "--board-grip-size",
+  "--board-id-size",
+  "--board-header-quiet-color",
+  "--board-header-active-color",
+  "--board-card-gap",
+  "--board-card-chrome-space",
+  "--board-group-padding",
+  "--board-group-card-gap",
+  "--board-group-header-padding",
+  "--board-group-border-width",
+];
+
+/**
+ * Display density: "comfortable" (the default) or "compact".
+ *
+ * Two densities, and no third. "Bare" is not a density — reading the document
+ * with no chrome at all is what closing the board does, so it needs no mode.
+ *
+ * COMPACT COMPRESSES CHROME ONLY. Every content size is identical at both
+ * densities: a heading is a heading at its full rendered size, because the
+ * point of compact is to fit more of the document on screen, not to shrink the
+ * document. What compact removes is the card header row, the GROUP label, the
+ * group id, the separate Rename and Ungroup buttons, and most of the padding.
+ *
+ * Pure and self-contained: it is injected into the panel script, so the
+ * toolbar, the group menu and the initial markup cannot disagree about which
+ * density is showing.
+ */
+function normalizeDensity(value) {
+  return value === "compact" ? "compact" : "comfortable";
+}
+
+/** The other density: what the switch would take you to. */
+function otherDensity(value) {
+  return normalizeDensity(value) === "compact" ? "comfortable" : "compact";
+}
+
+/**
+ * The density switch's label and tooltip.
+ *
+ * Same idiom as the raw/rendered switch it sits beside: the button is
+ * labelled with the state it would GIVE you, not the state you are in, so
+ * reading the toolbar tells you what pressing it does.
+ */
+function densityLabel(value) {
+  return otherDensity(value) === "compact" ? "Compact" : "Comfortable";
+}
+
+function densityTitle(value) {
+  return otherDensity(value) === "compact"
+    ? "Compact: no card headers, a thin group bar, the same content size"
+    : "Comfortable: the card header comes back, with roomier spacing";
+}
+
 /**
  * Which body a card shows: "rendered" (the default) or "raw".
  *
@@ -1559,6 +1642,10 @@ const CLIENT_SHARED_FUNCTIONS = [
   sanitizeSlug,
   deriveGroupSlug,
   effectiveCardView,
+  normalizeDensity,
+  otherDensity,
+  densityLabel,
+  densityTitle,
 ];
 
 function injectSharedFunctions() {
@@ -1613,7 +1700,7 @@ function buildCardHtml(atom, viewState) {
   return `
       <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}" data-card-view="${showRaw ? "raw" : "rendered"}"${hasRendered ? "" : ' data-no-rendered="1"'}>
         <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
-          <span class="board-drag-handle" aria-hidden="true">&#10303;</span>
+          <span class="board-drag-handle board-card-drag" draggable="true" data-drag-unit="${escapeHtml(unitKeyForCard(atom))}" role="button" tabindex="0" aria-label="Drag to move this card" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">&#10303;</span>
           ${nameHtml}
           <span class="board-card-id" title="${escapeHtml(idTitle)}">${escapeHtml(atom.id)}</span>
           ${badges.join("")}
@@ -1659,20 +1746,28 @@ function buildGroupHtml(groupId, groupSlug, members, collapsed, viewState) {
   const headerTitle = groupSlug
     ? `Group "${groupSlug}" (id ${groupId}) — click to select the whole group`
     : `Group ${groupId} — click to select the whole group`;
-  const count = members.length === 1 ? "1 card" : members.length + " cards";
+  // The count is split into the number and the word, because compact keeps a
+  // BARE count: "3", not "3 cards". One span each rather than two renderings
+  // of the header, so the density switch is a CSS change and the markup is the
+  // same at both densities.
+  const countWord = members.length === 1 ? " card" : " cards";
   const isCollapsed = collapsed === true;
   return `
       <div class="board-group${isCollapsed ? " board-group-collapsed" : ""}" data-group-id="${escapeHtml(groupId)}">
         <div class="board-group-header" data-group-header="${escapeHtml(groupId)}" title="${escapeHtml(headerTitle)}">
           <button type="button" class="board-group-collapse" data-group-collapse="${escapeHtml(groupId)}" aria-expanded="${isCollapsed ? "false" : "true"}" title="${isCollapsed ? "Expand this group" : "Collapse this group"}">${isCollapsed ? "&#9656;" : "&#9662;"}</button>
-          <span class="board-drag-handle board-group-drag" draggable="true" data-drag-unit="group:${escapeHtml(groupId)}" title="Drag to move the whole group">&#10303;</span>
+          <span class="board-drag-handle board-group-drag" draggable="true" data-drag-unit="group:${escapeHtml(groupId)}" role="button" tabindex="0" aria-label="Drag to move the whole group" title="Drag to move the whole group">&#10303;</span>
           <span class="board-group-kind">group</span>
           ${nameHtml}
           <span class="board-group-id" title="${escapeHtml(idTitle)}">${escapeHtml(groupId)}</span>
-          <span class="board-group-count">${count}</span>
+          <span class="board-group-count"><span class="board-group-count-n">${members.length}</span><span class="board-group-count-word">${countWord}</span></span>
           <div class="board-group-actions">
             <button type="button" class="board-group-btn" data-group-rename="${escapeHtml(groupId)}" title="Give this group a readable name. Its id (${escapeHtml(groupId)}) does not change - a name is an alias, not the identity.">Rename</button>
             <button type="button" class="board-group-btn" data-group-ungroup="${escapeHtml(groupId)}" title="Remove this group's markers. Every atom inside it stays.">Ungroup</button>
+          </div>
+          <div class="board-card-menu board-group-menu">
+            <button type="button" class="board-menu-btn" data-group-menu-toggle="${escapeHtml(groupId)}" title="Group actions" aria-haspopup="true">&#8942;</button>
+            <div class="board-menu-popover" data-group-menu-popover="${escapeHtml(groupId)}" hidden></div>
           </div>
         </div>
         <div class="board-group-cards" data-group-cards="${escapeHtml(groupId)}"${isCollapsed ? " hidden" : ""}>${members.map((m) => buildCardHtml(m, viewState)).join("\n")}</div>
@@ -1718,12 +1813,13 @@ function buildStripHtml(atoms, collapsedIds, viewState) {
   return parts.join("\n");
 }
 
-function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
+function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
   const collapsed = Array.isArray(collapsedIds) ? collapsedIds : [];
   const view = {
     boardView: viewState && viewState.boardView === "raw" ? "raw" : "rendered",
     cardViews: (viewState && viewState.cardViews) || {},
   };
+  const dens = normalizeDensity(density);
   const cardsHtml = buildStripHtml(atoms, collapsed, view);
 
   const style = `
@@ -1746,6 +1842,52 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
       --subtle-color: #787774;
       --subtle-background-color: #f7f6f3;
       --link-color: #0330cb;
+
+      /* THE BOARD'S OWN KNOBS.
+         ----------------------------------------------------------------
+         Every tweakable value the board has, in one place, so a user can
+         restyle it without fighting a selector. These are the defaults;
+         applyParentTheme() overwrites any of them the parent document sets,
+         which is how a "space-style" page reaches into this iframe (see
+         BOARD_VAR_NAMES). Documented with these defaults in README.md.
+         The COMPACT density is nothing but a different set of these same
+         values, plus the structural rules further down. */
+      --board-card-padding: 8px;
+      --board-card-header-padding: 6px 8px;
+      --board-card-header-height: auto;
+      --board-card-border-width: 1px;
+      --board-card-radius: 6px;
+      --board-accent-color: var(--ui-accent-color);
+      --board-grip-size: 14px;
+      --board-id-size: 11px;
+      --board-header-quiet-color: var(--subtle-color);
+      --board-header-active-color: var(--root-color);
+      --board-card-gap: 14px;
+      --board-card-chrome-space: 24px;
+      --board-group-padding: 8px;
+      --board-group-card-gap: 8px;
+      --board-group-header-padding: 5px 8px;
+      --board-group-border-width: 2px;
+      --board-group-quiet-border: 40%;
+      --board-group-quiet-header: 16%;
+    }
+    /* COMPACT: chrome only.
+       ------------------------------------------------------------------
+       Not one content size is touched here — no font-size on a card body,
+       no font-size on a heading. A heading is a heading at its full
+       rendered size in compact, because the point is to fit more document
+       on screen, not to shrink the document.
+       --board-group-border-width is deliberately absent: the group outline
+       is structure, not chrome, and it is IDENTICAL at both densities. */
+    :root[data-density="compact"] {
+      --board-card-padding: 6px;
+      --board-card-header-padding: 0;
+      --board-card-header-height: 0;
+      --board-card-radius: 4px;
+      --board-card-gap: 6px;
+      --board-group-padding: 4px;
+      --board-group-card-gap: 4px;
+      --board-group-header-padding: 1px 4px;
     }
     body {
       margin: 0;
@@ -1802,15 +1944,21 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     .board-cards > .board-card + .board-card,
     .board-cards > .board-card + .board-group,
     .board-cards > .board-group + .board-card,
-    .board-cards > .board-group + .board-group { margin-top: 14px; }
+    .board-cards > .board-group + .board-group { margin-top: var(--board-card-gap); }
     .board-card {
-      border: 1px solid var(--ui-surface-border-color);
-      border-radius: 6px;
+      border: var(--board-card-border-width) solid var(--ui-surface-border-color);
+      border-radius: var(--board-card-radius);
       background: var(--ui-surface-section-background-color);
       display: flex;
       flex-direction: column;
       min-height: 60px;
       width: 100%;
+      /* The positioning context for the card's own chrome. In compact the
+         header row is lifted out of the layout and pinned to this box's top
+         corners, so the card's rectangle — the one cardGeometry() measures
+         and pickDropTarget() decides from — is the body's rectangle and
+         nothing else. */
+      position: relative;
       transition: box-shadow 0.1s ease-out;
     }
     .board-card-implicit { border-style: dashed; }
@@ -1831,8 +1979,8 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
        would hide the menu for every grouped card. The header rounds its own
        top corners instead. */
     .board-group {
-      border: 2px solid var(--ui-accent-color);
-      border-radius: 6px;
+      border: var(--board-group-border-width) solid var(--board-accent-color);
+      border-radius: var(--board-card-radius);
       background: var(--ui-surface-background-color);
     }
     .board-group-header {
@@ -1840,8 +1988,8 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
-      padding: 5px 8px;
-      background: var(--ui-accent-color);
+      padding: var(--board-group-header-padding);
+      background: var(--board-accent-color);
       color: var(--ui-accent-contrast-color);
       border-top-left-radius: 4px;
       border-top-right-radius: 4px;
@@ -1858,7 +2006,7 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     .board-group-name { font-size: 13px; font-weight: 600; }
     .board-group-id {
       font-family: ui-monospace, monospace;
-      font-size: 11px;
+      font-size: var(--board-id-size);
       opacity: 0.8;
     }
     .board-group-count { font-size: 11px; opacity: 0.8; }
@@ -1876,16 +2024,16 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     /* Hover inverts the two accent tokens rather than mixing in a new value. */
     .board-group-btn:hover, .board-group-collapse:hover {
       background: var(--ui-accent-contrast-color);
-      color: var(--ui-accent-color);
+      color: var(--board-accent-color);
     }
     .board-group-collapse {
       border-color: transparent;
       font-size: 12px;
       padding: 1px 5px;
     }
-    .board-group-cards { padding: 8px; }
+    .board-group-cards { padding: var(--board-group-padding); }
     .board-group-cards[hidden] { display: none; }
-    .board-group-cards .board-card + .board-card { margin-top: 8px; }
+    .board-group-cards .board-card + .board-card { margin-top: var(--board-group-card-gap); }
     /* The header's rename form: same inputs and the same classes as the
        naming form in a card's popover, so there is one look for naming. */
     .board-group-rename {
@@ -1899,8 +2047,8 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
        mark the card the pointer is currently hovering, to show where the
        drop would land. */
     .board-card-dragging { opacity: 0.4; }
-    .board-card-dropbefore { box-shadow: inset 0 3px 0 0 var(--ui-accent-color); }
-    .board-card-dropafter { box-shadow: inset 0 -3px 0 0 var(--ui-accent-color); }
+    .board-card-dropbefore { box-shadow: inset 0 3px 0 0 var(--board-accent-color); }
+    .board-card-dropafter { box-shadow: inset 0 -3px 0 0 var(--board-accent-color); }
     /* Selection. The colour is the SAME blue as the drop indicator two lines
        up and as the group container's edge: --ui-accent-color, SilverBullet's
        own accent token, copied live from the parent document by
@@ -1916,16 +2064,16 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
        already spoken for by the drop indicator, and outline takes no space,
        so a selection never nudges the layout the drop geometry just read. */
     .board-card-selected {
-      border: 2px solid var(--ui-accent-color);
-      outline: 2px solid var(--ui-accent-color);
+      border: 2px solid var(--board-accent-color);
+      outline: 2px solid var(--board-accent-color);
       outline-offset: 2px;
       background: var(--ui-surface-hover-background-color);
     }
     .board-lasso {
       position: fixed;
       z-index: 40;
-      border: 1px solid var(--ui-accent-color);
-      background: var(--ui-accent-color);
+      border: 1px solid var(--board-accent-color);
+      background: var(--board-accent-color);
       opacity: 0.18;
       pointer-events: none;
     }
@@ -1934,7 +2082,8 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
-      padding: 6px 8px;
+      padding: var(--board-card-header-padding);
+      min-height: var(--board-card-header-height);
       border-bottom: 1px solid var(--ui-surface-border-color);
       position: relative;
       cursor: grab;
@@ -1946,7 +2095,7 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
        so focus reveals it too. */
     .board-drag-handle {
       opacity: 0;
-      font-size: 14px;
+      font-size: var(--board-grip-size);
       line-height: 1;
       letter-spacing: -0.15em;
       user-select: none;
@@ -1964,8 +2113,8 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     }
     .board-card-id {
       font-family: ui-monospace, monospace;
-      font-size: 11px;
-      color: var(--subtle-color);
+      font-size: var(--board-id-size);
+      color: var(--board-header-quiet-color);
     }
     .board-badge {
       font-size: 10px;
@@ -1977,7 +2126,7 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     .board-toolbar-actions { display: flex; gap: 8px; align-items: center; }
     .board-card-body {
       margin: 0;
-      padding: 8px;
+      padding: var(--board-card-padding);
       word-break: break-word;
       flex: 1;
     }
@@ -2228,18 +2377,201 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
     /* The slug row of the attribute editor. It is the first row and it is
        labelled, because it is the only attribute a human reads. */
     .board-attr-slug { margin-bottom: 8px; }
+    /* IDENTITY IN THE MENU.
+       ------------------------------------------------------------------
+       The name and the id, as a label and not an action, at the top of the
+       popover — in BOTH densities, so the menu says the same thing wherever
+       you open it. It is not decoration in compact: the card header is gone
+       there, so this is the ONLY place a card's slug and id appear on
+       screen. If the menu is where identity lives, the menu has to show it.
+       Explicit colour because the group's copy of this popover hangs inside
+       the accent-coloured header bar, which sets a light text colour that
+       would otherwise inherit onto white. */
+    .board-menu-identity {
+      font-size: 12px;
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--ui-surface-border-color);
+      color: var(--ui-surface-color);
+      cursor: default;
+      user-select: text;
+    }
+    .board-menu-identity-name { display: block; font-weight: 600; }
+    .board-menu-identity-id {
+      font-family: ui-monospace, monospace;
+      font-size: var(--board-id-size);
+      color: var(--subtle-color);
+    }
+    .board-menu-readout {
+      font-size: 11px;
+      color: var(--subtle-color);
+      margin-bottom: 3px;
+    }
+    /* The group's own three-dot menu. Same class, so it gets the same
+       popover box, the same hover-only button and the same "a click in here
+       is not a selection gesture" treatment as a card's. */
+    .board-group-menu .board-menu-popover {
+      color: var(--ui-surface-color);
+      cursor: default;
+      user-select: text;
+    }
+    /* --- COMFORTABLE: the header is present, but quiet ----------------
+       A card you are not pointing at recedes. The header text drops to the
+       theme's own muted text token at rest and returns to the full text
+       token on hover, focus, or selection; the grip and the three-dot
+       button stay fully hidden until then (the rules above).
+       A TOKEN, NOT OPACITY. Opacity multiplies against whatever is behind
+       the element, so the same value reads differently on the plain card
+       surface, on a selected card's lifted background, on the group
+       container's field, and again in the dark theme. --subtle-color is the
+       colour SilverBullet itself uses for secondary text, so it is legible
+       by construction in both themes and on every one of those surfaces.
+       Colour only, so nothing reflows: the header keeps its box, its
+       padding and its height in both states.
+       A SELECTED card reads as active, not quiet — selection promotes the
+       header the same way hover does, because a card you picked is a card
+       you are working on. */
+    .board-card-slug { color: var(--board-header-quiet-color); }
+    .board-card:hover .board-card-slug,
+    .board-card:hover .board-card-id,
+    .board-card:focus-within .board-card-slug,
+    .board-card:focus-within .board-card-id,
+    .board-card-selected .board-card-slug,
+    .board-card-selected .board-card-id {
+      color: var(--board-header-active-color);
+    }
+    /* --- COMPACT: the card header row is gone -------------------------
+       The row is lifted out of the layout entirely. It has no height, no
+       padding, no background, and NO border-bottom — and deliberately no
+       dotted or dashed line standing in for it either. There is no seam.
+       The card border is the card, and the rendered content already carries
+       the name, because a heading renders as a heading.
+       What is left of the header is a chrome layer pinned across the card's
+       top edge, carrying the grip and the three-dot button and nothing
+       else. It is absolutely positioned, so it adds no height: the card's
+       rectangle is the body's rectangle, which is what cardGeometry() hands
+       pickDropTarget(). Shorter cards, same geometry.
+       pointer-events: none on the layer, auto on the two controls, so a
+       click on the top strip of a card falls THROUGH to the card and still
+       selects it. Selection, modifier-click, shift-range and the lasso are
+       untouched by any of this. */
+    [data-density="compact"] .board-card-header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 6;
+      padding: 0;
+      min-height: 0;
+      border-bottom: none;
+      background: transparent;
+      pointer-events: none;
+      cursor: default;
+    }
+    [data-density="compact"] .board-card-slug,
+    [data-density="compact"] .board-card-id,
+    [data-density="compact"] .board-card .board-badge { display: none; }
+    /* Only the two controls take the pointer back. The grip is the header's
+       first child and the menu carries margin-left:auto, so the flex row
+       puts them in the top-left and top-right corners with no per-control
+       positioning to get wrong. */
+    [data-density="compact"] .board-card-drag,
+    [data-density="compact"] .board-card-menu { pointer-events: auto; }
+    /* An opaque chip behind the grip, so it never smears the first line of
+       text it floats over on the way in. */
+    [data-density="compact"] .board-card-drag {
+      background: var(--ui-surface-section-background-color);
+      border-radius: 3px;
+      padding: 0 2px;
+      cursor: grab;
+    }
+    [data-density="compact"] .board-card-menu .board-menu-btn {
+      background: var(--ui-surface-section-background-color);
+      padding: 0 4px;
+    }
+    /* Room reserved at the top right of the body text, so the menu never
+       overlaps content. */
+    [data-density="compact"] .board-card > .board-card-body {
+      padding-right: calc(var(--board-card-padding) + var(--board-card-chrome-space));
+    }
+    [data-density="compact"] .board-card { min-height: 0; }
+    /* --- COMPACT: a thin group bar ------------------------------------
+       Chevron, name, a bare card count, one three-dot menu. The GROUP
+       label, the group id and the separate Rename and Ungroup buttons fold
+       into that menu.
+       The 2px accent outline around the container is NOT touched — it is
+       structure, not chrome, and it is identical at both densities. */
+    [data-density="compact"] .board-group-kind,
+    [data-density="compact"] .board-group-id,
+    [data-density="compact"] .board-group-actions,
+    [data-density="compact"] .board-group-count-word { display: none; }
+    [data-density="compact"] .board-group-header { flex-wrap: nowrap; }
+    [data-density="compact"] .board-group-menu { margin-left: auto; }
+    /* THE COLLAPSE CHEVRON IS THE ONE THING COMPACT DOES NOT COMPRESS.
+       It is the control that turns a 291-line page into 11 lines, so it
+       keeps its full size and stays visible — never hover-only — at both
+       densities. Restated here rather than left to inheritance, so a later
+       change to the bar's padding cannot shrink it by accident. */
+    [data-density="compact"] .board-group-collapse {
+      font-size: 12px;
+      padding: 1px 5px;
+      opacity: 1;
+    }
+    /* --- A GROUP'S OWN CHROME RECEDES AT REST -------------------------
+       The header bar and the 2px outline soften until the pointer is
+       anywhere inside the container, then come to full strength.
+       NOT opacity, and this one is not a preference: opacity applies to an
+       element AND ALL ITS DESCENDANTS, so fading the container would fade
+       every member card inside it. The member cards must not change at all
+       — their surface, their border and their content are identical in both
+       states. So only two COLOURS move: the container's border-color and the
+       header bar's background (with the header's text colour following it,
+       or light-on-pale would be unreadable). Nothing else is touched, and
+       nothing changes size, so there is no layout shift either.
+       Written as a resting override AFTER the full-strength rules, so a
+       browser without color-mix() or :has() drops this block and the group
+       simply stays at full strength — never at an unreadable half state.
+       FOUR THINGS STAY AT FULL STRENGTH:
+         - a group the pointer is inside, including over a member card
+           (:hover on the container, which a descendant's hover satisfies);
+         - a group with focus in it;
+         - a group holding a selected card, which is also what clicking the
+           header does — a group you picked reads as active, the same rule a
+           selected card's header follows;
+         - a COLLAPSED group, always. Collapsed, the bar is the only thing on
+           screen representing its contents, so it must stay findable; a
+           receded bar with nothing under it would be a group you could lose.
+       The collapse chevron stays legible at rest either way: it draws in the
+       resting header's own full-contrast text colour, and inverts to the
+       accent-contrast colour once the bar goes to full accent. */
+    .board-group:not(:hover, :focus-within, .board-group-collapsed, :has(.board-card-selected)) {
+      border-color: color-mix(in srgb, var(--board-accent-color) var(--board-group-quiet-border), transparent);
+    }
+    .board-group:not(:hover, :focus-within, .board-group-collapsed, :has(.board-card-selected)) > .board-group-header {
+      background: color-mix(in srgb, var(--board-accent-color) var(--board-group-quiet-header), var(--ui-surface-background-color));
+      color: var(--ui-surface-color);
+    }
   `;
 
+  // The board root. It carries the density in the markup, so a board that
+  // was left compact draws compact — a density applied by the script
+  // afterwards would show one frame of the wrong layout, the same reason a
+  // collapsed group is rendered collapsed rather than closed on arrival.
+  // The panel script also mirrors the density onto this document's <html>,
+  // which is where the per-density custom property values are scoped.
   const html = `
     <style>${style}</style>
+    <div class="board-root" id="atomdown-board-root" data-density="${dens}">
     <div class="board-toolbar">
       <div class="board-title">Atomdown Board${pageName ? " — " + escapeHtml(pageName) : ""}</div>
       <div class="board-toolbar-actions">
+        <button class="board-close" id="atomdown-board-density" data-board-density="${dens}" title="${densityTitle(dens)}">${densityLabel(dens)}</button>
         <button class="board-close" id="atomdown-board-view" data-board-view="${view.boardView}" title="${view.boardView === "raw" ? "Show every card as rendered CommonMark" : "Show every card's raw markdown source"}">${view.boardView === "raw" ? "Rendered" : "Raw markdown"}</button>
         <button class="board-close" id="atomdown-board-close">Close</button>
       </div>
     </div>
     <div class="board-cards">${cardsHtml || "<p style=\"padding:16px;color:var(--subtle-color);\">No atoms found in this document.</p>"}</div>
+    </div>
   `;
 
   // Everything below runs inside the panel iframe (see
@@ -2268,7 +2600,12 @@ ${injectSharedFunctions()}
     // document's own root. If that ever fails (cross-origin, parent gone),
     // the :root fallback values baked into the <style> block above are the
     // light-theme snapshot, never a dark guess.
-    var THEME_VAR_NAMES = ${JSON.stringify(THEME_VAR_NAMES)};
+    // The theme tokens, plus the board's own knobs. The board's knobs travel
+    // the SAME road for the same reason: a space-style page styles the parent
+    // document, and a parent stylesheet cannot select anything inside this
+    // iframe. Copying named custom properties across is the only seam, and
+    // there is now exactly one of them rather than two mechanisms.
+    var THEME_VAR_NAMES = ${JSON.stringify(THEME_VAR_NAMES.concat(BOARD_VAR_NAMES))};
 
     function applyParentTheme() {
       try {
@@ -2318,6 +2655,90 @@ ${injectSharedFunctions()}
       var e = document.createElement(tag);
       if (className) e.className = className;
       return e;
+    }
+
+    // --- Display density -------------------------------------------------
+    //
+    // PRESENTATION, exactly like the collapse state and the raw/rendered
+    // choice: not one byte of the document changes with the density, and it
+    // lives in the same client-local key-value store under a key scoped to
+    // this page. There is no second storage mechanism, and no density
+    // attribute on any directive — there never will be.
+    //
+    // Switching is a CSS-level change, not a redraw: the markup is identical
+    // at both densities, so flipping the attribute is all it takes and there
+    // is no round trip to the worker. That is also why every interaction
+    // survives the switch — the elements the click, drag, lasso and geometry
+    // code reads are the same elements.
+    //
+    // The attribute is set on BOTH the board root (already in the markup, so
+    // the first paint is right) and this document's <html> (where the
+    // per-density custom property values are scoped, so a value the user set
+    // from their own space-style page still wins - see BOARD_VAR_NAMES).
+    var DENSITY = normalizeDensity(ATOMDOWN_BOARD_DENSITY);
+    var boardRoot = document.getElementById("atomdown-board-root");
+
+    function applyDensity() {
+      document.documentElement.setAttribute("data-density", DENSITY);
+      if (boardRoot) boardRoot.setAttribute("data-density", DENSITY);
+      var btn = document.getElementById("atomdown-board-density");
+      if (btn) {
+        btn.textContent = densityLabel(DENSITY);
+        btn.title = densityTitle(DENSITY);
+        btn.setAttribute("data-board-density", DENSITY);
+      }
+      // Every group menu carries the density as a state readout.
+      document.querySelectorAll("[data-density-readout]").forEach(function (node) {
+        node.textContent = "Density: " + DENSITY;
+      });
+    }
+
+    async function persistDensity() {
+      try {
+        await syscall(
+          "clientStore.set",
+          "atomdown-board.density:" + ATOMDOWN_BOARD_PAGE,
+          DENSITY,
+        );
+      } catch (e) {
+        // No store (a stub host, private browsing, an older SilverBullet).
+        // The density applied for this session; only remembering it failed.
+      }
+    }
+
+    function setDensity(next) {
+      DENSITY = normalizeDensity(next);
+      applyDensity();
+      persistDensity();
+    }
+
+    applyDensity();
+
+    var densityBtn = document.getElementById("atomdown-board-density");
+    if (densityBtn) {
+      densityBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        setDensity(otherDensity(DENSITY));
+      });
+    }
+
+    // The name and the id, as a label rather than an action, for the top of a
+    // popover. In compact the card header is gone, so this is the only place
+    // a card's identity is on screen; it is built in both densities so the
+    // menu reads the same wherever it is opened.
+    function identityLabel(kind, slug, id) {
+      var box = el("div", "board-menu-identity");
+      var name = el("span", "board-menu-identity-name");
+      name.textContent = slug || ("unnamed " + kind);
+      var idEl = el("span", "board-menu-identity-id");
+      idEl.textContent = kind + " id " + id;
+      idEl.title = slug
+        ? 'Name (slug) "' + slug + '" - the ' + kind + "'s id is " + id +
+          ". A name is an alias, not the identity."
+        : "This " + kind + " has no name yet, so " + id + " is its label.";
+      box.appendChild(name);
+      box.appendChild(idEl);
+      return box;
     }
 
     function addAttrRow(listEl, name, value, isId) {
@@ -2733,10 +3154,109 @@ ${injectSharedFunctions()}
       var rename = buildGroupRenameForm(groupId, datum ? datum.groupSlug : null);
       groupEl.insertBefore(rename.form, header.nextSibling);
 
+      // The group's three-dot menu. It is what the thin compact bar folds
+      // the GROUP label, the group id, Rename and Ungroup into, and it also
+      // carries the density readout. Built once, on the first open, the same
+      // way a card's popover is.
+      var groupMenuPopover = groupEl.querySelector(
+        '[data-group-menu-popover="' + CSS.escape(groupId) + '"]',
+      );
+      var groupMenuBtn = groupEl.querySelector(
+        '[data-group-menu-toggle="' + CSS.escape(groupId) + '"]',
+      );
+
+      function buildGroupPopover() {
+        if (!groupMenuPopover || groupMenuPopover.dataset.built === "1") return;
+        groupMenuPopover.dataset.built = "1";
+        var slug = datum ? datum.groupSlug : null;
+        groupMenuPopover.appendChild(identityLabel("group", slug, groupId));
+
+        var renameRow = el("div", "board-menu-group-row");
+        var renameItem = el("button", "board-menu-item");
+        renameItem.type = "button";
+        renameItem.textContent = "Rename";
+        renameItem.title = "Give this group a readable name. Its id (" +
+          groupId + ") does not change - a name is an alias, not the identity.";
+        renameItem.addEventListener("click", function (e) {
+          e.stopPropagation();
+          closeAllPopovers(null);
+          rename.open();
+        });
+        renameRow.appendChild(renameItem);
+
+        var ungroupItem = el("button", "board-menu-item");
+        ungroupItem.type = "button";
+        ungroupItem.textContent = "Ungroup";
+        ungroupItem.title =
+          "Remove this group's markers. Every atom inside it stays.";
+        ungroupItem.addEventListener("click", async function (e) {
+          e.stopPropagation();
+          ungroupItem.disabled = true;
+          ungroupItem.textContent = "Ungrouping...";
+          try {
+            var result = await syscall(
+              "system.invokeFunction",
+              "atomdown-board.ungroupAtoms",
+              groupId,
+            );
+            if (!result || !result.ok) {
+              window.alert(
+                "Ungroup failed: " + ((result && result.error) || "unknown error"),
+              );
+              ungroupItem.disabled = false;
+              ungroupItem.textContent = "Ungroup";
+            }
+          } catch (err) {
+            window.alert("Ungroup failed: " + err.message);
+            ungroupItem.disabled = false;
+            ungroupItem.textContent = "Ungroup";
+          }
+        });
+        renameRow.appendChild(ungroupItem);
+        groupMenuPopover.appendChild(renameRow);
+
+        // The density, as a state readout with the switch beside it. The
+        // toolbar carries the same control; this is the second place it
+        // reads, per the mockup, and both write the one DENSITY value.
+        var densityRow = el("div", "board-menu-actions");
+        var readout = el("div", "board-menu-readout");
+        readout.setAttribute("data-density-readout", "1");
+        readout.textContent = "Density: " + DENSITY;
+        var densityItem = el("button", "board-menu-item");
+        densityItem.type = "button";
+        densityItem.textContent = densityLabel(DENSITY);
+        densityItem.title = densityTitle(DENSITY);
+        densityItem.addEventListener("click", function (e) {
+          e.stopPropagation();
+          setDensity(otherDensity(DENSITY));
+          densityItem.textContent = densityLabel(DENSITY);
+          densityItem.title = densityTitle(DENSITY);
+        });
+        densityRow.appendChild(densityItem);
+        groupMenuPopover.appendChild(readout);
+        groupMenuPopover.appendChild(densityRow);
+      }
+
+      if (groupMenuBtn && groupMenuPopover) {
+        groupMenuBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var isHidden = groupMenuPopover.hasAttribute("hidden");
+          closeAllPopovers(isHidden ? groupMenuPopover : null);
+          if (isHidden) {
+            buildGroupPopover();
+            groupMenuPopover.removeAttribute("hidden");
+          } else {
+            groupMenuPopover.setAttribute("hidden", "");
+          }
+        });
+      }
+
       header.addEventListener("click", function (e) {
         // The header's own buttons have their own handlers; a click on one of
-        // them is not a selection gesture.
+        // them is not a selection gesture. Neither is a click anywhere inside
+        // the group's own menu — an input in there is not a button.
         if (e.target.closest && e.target.closest("button")) return;
+        if (e.target.closest && e.target.closest(".board-card-menu")) return;
         e.stopPropagation();
         closeAllPopovers(null);
         selectGroup(groupEl, e.metaKey || e.ctrlKey || e.shiftKey);
@@ -2900,6 +3420,24 @@ ${injectSharedFunctions()}
     function buildPopover(atom, popoverEl) {
       if (popoverEl.dataset.built === "1") return;
       popoverEl.dataset.built = "1";
+
+      // IDENTITY FIRST, as a label and not an action.
+      // In compact the card has no header, so this is the only place the
+      // name and the id appear on screen. It is built at both densities so
+      // the menu says the same thing wherever it is opened. An implicit atom
+      // has no directive and so no id of its own, and says exactly that.
+      if (atom.implicit) {
+        var implicitId = el("div", "board-menu-identity");
+        var implicitName = el("span", "board-menu-identity-name");
+        implicitName.textContent = "unnamed block";
+        var implicitNote = el("span", "board-menu-identity-id");
+        implicitNote.textContent = "no id yet (implicit atom)";
+        implicitId.appendChild(implicitName);
+        implicitId.appendChild(implicitNote);
+        popoverEl.appendChild(implicitId);
+      } else {
+        popoverEl.appendChild(identityLabel("atom", atom.slug, atom.id));
+      }
 
       // Group / Ungroup. Built once, but its label, its enabled state and its
       // tooltip are refreshed on every open by refreshGroupItem(), because
@@ -3475,6 +4013,7 @@ ${injectSharedFunctions()}
     `var ATOMDOWN_BOARD_PAGE = ${JSON.stringify(pageName || "")};\n` +
     `var ATOMDOWN_BOARD_COLLAPSED = ${JSON.stringify(collapsed)};\n` +
     `var ATOMDOWN_BOARD_VIEW = ${JSON.stringify(view)};\n` +
+    `var ATOMDOWN_BOARD_DENSITY = ${JSON.stringify(dens)};\n` +
     clientScript;
 
   return { html, script };
@@ -3514,6 +4053,28 @@ function collapsedKey(pageName) {
 
 function viewKey(pageName) {
   return "atomdown-board.view:" + (pageName || "");
+}
+
+function densityKey(pageName) {
+  return "atomdown-board.density:" + (pageName || "");
+}
+
+/**
+ * This page's remembered display density.
+ *
+ * Always returns a usable value, and that value DEFAULTS TO COMFORTABLE: a
+ * page that was never switched, a store that is missing or throwing, and a
+ * stored value in any shape this function does not recognise all come back as
+ * comfortable. Compact is only ever the answer when the user asked for it and
+ * the store still says so.
+ */
+async function loadDensity(pageName) {
+  if (!pageName) return "comfortable";
+  try {
+    return normalizeDensity(await syscall("clientStore.get", densityKey(pageName)));
+  } catch (e) {
+    return "comfortable";
+  }
 }
 
 /**
@@ -3590,7 +4151,14 @@ async function showBoard(sourceText, pageName) {
   const atoms = await renderAtomBodies(parseAtoms(sourceText));
   const collapsed = await loadCollapsedGroups(pageName);
   const viewState = await loadViewState(pageName);
-  const { html, script } = buildBoardHtml(atoms, pageName, collapsed, viewState);
+  const density = await loadDensity(pageName);
+  const { html, script } = buildBoardHtml(
+    atoms,
+    pageName,
+    collapsed,
+    viewState,
+    density,
+  );
 
   // Inset 0: this reads as a page VIEW, not a floating dialog, matching
   // Steve's expectation ("an option in the UI" that switches the current
@@ -4017,6 +4585,12 @@ const internals = {
   collapsedKey,
   viewKey,
   loadViewState,
+  densityKey,
+  loadDensity,
+  normalizeDensity,
+  otherDensity,
+  densityLabel,
+  densityTitle,
   effectiveCardView,
   sanitizeRenderedHtml,
   isSafeUrl,
