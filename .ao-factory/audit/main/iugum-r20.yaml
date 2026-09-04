@@ -1,0 +1,8 @@
+bead: iugum-r20
+namespace: main
+search_query: "Pin vendored SilverBullet to upstream 2 10 0 as a git subtree and build the wiki from source"
+candidates: []
+associated_issues: none
+duplicate_issues: none
+checked_at: 2026-09-04T01:06:06Z
+written_by: ayo-related-set

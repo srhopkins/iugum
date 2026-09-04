@@ -67,7 +67,7 @@ Those plugins break a single static program.
 
 6. **Vendored trees stay in the upstream form.**
    Edit `beads/cmd/bd` only to export `Execute` and to keep the memory hook. The patch set is in `scripts/vendor/beads-patches/`; re-vendor with `scripts/vendor-beads.sh <version>` (see `docs/beads-vendor.md`).
-   Do not edit SilverBullet.
+   Do not edit SilverBullet. `silverbullet/` is a git subtree of `srhopkins/silverbullet`, pinned to the upstream `2.10.0` tag. The pin, the remotes, the `git subtree pull` command, and the run-from-source switch are in `docs/silverbullet-vendor.md` (machine-readable pin: `scripts/vendor/silverbullet.pin`).
    Adapter wiring lives under `adapter/`, `app/`, and `main.go`.
 
 ## Add an in-process adapter
