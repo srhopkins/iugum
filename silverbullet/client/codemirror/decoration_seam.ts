@@ -58,6 +58,7 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
+  highlightActiveLine,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -176,6 +177,16 @@ export type DecorationFoldRule = {
 };
 
 export type DecorationConfig = {
+  /**
+   * Put CodeMirror's own `cm-activeLine` class on the line holding the cursor.
+   *
+   * A caller that hides something at rest needs one condition to reveal it
+   * again, or the reader can put a cursor in a line nobody can see. The
+   * cursor's own line is that condition, and CodeMirror already knows how to
+   * mark it. Off by default, because it also paints CodeMirror's active-line
+   * background.
+   */
+  activeLine: boolean;
   lines: DecorationLineRule[];
   marks: DecorationMarkRule[];
   widgets: DecorationWidgetRule[];
@@ -185,6 +196,7 @@ export type DecorationConfig = {
 };
 
 export const emptyDecorationConfig: DecorationConfig = {
+  activeLine: false,
   lines: [],
   marks: [],
   widgets: [],
@@ -378,6 +390,7 @@ export function normalizeDecorationConfig(value: unknown): DecorationConfig {
   };
 
   return {
+    activeLine: value.activeLine === true,
     lines,
     marks,
     widgets,
@@ -1109,6 +1122,9 @@ export function decorationSeam(client: Client, pageName: string): Extension[] {
     client.config.get<unknown>(decorationConfigKey, undefined),
   );
   const extensions: Extension[] = [];
+  if (config.activeLine) {
+    extensions.push(highlightActiveLine());
+  }
   if (config.lines.length > 0) {
     extensions.push(lineWrapper(config.lines));
   }

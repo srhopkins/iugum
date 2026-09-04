@@ -81,7 +81,9 @@ config.set("editorDecorations", {
   },
   -- 5. App events about the decorated page
   events = { click = true, selection = true },
-  -- 6. Pointer gestures over the decorated ranges
+  -- 6. CodeMirror's own class on the cursor's line
+  activeLine = true,
+  -- 7. Pointer gestures over the decorated ranges
   gestures = {
     drag = { handleClass = "my-grip" },
     lasso = { modifier = "alt" },
@@ -216,6 +218,16 @@ While a drag runs, the seam puts `sb-decoration-dragging` on the lines being
 carried and `sb-decoration-drop-before` or `sb-decoration-drop-after` on the
 line the drop would land against. The band is a `sb-decoration-lasso` element.
 All three are yours to style, and all three disappear when the gesture ends.
+
+# activeLine
+`activeLine = true` installs CodeMirror's own active-line highlighter, so the
+line holding the cursor carries `cm-activeLine`.
+
+It is here for one reason: a caller that hides something at rest needs one
+condition to reveal it again, or the reader can put a cursor in a line nobody
+can see and an edit lands out of sight. The cursor's own line is that
+condition. Off by default, because it also paints CodeMirror's active-line
+background - override that in your own style if you do not want it.
 
 # Styling
 The seam ships no CSS. Style your classes from [[Space Style]]:

@@ -43,9 +43,9 @@ load, on the `editor:reloadState` event, and on `editor.rebuildEditorState`.
 A malformed entry is dropped. The other entries still apply. No JSON schema is
 registered for the key, so a writer is never blocked by validation.
 
-## The six capabilities
+## The seven capabilities
 
-All six are delivered.
+All seven are delivered.
 
 1. **Line classes.** `lines` puts CSS classes on the lines of any top-level
    block, selected by Lezer node name. Nesting depth is available.
@@ -63,8 +63,12 @@ All six are delivered.
 6. **Gestures.** `gestures` turns on a drag of one decorated range onto another
    (`editor:decorationDrag`) and a rubber-band sweep over decorated ranges
    (`editor:decorationLasso`).
+7. **Active line.** `activeLine` installs CodeMirror's own active-line
+   highlighter, so `cm-activeLine` marks the cursor's line. A caller that hides
+   something at rest needs one condition to reveal it, or a cursor can land in
+   a line nobody can see.
 
-Capabilities 5 and 6 were added for the inline atomdown card view
+Capabilities 5, 6 and 7 were added for the inline atomdown card view
 (`plugs/atomdown-inline/`). They are the reason the seam was built generic: the
 feature needed drag-to-reorder and lasso selection in the page, and the seam
 grew one section each instead of the fork growing a second patch.
@@ -87,6 +91,7 @@ config.set("editorDecorations", {
   folds = {
     { from = 152, to = 245 },
   },
+  activeLine = true,
   events = { click = true, selection = true },
   gestures = {
     drag = { handleClass = "my-grip" },
@@ -110,6 +115,7 @@ config.set("editorDecorations", {
 | `widgets[].inline` | boolean | render at exactly `at`, on the same line as the text |
 | `widgets[].class` | string | class on the element, next to `sb-decoration-widget` |
 | `widgets[].id` | string | name reported on a click in the widget |
+| `activeLine` | boolean | put `cm-activeLine` on the cursor's line |
 | `folds[].from`, `.to` | integer | source range the editor's folding can collapse |
 | `events.click` | boolean | dispatch `editor:decorationClick` |
 | `events.selection` | boolean | dispatch `editor:decorationSelect` |
@@ -163,7 +169,7 @@ Feature logic stays in the plug and in that CSS.
 | File | Change |
 |---|---|
 | `silverbullet/client/codemirror/decoration_seam.ts` | new. The whole seam. |
-| `silverbullet/client/codemirror/decoration_seam.test.ts` | new. 19 vitest cases. |
+| `silverbullet/client/codemirror/decoration_seam.test.ts` | new. 20 vitest cases. |
 | `silverbullet/docs/Editor Decorations.md` | new. The user-facing page. |
 | `silverbullet/client/codemirror/editor_state.ts` | 2 hunks: 1 import line, 1 spread line with a comment. |
 | `silverbullet/plug-api/types/client.ts` | 1 hunk: 4 event names appended to the `AppEvent` union. |
@@ -171,10 +177,10 @@ Feature logic stays in the plug and in that CSS.
 Three new files, two hunks in one upstream file, one hunk in another. A new file
 cannot conflict on a subtree pull. Both hunks are appends.
 
-The gesture and fold work of 2026-09 added **no new file and no new hunk**: it
-grew `decoration_seam.ts`, which is already ours, and added two more event names
-inside the hunk that was already in `plug-api/types/client.ts`. That is the
-whole point of the seam's shape.
+The gesture, fold and active-line work of 2026-09 added **no new file and no new
+hunk**: it grew `decoration_seam.ts`, which is already ours, and added two more
+event names inside the hunk that was already in `plug-api/types/client.ts`. That
+is the whole point of the seam's shape.
 
 ## Re-derive the patch after a subtree pull
 
