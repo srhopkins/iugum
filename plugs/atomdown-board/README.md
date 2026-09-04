@@ -45,10 +45,17 @@ NOT implemented" below.
    group, defaulted from the first heading in the selection, so one
    confirm is usually enough. Cmd-Z undoes either. See "Selection and
    grouping" and "Names (slugs)".
-6. Closing the modal (the **Close** button, or running the toggle command
+7. An `atom-group`'s cards are wrapped in one bordered container with a
+   header bar carrying the group's name, its id, and **Rename** and
+   **Ungroup**. Clicking the header selects the whole group; the toggle at
+   its left collapses it. See "One group, one object".
+8. Closing the modal (the **Close** button, or running the toggle command
    again) returns to the normal page. The document is otherwise
    unchanged unless you explicitly clicked Save on an attribute edit or
    dragged a card.
+9. If the board was open on a page when you reload it, it reopens by itself.
+   It never opens on a page you did not open it on, and Close means closed.
+   See "Remembering the view".
 
 The `id` attribute is shown but is never editable and can never be
 removed — Atomdown Core requires every atom to have one
@@ -241,8 +248,10 @@ its id and digest carried through unchanged.
   subtle monospace. A card with no slug shows just the id, as before. The id
   is on the card either way, because it is the value Steve needs when citing
   an atom from another page, and its tooltip says so.
-- A group badge reads `group <slug>`, falling back to `group <id>`. The real
-  group id is always in the badge's tooltip.
+- A group's header bar shows the slug first, in the body font, then the id in
+  small subtle monospace -- the same order and the same weights a card uses. A
+  group with no slug shows just the id. The real group id is always in the
+  header's tooltip too. See "One group, one object".
 
 ### Naming a group at creation
 
@@ -275,11 +284,133 @@ attribute, and the attribute editor already rewrites exactly one directive
 line. Saving a changed name redraws the board so the card relabels itself;
 saving with the name unchanged leaves the popover open, as it always did.
 
-For a **group**, a member card's menu gains **Rename group**, which opens the
-same naming form prefilled with the current name. A group has no card of its
-own -- each member card carries its badge -- so a member's menu is where a
-group-level action belongs, next to Ungroup. Clearing the field removes the
-`slug` attribute; the group then shows its id again.
+For a **group**, **Rename** on the group's own header bar opens the same
+naming form, prefilled with the current name, directly under the header.
+Clearing the field removes the `slug` attribute; the group then shows its id
+again.
+
+That used to be a **Rename group** item in a member card's menu. It has been
+removed. The item only ever existed because a group had no UI of its own; a
+group now has a header bar, so a group-level action lives there and a card's
+menu holds card-level things.
+
+## One group, one object
+
+Steve, seeing the earlier per-card marking: *"I like the blue we use on
+grouped items can we make it lasso the entire group not just individual
+cards"*, and *"yes to header bar"*.
+
+An `atom-group`'s members render inside ONE bordered container. The border is
+`--ui-accent-color` -- the same SilverBullet accent token already used by the
+drop indicator and the selection ring, so the board still has exactly one
+blue. There is no second hue anywhere in this design.
+
+Because the container is what says "group", the two per-card group markings
+are gone: no left accent stripe on a member card, and no `group <slug>` badge.
+Repeating the group's identity on every member is what made a group read as
+several objects.
+
+**The per-card treatment that survives is contrast, not a second border.** The
+container's own field is the plain surface (`--ui-surface-background-color`)
+and a member card keeps the ordinary tinted card background, so the cards read
+as contents *on* the group. A background difference cannot be confused with
+either the container edge or a selection ring, which a second border could.
+
+### The header bar
+
+One row across the top of the container, in the accent colour with
+`--ui-accent-contrast-color` text. Left to right:
+
+- a collapse toggle,
+- a drag handle,
+- the word `GROUP`, small and uppercase,
+- the **name** (the slug), then the id in monospace, then the card count,
+- **Rename** and **Ungroup**, right-aligned.
+
+**Clicking the header selects every member card.** That is the whole
+integration with the existing logic: the selection is still a set of cards, so
+`selectedUnitKeys()` collapses them to the one `group:<id>` unit and
+`groupMenuState()` applies unchanged -- Ungroup acts on the group, and Group
+stays disabled with "Atomdown Core 1 does not permit a group inside a group"
+when a group is in the selection. No special case was added anywhere.
+
+### Selection stays legible against the container
+
+The container edge and the selected-card border are the same token, so
+selection separates itself by **shape**, not by colour: a selected card is a
+double ring -- its own 2px border, then a second 2px ring set 2px outside it
+with the container's field showing through the gap -- plus a lifted
+background. A container is one continuous edge; a selected card is a banded
+edge with a gap in it.
+
+The second ring is an `outline`, not a second `box-shadow`: `box-shadow` is
+already spoken for by the drop indicator, and an outline takes no layout
+space, so selecting a card never nudges the geometry the drop decision just
+measured.
+
+### Collapse and expand
+
+The collapse toggle hides a group's cards, leaving its header. On the real
+291-line page that turns 82 cards into a scannable list of the 11 named
+groups, which is the point.
+
+**This is presentation state and is never written to the document.** There is
+no `collapsed` attribute on any directive and there never will be: Atomdown
+carries no layout, position, card or board metadata. It lives in
+SilverBullet's own client-local key-value store -- see "Remembering the view".
+
+A collapsed group is still draggable, which is why the header has a drag
+handle: every member card's own handle is hidden. And `cardGeometry()` feeds
+`pickDropTarget()` the *container's* rectangle once for a collapsed group,
+instead of its hidden cards. A hidden element reports an all-zero rectangle,
+which would otherwise sort above every real card and make every drop land at
+the top. `pickDropTarget()` itself is untouched and still pure; it is simply
+given the right rectangles.
+
+## Remembering the view
+
+Steve: *"every refresh to the page and I have to go re-apply the atomdown view
+can we make that view persist on refresh if I am on that view (not make it
+default, just don't lose it)"*.
+
+Two pieces of presentation state are remembered, both keyed by page name:
+
+| key | value |
+|-----|-------|
+| `atomdown-board.open:<page>` | `true` while the board is showing on that page |
+| `atomdown-board.collapsed:<page>` | the ids of that page's collapsed groups |
+
+`restoreBoard()` is wired to `editor:pageLoaded` and `editor:pageReloaded`
+(the manifest declares the events; SilverBullet dispatches them from
+`client/content_manager.ts`). It opens the board only for a page whose key is
+set. It is **never a default**: a page whose key was never written gets
+nothing, and Close deletes the key, so closed stays closed.
+
+**The store is `clientStore`, not `localStorage`.** A plug's code runs in a
+Web Worker, and a worker has no `localStorage` at all, so the worker could not
+read a flag the panel wrote there. `clientStore`
+(`client/plugos/syscalls/clientStore.ts`) is reachable from both the worker
+and the panel iframe through the one syscall bridge, so there is a single
+persistence mechanism in this file rather than two. It is per-browser and
+durable across a reload -- not session-scoped, because "do not lose it on
+refresh" is the requirement and Close already clears it. None of it is
+visible to the space's files or to any other device.
+
+Three things stop a reopen racing the editor:
+
+1. SilverBullet dispatches those events *after* it has set the editor state
+   for the new page, so `editor.getText` already holds that page's text.
+2. The text is checked: an empty buffer means the editor is not ready after
+   all, so the board stays closed rather than drawing an empty one. The
+   remembered flag survives, so the next load reopens.
+3. The page is re-read immediately before drawing, so a second navigation that
+   overtakes the first cannot leave the previous page's board on screen.
+   Navigating to a page with no remembered board also takes down a panel still
+   showing from the previous one.
+
+Every read and write is failure-tolerant. A store that is missing or throwing
+(private browsing, site data blocked, an older host, a test stub) degrades to
+"not remembered" -- a closed board and expanded groups -- never to an error.
 
 ### Shape and collisions
 
@@ -518,8 +649,16 @@ go test ./plugs/atomdown-board        # same tests, through go test ./...
   or `editor.reloadPage` at all. That is the check that keeps Cmd-Z working —
   a future change that reaches for `space.writePage` fails the suite.
 - **The rendered panel**, read back from the `editor.showPanel` call the worker
-  makes to redraw the board, so "the badge shows the name and keeps the id
-  reachable" is asserted rather than eyeballed.
+  makes to redraw the board, or from `buildBoardHtml` directly. That is what
+  asserts one container per group, a header carrying the name and the id, no
+  per-card group stripe or badge, a selection ring that differs from the
+  container by shape, a collapsed group's cards hidden, and that every literal
+  colour in the stylesheet is a `:root` theme fallback -- rather than
+  eyeballing any of it.
+- **The remembered view**, driven with a `clientStore` stub: reopen when it was
+  open, stay closed when it was closed, per-page isolation, Close clearing the
+  flag, an empty buffer and an overtaking navigation both drawing nothing, and
+  a store that throws degrading to a closed board rather than an error.
 
 The panel script is not duplicated for testing. `injectSharedFunctions()`
 stringifies those same functions into the panel script at render time, and a
@@ -595,6 +734,51 @@ ever adds a `"github:.../atomdown-board.plug.js"` entry to `CONFIG.md`
 for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
+
+## What was verified — the group container, the header bar and view persistence
+
+Against a copy of the real 291-line page (`Todo/running`, 82 atoms, 11 named
+groups), driving the exported plug functions through a recording syscall stub:
+
+- Open, Group two adjacent atoms with a name, Rename that group, two reopens
+  (one with a group collapsed), Ungroup, Close. **Three `editor.replaceRange`
+  calls** for the three content actions, **zero** space writes and **zero**
+  `editor.reloadPage`. Opening, reopening and collapsing wrote nothing at all.
+- The real `atomdown` binary on the result: `lint` **ok**, `verify` **ok - no
+  drift**. The diff against the original is exactly the two group marker
+  lines. 93 ids before and after, and all 82 `digest` values byte-identical.
+- Ungroup returned the buffer to the original **byte for byte**.
+- No banned attribute (`collapsed`, `selected`, `open=`, `x=`, `y=`) appears
+  anywhere in the written text.
+
+In a real browser (Chromium via Playwright), driving the panel script with
+real DOM events on that page's rendered panel:
+
+- 11 group containers for 11 groups, 82 cards, **zero** `board-card-grouped`
+  elements, **zero** `board-badge-group` elements, **zero** "Rename group"
+  items. Cards stay in document order, nested or not.
+- Header reads `▾ ✥✥ GROUP decisions KATZ94NM 3 cards Rename Ungroup`. Header
+  background and container border both resolve to `rgb(35, 131, 226)` -- the
+  one accent value.
+- Clicking the header selected exactly the group's 3 member cards and nothing
+  else. A member card's menu then read **Ungroup**, enabled. Adding a
+  standalone card to that selection and opening *its* menu read **Group**,
+  disabled, "Atomdown Core 1 does not permit a group inside a group".
+- A selected card inside the container computed to `border 2px` +
+  `outline 2px` at `outline-offset 2px` with the hover background, against the
+  container's single `border 2px` and plain background.
+- Collapse hid the cards (`height 0`) while the container stayed visible,
+  flipped `aria-expanded` to `false`, and wrote one
+  `clientStore.set("atomdown-board.collapsed:Todo/running", ["KATZ94NM"])` --
+  and no `editor.replaceRange` and no space write. With a group collapsed,
+  **zero** all-zero rectangles reached the drop geometry. Expanding restored
+  the cards.
+- Rename prefilled `decisions`, previewed `Writes slug="big-decisions".` for
+  typed `Big Decisions!!`, and invoked
+  `atomdown-board.setGroupSlug("KATZ94NM", "big-decisions")`. Ungroup invoked
+  `atomdown-board.ungroupAtoms("KATZ94NM")`.
+- Collapsing all 11 groups turned the 291-line page into a one-screen list of
+  its 11 group names.
 
 ## What was verified — names (slugs)
 
