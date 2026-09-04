@@ -43,9 +43,9 @@ load, on the `editor:reloadState` event, and on `editor.rebuildEditorState`.
 A malformed entry is dropped. The other entries still apply. No JSON schema is
 registered for the key, so a writer is never blocked by validation.
 
-## The seven capabilities
+## The eight capabilities
 
-All seven are delivered.
+All eight are delivered.
 
 1. **Line classes.** `lines` puts CSS classes on the lines of any top-level
    block, selected by Lezer node name. Nesting depth is available.
@@ -63,12 +63,16 @@ All seven are delivered.
 6. **Gestures.** `gestures` turns on a drag of one decorated range onto another
    (`editor:decorationDrag`) and a rubber-band sweep over decorated ranges
    (`editor:decorationLasso`).
-7. **Active line.** `activeLine` installs CodeMirror's own active-line
+7. **Hover classes.** `marks[].hoverClasses` adds `<class>-hover` to every line
+   of a mark while the pointer is inside its range. CSS cannot do this: a range
+   spanning several blocks is several sibling line elements with nothing
+   wrapping them, and CSS has no previous-sibling combinator.
+8. **Active line.** `activeLine` installs CodeMirror's own active-line
    highlighter, so `cm-activeLine` marks the cursor's line. A caller that hides
    something at rest needs one condition to reveal it, or a cursor can land in
    a line nobody can see.
 
-Capabilities 5, 6 and 7 were added for the inline atomdown card view
+Capabilities 5 to 8 were added for the inline atomdown card view
 (`plugs/atomdown-inline/`). They are the reason the seam was built generic: the
 feature needed drag-to-reorder and lasso selection in the page, and the seam
 grew one section each instead of the fork growing a second patch.
@@ -109,6 +113,7 @@ config.set("editorDecorations", {
 | `marks[].class` | string | class on the marked text, and the stem of the line classes |
 | `marks[].id` | string | name reported on events, defaults to `class` |
 | `marks[].lineClasses` | boolean | add `<class>-line` plus `-first`, `-mid`, `-last` |
+| `marks[].hoverClasses` | boolean | add `<class>-hover` while the pointer is in the range |
 | `widgets[].at` | integer | any source offset in the target block |
 | `widgets[].html` | string | HTML for the element's content |
 | `widgets[].side` | `before` or `after` | above (default) or below the line at `at` |
@@ -169,7 +174,7 @@ Feature logic stays in the plug and in that CSS.
 | File | Change |
 |---|---|
 | `silverbullet/client/codemirror/decoration_seam.ts` | new. The whole seam. |
-| `silverbullet/client/codemirror/decoration_seam.test.ts` | new. 20 vitest cases. |
+| `silverbullet/client/codemirror/decoration_seam.test.ts` | new. 22 vitest cases. |
 | `silverbullet/docs/Editor Decorations.md` | new. The user-facing page. |
 | `silverbullet/client/codemirror/editor_state.ts` | 2 hunks: 1 import line, 1 spread line with a comment. |
 | `silverbullet/plug-api/types/client.ts` | 1 hunk: 4 event names appended to the `AppEvent` union. |
@@ -177,8 +182,8 @@ Feature logic stays in the plug and in that CSS.
 Three new files, two hunks in one upstream file, one hunk in another. A new file
 cannot conflict on a subtree pull. Both hunks are appends.
 
-The gesture, fold and active-line work of 2026-09 added **no new file and no new
-hunk**: it grew `decoration_seam.ts`, which is already ours, and added two more
+The gesture, fold, hover-class and active-line work of 2026-09 added **no new
+file and no new hunk**: it grew `decoration_seam.ts`, which is already ours, and added two more
 event names inside the hunk that was already in `plug-api/types/client.ts`. That
 is the whole point of the seam's shape.
 
@@ -226,7 +231,14 @@ npm run check
 in the upstream tree at the pin, so it is not a gate. The seam's own files are
 biome clean.
 
-## One trap worth remembering
+## Two traps worth remembering
+
+A ViewPlugin's `eventHandlers` fired for `mousedown` but never for
+`mousemove`. The `EditorView.domEventHandlers` facet form, which the click
+handler already used, works for both. Use the facet form for a new pointer
+handler.
+
+
 
 CodeMirror ignores every DOM event that starts inside a widget
 (`WidgetType.ignoreEvent` defaults to `true`). With that default, a click on a

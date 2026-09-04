@@ -112,6 +112,7 @@ This is the same rule shape the client uses for its own `sb-line-*` classes.
 | `class` | class on the marked text, and the stem of the line classes |
 | `id` | name reported back on events, defaults to `class` |
 | `lineClasses` | add `<class>-line` to every covered line, plus `<class>-first`, `<class>-mid` and `<class>-last` by position |
+| `hoverClasses` | add `<class>-hover` to every covered line while the pointer is inside the range |
 
 Use `lineClasses` to draw one continuous outline around a group that spans
 several blocks. A single-line range gets both `-first` and `-last`.
@@ -119,6 +120,15 @@ several blocks. A single-line range gets both `-first` and `-last`.
 Offsets are read once, when the editor state is built. After that they are
 mapped through your edits, so a mark stays on the text it was put on. A mark
 past the end of the document is clamped.
+
+`hoverClasses` exists because CSS cannot express it. A range that spans several
+blocks is several sibling line elements with nothing wrapping them, and CSS has
+no previous-sibling combinator, so a line cannot react to a pointer on the line
+below it. Only the client knows which decorated range the pointer is in, so it
+says so as a class. Write the quiet state on `<class>-line` and the active one
+on `<class>-hover`. A block widget attached above the range can reach the same
+state with `:has(+ .your-class-hover)`, because its next sibling is the range's
+own first line.
 
 ## widgets
 | Field | Meaning |
