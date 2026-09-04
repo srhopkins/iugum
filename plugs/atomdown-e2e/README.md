@@ -78,10 +78,9 @@ to catch a regression on an ordinary change.
 `defects.test.ts` reintroduces real defects and asserts the rules REPORT them.
 A test that has never failed is not a test.
 
-Defects are injected as a `space-style` page seeded into the test's own
-temporary space, so the CSS is genuinely present in the real page, arrives
-through a supported mechanism, and never touches the plugs. It has one honest
-limit: CSS reproduces every geometry and visibility defect and cannot reproduce
+Each defect is a stylesheet injected into the real page once the view is open,
+so the broken rule is genuinely in the document and never touches the plugs.
+It has one honest limit: CSS reproduces every geometry and visibility defect and cannot reproduce
 a state-machine defect. So rules 1, 2, 3 and 5 and the grip's side are proven
 against injected CSS, and the state-machine halves are covered by the "the
 toggle did nothing" guard inside rule 4's own round-trip helper.
