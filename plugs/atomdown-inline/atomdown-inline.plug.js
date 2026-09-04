@@ -587,6 +587,63 @@ function setGroupSlugInSource(sourceText, groupId, slug) {
   };
 }
 
+/**
+ * Renames one atom: rewrites the `slug` attribute on its own directive line.
+ *
+ * The block's text is untouched, so the atom's `digest` cannot go stale, and
+ * the id stays first - a slug is not identity (SPEC.md). Attribute order is
+ * id, then slug, then whatever else the directive carried, which is the order
+ * `atomdown emit` writes, so emitting afterwards is a no-op.
+ */
+function setAtomSlugInSource(sourceText, atomId, slug) {
+  const lines = String(sourceText || "").split("\n");
+  let lineIndex = -1;
+  let match = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(ATOM_TAG_RE);
+    if (!m) continue;
+    const parsed = parseAttrs(m[2]);
+    const idAttr = parsed.find(function (a) { return a.name === "id"; });
+    if (idAttr && idAttr.value === atomId) {
+      lineIndex = i;
+      match = m;
+      break;
+    }
+  }
+  if (lineIndex === -1) {
+    return { ok: false, error: "Could not find that atom (did the page change?)" };
+  }
+  const attrs = parseAttrs(match[2]);
+  const cleanSlug = sanitizeSlug(slug);
+  const rest = attrs.filter(function (a) {
+    return a.name !== "id" && a.name !== "slug";
+  });
+  const ordered = [{ name: "id", value: atomId }];
+  if (cleanSlug !== "") ordered.push({ name: "slug", value: cleanSlug });
+  lines[lineIndex] = serializeAtomLine(
+    match[1],
+    ordered.concat(rest),
+    match[3],
+  );
+  const conflict = slugConflict(sourceText, cleanSlug, atomId);
+  return {
+    ok: true,
+    text: lines.join("\n"),
+    slug: cleanSlug,
+    warning: conflict.warning,
+  };
+}
+
+/** Rebuilds an `<atom .../>` directive line from an attribute list. */
+function serializeAtomLine(prefix, attrs, suffix) {
+  const attrText = attrs
+    .map(function (a) {
+      return a.name + '="' + escapeAttrValue(a.value) + '"';
+    })
+    .join(" ");
+  return prefix + attrText + " " + suffix;
+}
+
 /** Removes one line, and one of two blank lines it leaves against each other. */
 function removeLineCollapsingSeam(lines, index) {
   const out = lines.slice(0, index).concat(lines.slice(index + 1));
@@ -672,7 +729,9 @@ function computeCards(sourceText) {
       cards.push({
         // A member card is not a movable unit — its group is. So its key is
         // namespaced away from the unit keys, and the drag code ignores it.
-        cardKey: "card:" + unit.groupId + ":" + index,
+        cardKey: member.implicit === true
+          ? "card:" + unit.groupId + ":" + index
+          : "atom:" + member.atomIds[0],
         unitKey: unit.unitKey,
         groupUnitKey: unit.unitKey,
         startLine: member.startLine + innerFirst,
@@ -727,7 +786,7 @@ function gripHtml(title) {
  * have nowhere at all to appear. Name in body text, id in small grey
  * monospace, in that order - identity stays visible, the name reads first.
  */
-function cardHeaderHtml(unit, nested) {
+function cardHeaderHtml(unit, nested, directiveText) {
   const id = unit.atomIds[0];
   const slug = unit.implicit ? null : unit.atomSlug;
   const name = slug
@@ -739,6 +798,14 @@ function cardHeaderHtml(unit, nested) {
     ? '<span class="atomdown-card-badge" title="This block has no atom directive of its own.">no id</span>'
     : '<span class="atomdown-card-id" title="' +
       escapeHtml("Atomdown id " + id) + '">' + escapeHtml(id) + "</span>";
+  const peek = directivePeekHtml(directiveText);
+  // GRIP LEFT, MENU RIGHT, and both are absolutely positioned in the header's
+  // own padding rather than laid out in the row. That is what lets the grip
+  // sit on the left, as the panel has it, while the slug still starts on the
+  // same left edge as the body text: an in-flow grip ahead of the slug would
+  // push the slug right by the grip's width even while the grip is invisible.
+  // Being out of flow also means neither control moves anything when it
+  // appears on hover.
   return '<span class="atomdown-card-head' + (nested ? " atomdown-nested" : "") +
     '">' +
     gripHtml(
@@ -746,7 +813,32 @@ function cardHeaderHtml(unit, nested) {
         ? "Drag to move this block"
         : "Drag to move " + slugOrId(slug, id),
     ) +
-    name + idLabel + "</span>";
+    name + idLabel +
+    '<span class="atomdown-card-menu" role="button" tabindex="0" title="' +
+    escapeHtml("Actions for " + slugOrId(slug, id)) + '">&#8943;</span>' +
+    "</span>" + peek;
+}
+
+/**
+ * The directive peek: the raw directive text, rendered inside the card box and
+ * shown only while the text cursor is in that directive's own line.
+ *
+ * Why a copy in the header rather than revealing the line itself. A directive
+ * line is collapsed to nothing at rest. Revealing the line would grow it, which
+ * moves the card and everything below it; and the line sits ABOVE the card's
+ * top edge, so its text would appear outside the box. A copy in the header is
+ * absolutely positioned, so it costs no layout at all and cannot move anything,
+ * and it is clipped to the card's own left and right padding, so it can never
+ * cross a border.
+ *
+ * Nothing but the cursor shows it. Hover does not, because the only reason to
+ * read a directive is that you are editing it.
+ */
+function directivePeekHtml(directiveText) {
+  const text = String(directiveText == null ? "" : directiveText).trim();
+  if (text === "") return "";
+  return '<span class="atomdown-directive-peek">' + escapeHtml(text) +
+    "</span>";
 }
 
 /**
@@ -762,11 +854,13 @@ function cardHeaderHtml(unit, nested) {
  * element that was clicked, so one widget can carry several controls without
  * needing a widget each.
  */
-function groupHeaderHtml(unit, memberCount) {
+function groupHeaderHtml(unit, memberCount, directiveText, collapsed) {
   const name = slugOrId(unit.groupSlug, unit.groupId);
   const word = memberCount === 1 ? "card" : "cards";
   return [
-    '<span class="atomdown-group-collapse" title="Collapse or expand this group">&#9662;</span>',
+    '<span class="atomdown-group-collapse" title="' +
+    (collapsed ? "Expand this group" : "Collapse this group") + '">' +
+    (collapsed ? "&#9656;" : "&#9662;") + "</span>",
     '<span class="atomdown-grip atomdown-group-grip" title="Drag to move the whole group">&#10303;</span>',
     '<span class="atomdown-group-kind">group</span>',
     '<span class="atomdown-group-name" title="' +
@@ -778,15 +872,27 @@ function groupHeaderHtml(unit, memberCount) {
     escapeHtml(String(unit.groupId)) + "</span>",
     '<span class="atomdown-group-count">' + memberCount + " " + word +
     "</span>",
-    '<span class="atomdown-group-actions">' +
-    '<span class="atomdown-group-btn atomdown-group-rename" title="' +
-    escapeHtml(
-      "Give this group a readable name. Its id (" + unit.groupId +
-      ") does not change - a name is an alias, not the identity.",
-    ) + '">Rename</span>' +
-    '<span class="atomdown-group-btn atomdown-group-ungroup" title="Remove this group\'s markers. Every atom inside it stays.">Ungroup</span>' +
-    "</span>",
+    '<span class="atomdown-group-menu" role="button" tabindex="0" title="' +
+    escapeHtml("Actions for group " + name) + '">&#8943;</span>',
+    directivePeekHtml(directiveText),
   ].join("");
+}
+
+/**
+ * What one press of the toggle should do.
+ *
+ * `remembered` is the per-page flag in clientStore. `applied` is whether the
+ * decorations for this page are actually on screen right now.
+ *
+ * The press follows what the READER CAN SEE, not the flag. The flag can say
+ * "on" while nothing is drawn - a page load that arrived before the editor had
+ * text leaves the flag set and draws nothing - and in that state a press that
+ * trusted the flag would turn the view "off" and look like a dead button. That
+ * is the bug this function exists to make impossible, and why it is a pure
+ * function with a test rather than an `if` inside the command.
+ */
+function toggleAction(remembered, applied) {
+  return applied ? "off" : "on";
 }
 
 /**
@@ -813,11 +919,12 @@ function groupHeaderHtml(unit, memberCount) {
  * per selected unit, so a selection is purely visual and never reaches the
  * document.
  */
-function buildDecorations(sourceText, selectedKeys) {
+function buildDecorations(sourceText, selectedKeys, collapsedGroupIds) {
   const scan = computeCards(sourceText);
   const lines = scan.lines;
   const starts = lineStarts(lines);
   const selected = dedupeKeys(selectedKeys);
+  const collapsed = dedupeKeys(collapsedGroupIds);
   const marks = [];
   const widgets = [];
   const folds = [];
@@ -832,7 +939,11 @@ function buildDecorations(sourceText, selectedKeys) {
   /** One atom's card: the box mark and the header row above it. */
   function addCard(unit, boxKey, nested) {
     if (hasNoContent(unit, lines)) return null;
-    const box = span(contentFirstLine(unit), unit.endLine);
+    const first = contentFirstLine(unit);
+    // The directive's own source line, when the atom has one. It is the text
+    // the header's peek shows while the cursor is in it.
+    const directiveText = first > unit.startLine ? lines[unit.startLine] : "";
+    const box = span(first, unit.endLine);
     marks.push({
       id: boxKey,
       from: box.from,
@@ -848,7 +959,7 @@ function buildDecorations(sourceText, selectedKeys) {
       at: box.from,
       side: "before",
       class: "atomdown-card-header" + (nested ? " atomdown-nested" : ""),
-      html: cardHeaderHtml(unit, nested),
+      html: cardHeaderHtml(unit, nested, directiveText),
     });
     return box;
   }
@@ -886,16 +997,29 @@ function buildDecorations(sourceText, selectedKeys) {
         // cannot express that.
         hoverClasses: true,
       });
+      const isCollapsed = collapsed.indexOf(unit.groupId) !== -1;
       widgets.push({
         id: "unit:" + unit.unitKey,
         at: unitSpan.from,
         side: "before",
-        class: "atomdown-group-header",
-        html: groupHeaderHtml(unit, members.length),
+        class: "atomdown-group-header" +
+          (isCollapsed ? " atomdown-group-collapsed" : ""),
+        html: groupHeaderHtml(
+          unit,
+          members.length,
+          lines[unit.startLine],
+          isCollapsed,
+        ),
       });
       const openLineEnd = starts[unit.startLine] + lines[unit.startLine].length;
       if (unitSpan.to > openLineEnd) {
-        folds.push({ from: openLineEnd, to: unitSpan.to });
+        // Declarative: the seam makes the editor's fold set match this flag,
+        // so the caret is idempotent and never has to move the cursor.
+        folds.push({
+          from: openLineEnd,
+          to: unitSpan.to,
+          ...(isCollapsed ? { collapsed: true } : {}),
+        });
       }
       // Each atom inside the group gets its own card, inset by the group's
       // interior padding.
@@ -908,7 +1032,7 @@ function buildDecorations(sourceText, selectedKeys) {
             atomSlug: card.atomSlug,
             implicit: card.implicit,
           },
-          card.cardKey,
+          "box:" + card.cardKey,
           true,
         );
       });
@@ -965,6 +1089,14 @@ function emptyDecorations() {
     events: {},
     gestures: {},
   };
+}
+
+/** The first `box:` name in a seam mark list: the card the pointer is on. */
+function firstBoxKey(names) {
+  const found = (names || []).find(function (name) {
+    return typeof name === "string" && name.indexOf("box:atom:") === 0;
+  });
+  return found ? found.slice("box:".length) : null;
 }
 
 /** The first `unit:` name in a seam mark list, as a unit key. */
@@ -1087,6 +1219,50 @@ function inlineOnKey(pageName) {
   return "atomdown-inline.on:" + (pageName || "");
 }
 
+function collapsedKey(pageName) {
+  return "atomdown-inline.collapsed:" + (pageName || "");
+}
+
+/** The ids of this page's collapsed groups. Always an array. */
+async function loadCollapsed(pageName) {
+  if (!pageName) return [];
+  try {
+    const stored = await syscall("clientStore.get", collapsedKey(pageName));
+    return Array.isArray(stored)
+      ? stored.filter(function (id) { return typeof id === "string"; })
+      : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function rememberCollapsed(pageName, ids) {
+  if (!pageName) return;
+  try {
+    if (ids.length > 0) {
+      await syscall("clientStore.set", collapsedKey(pageName), ids);
+    } else {
+      await syscall("clientStore.delete", collapsedKey(pageName));
+    }
+  } catch (e) {
+    // Not remembering is acceptable; failing the reader's action is not.
+  }
+}
+
+/**
+ * Flip one group's collapsed state.
+ *
+ * Pure, so the control's behaviour is testable without a browser. The set is
+ * the whole state: there is no alternation from memory, which is what used to
+ * desynchronise the caret and leave a collapsed group stuck shut.
+ */
+function toggleCollapsed(ids, groupId) {
+  const out = dedupeKeys(ids);
+  const at = out.indexOf(groupId);
+  if (at === -1) return out.concat([groupId]);
+  return out.filter(function (_, i) { return i !== at; });
+}
+
 /** True only when this exact page was left with the inline view on. */
 async function isInlineOn(pageName) {
   if (!pageName) return false;
@@ -1110,8 +1286,14 @@ async function rememberInlineOn(pageName, on) {
 /** The page the decorations on screen were built for, and its selection. */
 let activePage = null;
 let selectedUnitKeys = [];
-/** Groups this session folded from the header caret. Never persisted. */
-const collapsedGroups = new Set();
+/**
+ * The group ids collapsed on the page being shown.
+ *
+ * Persisted per page, like the view's own on/off flag, so a collapsed group is
+ * still collapsed after a reload. It is presentation: no byte of it reaches
+ * the document.
+ */
+let collapsedGroupIds = [];
 
 async function warnUser(message, level) {
   if (!message) return;
@@ -1140,7 +1322,7 @@ async function writeDecorations(text, rebuild) {
   await syscall(
     "config.set",
     "editorDecorations",
-    buildDecorations(text, selectedUnitKeys),
+    buildDecorations(text, selectedUnitKeys, collapsedGroupIds),
   );
   if (rebuild) {
     await syscall("editor.rebuildEditorState");
@@ -1156,6 +1338,7 @@ async function writeDecorations(text, rebuild) {
 
 async function clearDecorations(rebuild) {
   selectedUnitKeys = [];
+  collapsedGroupIds = [];
   activePage = null;
   await syscall("config.set", "editorDecorations", emptyDecorations());
   if (rebuild) await syscall("editor.rebuildEditorState");
@@ -1174,7 +1357,7 @@ async function applyEdit(oldText, newText) {
   await syscall(
     "config.set",
     "editorDecorations",
-    buildDecorations(newText, selectedUnitKeys),
+    buildDecorations(newText, selectedUnitKeys, collapsedGroupIds),
   );
   await syscall("editor.replaceRange", edit.from, edit.to, edit.insert);
   return true;
@@ -1192,7 +1375,9 @@ async function applyEdit(oldText, newText) {
  */
 async function toggleInline() {
   const page = await syscall("editor.getCurrentPage").catch(() => undefined);
-  if (await isInlineOn(page)) {
+  const remembered = await isInlineOn(page);
+  const applied = await isInlineApplied();
+  if (toggleAction(remembered, applied) === "off") {
     await rememberInlineOn(page, false);
     await clearDecorations(true);
     return { ok: true, on: false };
@@ -1201,8 +1386,27 @@ async function toggleInline() {
   await rememberInlineOn(page, true);
   activePage = page;
   selectedUnitKeys = [];
+  collapsedGroupIds = await loadCollapsed(page);
   await writeDecorations(text, true);
   return { ok: true, on: true };
+}
+
+/**
+ * Whether decorations for the inline view are on screen right now.
+ *
+ * Read from the config key the seam actually renders from, not from this
+ * plug's own memory: a worker can be restarted while the page stays up, and
+ * then module state says "off" while the page still shows cards.
+ */
+async function isInlineApplied() {
+  try {
+    const current = await syscall("config.get", "editorDecorations");
+    return !!(current && Array.isArray(current.marks) &&
+      current.marks.length > 0);
+  } catch (e) {
+    // No config read available: fall back to what this worker remembers.
+    return activePage !== null;
+  }
 }
 
 /**
@@ -1230,6 +1434,7 @@ async function restoreInline(pageName) {
     }
     activePage = page;
     selectedUnitKeys = [];
+    collapsedGroupIds = await loadCollapsed(page);
     await writeDecorations(text, true);
     return { ok: true, on: true };
   } catch (e) {
@@ -1286,22 +1491,15 @@ async function onDecorationClick(event) {
     return await collapseGroup(firstUnitKey(event.marks));
   }
 
-  if (classes.indexOf("atomdown-group-rename") !== -1) {
-    const key = firstUnitKey(event.marks);
-    return key && key.indexOf("group:") === 0
-      ? await renameGroupHere(key.slice("group:".length))
-      : { ok: false, error: "No group under that button" };
-  }
-
-  if (classes.indexOf("atomdown-group-ungroup") !== -1) {
-    const key = firstUnitKey(event.marks);
-    return key && key.indexOf("group:") === 0
-      ? await ungroupHere(key.slice("group:".length))
-      : { ok: false, error: "No group under that button" };
-  }
-
   if (classes.indexOf("atomdown-group-menu") !== -1) {
     return await openGroupMenu(firstUnitKey(event.marks));
+  }
+
+  if (classes.indexOf("atomdown-card-menu") !== -1) {
+    return await openCardMenu(
+      firstBoxKey(event.marks),
+      firstUnitKey(event.marks),
+    );
   }
 
   const unitKey = firstUnitKey(event.marks);
@@ -1389,27 +1587,181 @@ async function collapseGroup(unitKey) {
     ? unitKey.slice("group:".length)
     : null;
   if (!groupId) return { ok: false, error: "No group under that control" };
+  const page = await syscall("editor.getCurrentPage").catch(() => undefined);
+  collapsedGroupIds = toggleCollapsed(collapsedGroupIds, groupId);
+  await rememberCollapsed(page, collapsedGroupIds);
+  // Rewrite the decorations with the new flag and let the seam reconcile the
+  // editor's own fold set to it. The cursor is not moved: moving it into the
+  // marker line is what used to reveal the directive on a collapse click.
+  const text = await syscall("editor.getText");
+  await writeDecorations(text, false);
+  return {
+    ok: true,
+    groupId,
+    collapsed: collapsedGroupIds.indexOf(groupId) !== -1,
+  };
+}
+
+/**
+ * What a card's three-dot menu offers, as a pure list.
+ *
+ * The first entry is the card's identity, name then id, and choosing it does
+ * nothing: it is the label, the same way the panel's popover puts identity at
+ * the top of the menu rather than making you hunt for it.
+ *
+ * `atomdown edit attributes` is deliberately NOT here. The panel needs a form
+ * because its cards are a copy of the document; inline the directive line is
+ * the attributes, one keystroke away, so the menu offers to put the cursor
+ * there instead and the peek shows the line while you are in it.
+ */
+function cardMenuItems(name, id, implicit, inGroup) {
+  const items = [{
+    name: implicit ? "This block has no atom directive" : name + "  -  " + id,
+    description: "Identity. Choosing this does nothing.",
+    action: "label",
+  }];
+  if (!implicit) {
+    items.push({
+      name: "Copy id",
+      description: id,
+      action: "copy-id",
+    });
+    if (name && name !== id) {
+      items.push({ name: "Copy name", description: name, action: "copy-slug" });
+    }
+    items.push({
+      name: "Rename",
+      description: "Change this atom's readable name. Its id does not change.",
+      action: "rename",
+    });
+    items.push({
+      name: "Show the directive",
+      description: "Put the cursor on this atom's directive line, where its attributes live.",
+      action: "reveal",
+    });
+  }
+  items.push(
+    inGroup
+      ? {
+        name: "Ungroup",
+        description: "Remove this group's markers. Every atom inside it stays.",
+        action: "ungroup",
+      }
+      : {
+        name: "Group selection",
+        description: "Wrap the lassoed blocks in one atom-group.",
+        action: "group",
+      },
+  );
+  return items;
+}
+
+/**
+ * The card's three-dot menu, in SilverBullet's own filterable picker.
+ */
+async function openCardMenu(boxKey, unitKey) {
+  const atomId = boxKey && boxKey.indexOf("atom:") === 0
+    ? boxKey.slice("atom:".length)
+    : null;
+  const text = await syscall("editor.getText");
+  const scan = computeCards(text);
+  const card = scan.cards.find(function (c) {
+    return c.atomIds[0] === atomId;
+  });
+  const implicit = !atomId || (card && card.implicit === true);
+  const slug = card ? card.atomSlug : null;
+  const name = slugOrId(slug, atomId);
+  const inGroup = unitKey ? unitKey.indexOf("group:") === 0 : false;
+  const items = cardMenuItems(name, atomId, implicit, inGroup);
+  const choice = await syscall(
+    "editor.filterBox",
+    "Card",
+    items.map(function (i) {
+      return { name: i.name, description: i.description };
+    }),
+    implicit ? "This block has no id" : name + " (" + atomId + ")",
+  );
+  if (!choice) return { ok: true, cancelled: true };
+  const picked = items.find(function (i) { return i.name === choice.name; });
+  if (!picked || picked.action === "label") return { ok: true };
+  switch (picked.action) {
+    case "copy-id":
+      await copyText(atomId);
+      return { ok: true, copied: atomId };
+    case "copy-slug":
+      await copyText(name);
+      return { ok: true, copied: name };
+    case "rename":
+      return await renameAtomHere(atomId, slug);
+    case "reveal":
+      return await revealDirective(atomId);
+    case "ungroup":
+      return await ungroupHere(unitKey.slice("group:".length));
+    case "group":
+      return await groupSelection();
+  }
+  return { ok: true };
+}
+
+/** Copies text, and says so, without letting a missing clipboard fail. */
+async function copyText(value) {
+  try {
+    await syscall("editor.copyToClipboard", String(value == null ? "" : value));
+    await warnUser('Copied "' + value + '"', "info");
+  } catch (e) {
+    await warnUser("Could not copy: " + e.message);
+  }
+}
+
+/** Renames one atom from its own menu. */
+async function renameAtomHere(atomId, currentSlug) {
+  if (!atomId) return { ok: false, error: "This block has no atom directive" };
+  const current = await syscall("editor.getText");
+  const typed = await syscall(
+    "editor.prompt",
+    "Atom name",
+    currentSlug || "",
+  );
+  if (typed === undefined) return { ok: true, cancelled: true };
+  const result = setAtomSlugInSource(current, atomId, typed);
+  if (!result.ok) {
+    await warnUser(result.error);
+    return result;
+  }
+  if (result.text === current) return { ok: true, unchanged: true };
+  await applyEdit(current, result.text);
+  await warnUser(result.warning);
+  return { ok: true, slug: result.slug };
+}
+
+/**
+ * Puts the cursor on one atom's directive line.
+ *
+ * That is the inline answer to "edit attributes": the line IS the attributes,
+ * and the cursor being there is exactly the condition that reveals the peek,
+ * so the reader can see and edit the bytes with no form in between.
+ */
+async function revealDirective(atomId) {
+  if (!atomId) return { ok: false, error: "This block has no atom directive" };
   const text = await syscall("editor.getText");
   const scan = computeUnits(text);
-  const unit = scan.units.find(function (u) {
-    return u.unitKey === "group:" + groupId;
-  });
-  if (!unit) return { ok: false, error: "Could not find that group" };
   const starts = lineStarts(scan.lines);
-  await syscall("editor.moveCursor", starts[unit.startLine]);
-  // The host offers fold and unfold but no read of the fold state, so which
-  // way the caret goes is remembered here. It is not persisted: a reload draws
-  // every group open, which is the truthful state after a rebuild.
-  const collapsing = !collapsedGroups.has(groupId);
-  try {
-    await syscall(collapsing ? "editor.fold" : "editor.unfold");
-  } catch (e) {
-    await warnUser("Could not collapse that group: " + e.message);
-    return { ok: false, error: e.message };
+  for (let i = 0; i < scan.lines.length; i++) {
+    const m = scan.lines[i].match(ATOM_TAG_RE);
+    if (!m) continue;
+    const idAttr = parseAttrs(m[2]).find(function (a) { return a.name === "id"; });
+    if (idAttr && idAttr.value === atomId) {
+      await syscall("editor.moveCursor", starts[i]);
+      try {
+        await syscall("editor.focus");
+      } catch (e) {
+        // Focus is what reveals the peek, but not being able to ask for it is
+        // not a reason to fail the action.
+      }
+      return { ok: true, line: i + 1 };
+    }
   }
-  if (collapsing) collapsedGroups.add(groupId);
-  else collapsedGroups.delete(groupId);
-  return { ok: true, collapsed: collapsing, groupId };
+  return { ok: false, error: "Could not find that atom's directive" };
 }
 
 /**
@@ -1607,6 +1959,10 @@ const internals = {
   insertGroupMarkers,
   removeGroupMarkers,
   setGroupSlugInSource,
+  setAtomSlugInSource,
+  serializeAtomLine,
+  firstBoxKey,
+  cardMenuItems,
   removeLineCollapsingSeam,
   minimalEdit,
   newAtomdownId,
@@ -1622,6 +1978,10 @@ const internals = {
   contentFirstLine,
   hasNoContent,
   cardHeaderHtml,
+  directivePeekHtml,
+  toggleAction,
+  toggleCollapsed,
+  collapsedKey,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,

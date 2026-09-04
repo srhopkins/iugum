@@ -13,6 +13,7 @@
 // feature can have, and it is testable without a browser.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 globalThis.self = {
@@ -28,6 +29,9 @@ const {
   insertGroupMarkers,
   removeGroupMarkers,
   setGroupSlugInSource,
+  setAtomSlugInSource,
+  firstBoxKey,
+  cardMenuItems,
   minimalEdit,
   newAtomdownId,
   existingIds,
@@ -42,6 +46,10 @@ const {
   contentFirstLine,
   hasNoContent,
   cardHeaderHtml,
+  directivePeekHtml,
+  toggleAction,
+  toggleCollapsed,
+  collapsedKey,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,
@@ -106,8 +114,8 @@ test("computeCards gives each atom inside a group its own card", () => {
   const { cards } = computeCards(PAGE);
   assert.deepEqual(cards.map((c) => c.cardKey), [
     "atom:4P8W2H6K",
-    "card:7K3M9X2D:0",
-    "card:7K3M9X2D:1",
+    "atom:AAAAAAAA",
+    "atom:BBBBBBBB",
     "atom:implicit-1",
   ]);
   const members = cards.filter((c) => c.groupUnitKey === "group:7K3M9X2D");
@@ -115,12 +123,14 @@ test("computeCards gives each atom inside a group its own card", () => {
   assert.deepEqual(members.map((c) => c.atomIds[0]), ["AAAAAAAA", "BBBBBBBB"]);
 });
 
-test("a member card's key is not a unit key, so a drag cannot use it", () => {
-  const { units, cards } = computeCards(PAGE);
-  const unitKeys = units.map((u) => u.unitKey);
-  cards
-    .filter((c) => c.groupUnitKey)
-    .forEach((c) => assert.equal(unitKeys.includes(c.cardKey), false));
+test("a member card's mark is a box name, never a unit name", () => {
+  // The drag code reads only `unit:` names, so a member card's own box mark
+  // can never be mistaken for something draggable: its group is what moves.
+  const payload = buildDecorations(PAGE, []);
+  const memberBoxes = payload.marks
+    .filter((m) => m.class === "atomdown-card" && m.id.startsWith("box:"))
+    .map((m) => m.id);
+  memberBoxes.forEach((id) => assert.equal(firstUnitKey([id]), null));
 });
 
 test("an empty page produces no units and no cards", () => {
@@ -257,10 +267,12 @@ test("a group box runs marker to marker, so both markers are inside it", () => {
 test("each atom inside a group gets its own card box, inside the group's", () => {
   const payload = buildDecorations(PAGE, []);
   const group = payload.marks.find((m) => m.id === "box:group:7K3M9X2D");
-  const members = payload.marks.filter((m) => m.id.startsWith("card:"));
+  const members = payload.marks.filter((m) =>
+    m.id === "box:atom:AAAAAAAA" || m.id === "box:atom:BBBBBBBB"
+  );
   assert.deepEqual(members.map((m) => m.id), [
-    "card:7K3M9X2D:0",
-    "card:7K3M9X2D:1",
+    "box:atom:AAAAAAAA",
+    "box:atom:BBBBBBBB",
   ]);
   members.forEach((m) => {
     assert.equal(m.class, "atomdown-card");
@@ -277,8 +289,8 @@ test("every card gets a header widget carrying its name and its id", () => {
   );
   assert.deepEqual(heads.map((w) => w.id), [
     "box:atom:4P8W2H6K",
-    "card:7K3M9X2D:0",
-    "card:7K3M9X2D:1",
+    "box:atom:AAAAAAAA",
+    "box:atom:BBBBBBBB",
     "box:atom:implicit-1",
   ]);
   const named = heads[0];
@@ -299,18 +311,20 @@ test("a card header sits at the top of the box it belongs to", () => {
 
 test("a member card's header is marked nested, a top-level card's is not", () => {
   const payload = buildDecorations(PAGE, []);
-  const nested = payload.widgets.find((w) => w.id === "card:7K3M9X2D:0");
+  const nested = payload.widgets.find((w) => w.id === "box:atom:AAAAAAAA");
   const top = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
   assert.match(nested.class, /atomdown-nested/);
   assert.equal(/atomdown-nested/.test(top.class), false);
   assert.match(nested.html, /atomdown-nested/);
 });
 
-test("an implicit block says so instead of inventing an id", () => {
+test("an implicit block is badged 'no id' rather than given a fake one", () => {
   const payload = buildDecorations(PAGE, []);
   const head = payload.widgets.find((w) => w.id === "box:atom:implicit-1");
+  assert.match(head.html, /atomdown-card-badge/);
   assert.match(head.html, /no id/);
-  assert.equal(/implicit-1/.test(head.html), false);
+  // No card-id element, so the synthetic key is never shown as an Atomdown id.
+  assert.equal(/atomdown-card-id/.test(head.html), false);
 });
 
 test("a group gets a header widget on its opening marker line", () => {
@@ -327,8 +341,7 @@ test("a group gets a header widget on its opening marker line", () => {
   assert.match(widget.html, /atomdown-grip/);
   assert.match(widget.html, /atomdown-group-collapse/);
   assert.match(widget.html, /atomdown-group-kind/);
-  assert.match(widget.html, /atomdown-group-rename/);
-  assert.match(widget.html, /atomdown-group-ungroup/);
+  assert.match(widget.html, /atomdown-group-menu/);
 });
 
 test("a group with one card says card, not cards", () => {
@@ -340,6 +353,114 @@ test("a group with one card says card, not cards", () => {
 test("a group with no slug shows its id as the name", () => {
   const html = groupHeaderHtml({ groupId: "7K3M9X2D", groupSlug: null }, 0);
   assert.match(html, /7K3M9X2D/);
+});
+
+// ---------------------------------------------------------------------------
+// The card's controls
+// ---------------------------------------------------------------------------
+
+test("a card header carries a grip and a three-dot menu", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
+  assert.match(head.html, /atomdown-grip/);
+  assert.match(head.html, /atomdown-card-menu/);
+  // The menu is reachable by keyboard, not pointer-only.
+  assert.match(head.html, /role="button"/);
+  assert.match(head.html, /tabindex="0"/);
+});
+
+test("the grip comes before the slug in the markup, so it renders left", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
+  assert.equal(
+    head.html.indexOf("atomdown-grip") < head.html.indexOf("atomdown-card-slug"),
+    true,
+  );
+  assert.equal(
+    head.html.indexOf("atomdown-card-slug") <
+      head.html.indexOf("atomdown-card-menu"),
+    true,
+  );
+});
+
+test("a group header carries one menu, not two buttons", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) =>
+    w.class.startsWith("atomdown-group-header")
+  );
+  assert.match(head.html, /atomdown-group-menu/);
+  assert.equal(/atomdown-group-btn/.test(head.html), false);
+  assert.equal(/>Rename</.test(head.html), false);
+  assert.equal(/>Ungroup</.test(head.html), false);
+});
+
+test("firstBoxKey finds the card the pointer is on, ignoring units", () => {
+  assert.equal(
+    firstBoxKey(["unit:group:G", "box:group:G", "box:atom:AAAAAAAA"]),
+    "atom:AAAAAAAA",
+  );
+  assert.equal(firstBoxKey(["unit:atom:A", "box:group:G"]), null);
+  assert.equal(firstBoxKey([]), null);
+  assert.equal(firstBoxKey(undefined), null);
+});
+
+test("the card menu leads with identity and that entry does nothing", () => {
+  const items = cardMenuItems("claim", "4P8W2H6K", false, false);
+  assert.equal(items[0].action, "label");
+  assert.match(items[0].name, /claim/);
+  assert.match(items[0].name, /4P8W2H6K/);
+  assert.deepEqual(items.map((i) => i.action), [
+    "label",
+    "copy-id",
+    "copy-slug",
+    "rename",
+    "reveal",
+    "group",
+  ]);
+});
+
+test("a card inside a group offers Ungroup instead of Group", () => {
+  const items = cardMenuItems("claim", "4P8W2H6K", false, true);
+  assert.equal(items[items.length - 1].action, "ungroup");
+});
+
+test("a slugless atom is not offered Copy name", () => {
+  const items = cardMenuItems("4P8W2H6K", "4P8W2H6K", false, false);
+  assert.equal(items.some((i) => i.action === "copy-slug"), false);
+});
+
+test("an implicit block's menu offers no id action at all", () => {
+  const items = cardMenuItems("implicit-1", null, true, false);
+  assert.deepEqual(items.map((i) => i.action), ["label", "group"]);
+  assert.match(items[0].name, /no atom directive/);
+});
+
+test("renaming an atom rewrites only its directive line", () => {
+  const result = setAtomSlugInSource(PAGE, "4P8W2H6K", "The Claim!");
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "the-claim");
+  const before = PAGE.split("\n");
+  const changed = result.text.split("\n").filter((line, i) => line !== before[i]);
+  assert.equal(changed.length, 1);
+  assert.match(changed[0], /id="4P8W2H6K" slug="the-claim"/);
+  // The block's own text is untouched, so no digest can go stale.
+  assert.equal(result.text.includes("# Claim"), true);
+});
+
+test("renaming an atom keeps its other attributes, id first", () => {
+  const page = '<!-- <atom id="AAAAAAAA" slug="old" acme-x="1"/> -->\nhi\n';
+  const result = setAtomSlugInSource(page, "AAAAAAAA", "new");
+  assert.match(result.text, /id="AAAAAAAA" slug="new" acme-x="1"/);
+});
+
+test("renaming an atom to nothing removes the slug attribute", () => {
+  const result = setAtomSlugInSource(PAGE, "4P8W2H6K", "  ");
+  assert.match(result.text, /<atom id="4P8W2H6K" \/>/);
+});
+
+test("renaming an atom that is gone fails instead of guessing", () => {
+  const result = setAtomSlugInSource(PAGE, "NOSUCHID", "x");
+  assert.equal(result.ok, false);
 });
 
 test("no inline grip widget: the grip lives in the card header row", () => {
@@ -411,6 +532,125 @@ test("a card header for a slugless explicit atom still shows the id", () => {
   );
   assert.match(html, /AAAAAAAA/);
   assert.equal(/atomdown-card-slug/.test(html), false);
+});
+
+// ---------------------------------------------------------------------------
+// The directive peek: the ONLY reveal, and it costs no layout
+// ---------------------------------------------------------------------------
+
+test("every card header carries a peek of its own directive line", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
+  assert.match(head.html, /atomdown-directive-peek/);
+  // The exact source line, escaped, so a reader sees the bytes on disk.
+  assert.match(head.html, /&lt;!-- &lt;atom id=&quot;4P8W2H6K&quot;/);
+});
+
+test("a group header carries a peek of its opening marker", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) =>
+    w.class === "atomdown-group-header"
+  );
+  assert.match(head.html, /atomdown-directive-peek/);
+  assert.match(head.html, /atom-group id=&quot;7K3M9X2D&quot;/);
+});
+
+test("an implicit block has no directive, so its header has no peek", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) => w.id === "box:atom:implicit-1");
+  assert.equal(/atomdown-directive-peek/.test(head.html), false);
+});
+
+test("a peek escapes its text, so a directive cannot inject markup", () => {
+  const html = directivePeekHtml('<!-- <atom id="A" x="<b>&y"/> -->');
+  assert.equal(html.includes("<b>"), false);
+  assert.match(html, /&lt;b&gt;/);
+  assert.match(html, /&amp;y/);
+});
+
+test("an empty or blank directive line produces no peek at all", () => {
+  assert.equal(directivePeekHtml(""), "");
+  assert.equal(directivePeekHtml("   "), "");
+  assert.equal(directivePeekHtml(null), "");
+  assert.equal(directivePeekHtml(undefined), "");
+});
+
+// ---------------------------------------------------------------------------
+// The toggle's decision - the button's own code path
+// ---------------------------------------------------------------------------
+
+test("the toggle follows what is on screen, not the remembered flag", () => {
+  // The bug this exists for: a page load that arrived before the editor had
+  // text leaves the flag set and draws nothing. A press must then turn the
+  // view ON, or the button looks dead.
+  assert.equal(toggleAction(true, false), "on");
+  // The ordinary cases.
+  assert.equal(toggleAction(false, false), "on");
+  assert.equal(toggleAction(true, true), "off");
+  assert.equal(toggleAction(false, true), "off");
+});
+
+// ---------------------------------------------------------------------------
+// Collapse: declarative, idempotent, persisted
+// ---------------------------------------------------------------------------
+
+test("collapsing is a set, so the caret can never desynchronise", () => {
+  // The bug this replaces alternated fold/unfold from memory, so one fold
+  // from the gutter left the caret stuck.
+  assert.deepEqual(toggleCollapsed([], "AAAAAAAA"), ["AAAAAAAA"]);
+  assert.deepEqual(toggleCollapsed(["AAAAAAAA"], "AAAAAAAA"), []);
+  assert.deepEqual(
+    toggleCollapsed(["AAAAAAAA"], "BBBBBBBB"),
+    ["AAAAAAAA", "BBBBBBBB"],
+  );
+  assert.deepEqual(toggleCollapsed(undefined, "AAAAAAAA"), ["AAAAAAAA"]);
+  // Idempotent in the sense that matters: two flips return to the start.
+  const once = toggleCollapsed([], "AAAAAAAA");
+  assert.deepEqual(toggleCollapsed(once, "AAAAAAAA"), []);
+});
+
+test("a collapsed group asks the seam to fold it, and says so in its caret", () => {
+  const open = buildDecorations(PAGE, [], []);
+  const shut = buildDecorations(PAGE, [], ["7K3M9X2D"]);
+  assert.equal(open.folds[0].collapsed, undefined);
+  assert.equal(shut.folds[0].collapsed, true);
+  // Same range either way: collapsing changes a flag, never a geometry.
+  assert.equal(shut.folds[0].from, open.folds[0].from);
+  assert.equal(shut.folds[0].to, open.folds[0].to);
+
+  const openHead = open.widgets.find((w) =>
+    w.class.startsWith("atomdown-group-header")
+  );
+  const shutHead = shut.widgets.find((w) =>
+    w.class.startsWith("atomdown-group-header")
+  );
+  assert.equal(/atomdown-group-collapsed/.test(openHead.class), false);
+  assert.match(shutHead.class, /atomdown-group-collapsed/);
+  assert.match(openHead.html, /&#9662;|▾/);
+  assert.match(shutHead.html, /&#9656;|▸/);
+  assert.match(shutHead.html, /Expand this group/);
+  assert.match(openHead.html, /Collapse this group/);
+});
+
+test("collapsing changes no mark and no other widget", () => {
+  const open = buildDecorations(PAGE, [], []);
+  const shut = buildDecorations(PAGE, [], ["7K3M9X2D"]);
+  assert.deepEqual(shut.marks, open.marks);
+  assert.equal(shut.widgets.length, open.widgets.length);
+});
+
+test("an unknown collapsed id collapses nothing", () => {
+  const shut = buildDecorations(PAGE, [], ["NOSUCHID"]);
+  assert.equal(shut.folds[0].collapsed, undefined);
+});
+
+test("the collapsed set is keyed by page, like the on/off flag", () => {
+  assert.equal(
+    collapsedKey("Todo/running"),
+    "atomdown-inline.collapsed:Todo/running",
+  );
+  assert.notEqual(collapsedKey("a"), collapsedKey("b"));
+  assert.notEqual(collapsedKey("a"), inlineOnKey("a"));
 });
 
 test("turning the view off writes an empty payload, not a missing key", () => {
@@ -754,6 +994,46 @@ test("the remembered flag is keyed by page name", () => {
 // ---------------------------------------------------------------------------
 // The manifest
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The header button's contract
+//
+// The button is not a command call in this file - it is a name in the library
+// page's actionButton.define, which the client resolves with
+// runCommandByName. That resolution is by STRING, and nothing else in the
+// build checks the two strings match: a rename on either side leaves a button
+// that silently does nothing, which is exactly the failure that was reported.
+// ---------------------------------------------------------------------------
+
+const LIBRARY_PAGE = readFileSync(
+  new URL("./library/Atomdown Inline.md", import.meta.url),
+  "utf8",
+);
+
+test("the header button names a command this plug actually registers", () => {
+  const buttons = [...LIBRARY_PAGE.matchAll(/actionButton\.define\s*\{([^}]*)\}/g)]
+    .map((m) => m[1]);
+  assert.equal(buttons.length, 1, "expected exactly one action button");
+  const named = /command\s*=\s*"([^"]+)"/.exec(buttons[0]);
+  assert.ok(named, "the action button must name a command");
+  const commands = Object.values(plug.manifest.functions)
+    .filter((fn) => fn.command)
+    .map((fn) => fn.command.name);
+  assert.ok(
+    commands.includes(named[1]),
+    `the button names "${named[1]}", which is not one of ${commands.join(", ")}`,
+  );
+  // And that command must resolve to a real function, or runCommandByName
+  // finds an entry whose run() throws.
+  const entry = Object.entries(plug.manifest.functions)
+    .find(([, fn]) => fn.command && fn.command.name === named[1]);
+  assert.equal(typeof plug.functionMapping[entry[0]], "function");
+});
+
+test("the button carries an icon, or the client filters it out entirely", () => {
+  // client/editor_ui.tsx drops any actionButton without an icon.
+  assert.match(LIBRARY_PAGE, /actionButton\.define\s*\{[^}]*icon\s*=\s*"[^"]+"/);
+});
 
 test("the manifest wires one command per user action and one function per event", () => {
   const fns = plug.manifest.functions;

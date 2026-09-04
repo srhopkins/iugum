@@ -20,7 +20,7 @@ import (
 // break the build. It exists because `node --test` exits 0 for a file that
 // registers no tests at all: a bad import or a stray early return would make
 // this Go test pass while covering nothing.
-const minimumPlugTests = 50
+const minimumPlugTests = 90
 
 // TestPlugJavaScript runs atomdown-inline.test.mjs with node's built-in test
 // runner. node is not a build dependency of iugum, so this skips rather than
