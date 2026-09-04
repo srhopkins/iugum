@@ -27,6 +27,21 @@ functions:
   saveAttrs:
     path: "./atomdown-board.js:saveAttrs"
 
+  # Saves one card's edited raw markdown as ONE editor transaction, so a
+  # single Cmd-Z undoes the whole edit session. It rewrites the block's
+  # content lines only, never the directive line above them, so no edit can
+  # reach an id, a slug or any other attribute. It deliberately leaves the
+  # atom's digest alone - see refreshDigests.
+  saveAtomBlock:
+    path: "./atomdown-board.js:saveAtomBlock"
+
+  # Rewrites the recorded digest of one atom, or of a reviewed set, to match
+  # those blocks' current content. This is the only thing in the plug that
+  # ever writes a digest, because a digest is a claim that someone reviewed
+  # this exact content and nothing may refresh it as a side effect.
+  refreshDigests:
+    path: "./atomdown-board.js:refreshDigests"
+
   reorderAtom:
     path: "./atomdown-board.js:reorderAtom"
 
