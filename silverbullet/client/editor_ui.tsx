@@ -1,63 +1,48 @@
-import { closeSearchPanel } from "@codemirror/search";
-import { runScopeHandlers } from "@codemirror/view";
-import { getNameFromPath } from "@silverbulletmd/silverbullet/lib/ref";
-import type {
-  FilterOption,
-  NotificationAction,
-  NotificationType,
-} from "@silverbulletmd/silverbullet/type/client";
-import { notificationDismissTimeouts } from "@silverbulletmd/silverbullet/type/client";
-import { h, render as preactRender } from "preact";
-import { useEffect, useReducer } from "preact/hooks";
-import * as featherIcons from "preact-feather";
-import type { Client } from "./client.ts";
 import { Confirm, Prompt } from "./components/basic_modals.tsx";
-import { isMacLike, keyboardHint } from "../plug-api/lib/shortcut.ts";
-import { kebabToPascal } from "./lib/feather_icons.ts";
+import { CommandPalette, keyboardHint } from "./components/command_palette.tsx";
 import { FilterList } from "./components/filter.tsx";
-import { NavigatorDock, NavigatorModal } from "./navigator/ui/panels.tsx";
-import { useNavigatorSlot } from "./navigator/ui/slots.ts";
-import { Panel } from "./components/panel.tsx";
+import { AnythingPicker } from "./components/anything_picker.tsx";
 import { TopBar } from "./components/top_bar.tsx";
-import * as mdi from "./filtered_material_icons.ts";
 import reducer from "./reducer.ts";
 import {
   type Action,
   type AppViewState,
   initialViewState,
 } from "./types/ui.ts";
+import * as featherIcons from "preact-feather";
+import * as mdi from "./filtered_material_icons.ts";
+import { h, render as preactRender } from "preact";
+import { useEffect, useReducer } from "preact/hooks";
+import { closeSearchPanel } from "@codemirror/search";
+import { runScopeHandlers } from "@codemirror/view";
+import type { Client } from "./client.ts";
+import { Panel } from "./components/panel.tsx";
+import { safeRun } from "@silverbulletmd/silverbullet/lib/async";
+import type {
+  FilterOption,
+  NotificationAction,
+  NotificationType,
+} from "@silverbulletmd/silverbullet/type/client";
+import { notificationDismissTimeouts } from "@silverbulletmd/silverbullet/type/client";
+import {
+  getNameFromPath,
+  getPathExtension,
+  isMarkdownPath,
+  isValidName,
+  parseToRef,
+  type Path,
+} from "@silverbulletmd/silverbullet/lib/ref";
 
 export class MainUI {
   viewState: AppViewState = initialViewState;
 
   constructor(private client: Client) {
-    // Safari treats Cmd-O as its own "Open File..." shortcut and wins before
-    // any bubble-phase listener -- including CodeMirror's own keymap and the
-    // bubble-phase fallback right below -- ever sees the keydown. Caught here
-    // at capture phase, ahead of that default, and only prevented when a
-    // handler actually claims it (an unbound Cmd-O still opens Safari's
-    // dialog, same as before). `stopPropagation` keeps the bubble-phase
-    // listeners from also matching the same chord and running it twice.
-    globalThis.addEventListener(
-      "keydown",
-      (ev) => {
-        const cmd = isMacLike ? ev.metaKey : ev.ctrlKey;
-        if (!cmd || ev.altKey || ev.shiftKey || ev.key.toLowerCase() !== "o") {
-          return;
-        }
-        if (runScopeHandlers(client.editorView, ev, "editor")) {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-      },
-      { capture: true },
-    );
-
     // Make keyboard shortcuts work even when the editor is in read only mode or not focused
     globalThis.addEventListener("keydown", (ev) => {
       if (!client.editorView.hasFocus) {
         const target = ev.target as HTMLElement;
         if (target.className === "cm-textfield" && ev.key === "Escape") {
+          // Search panel is open, let's close it
           console.log("Closing search panel");
           closeSearchPanel(client.editorView);
           return;
@@ -66,6 +51,7 @@ export class MainUI {
           target.closest(".cm-content") ||
           target.closest(".cm-vim-panel")
         ) {
+          // In some cm element, let's back out
           return;
         } else if (
           target.closest('input, textarea, select, [contenteditable="true"]')
@@ -94,6 +80,7 @@ export class MainUI {
           if (fieldHandlesNatively) {
             return;
           }
+          // Otherwise fall through and forward the shortcut to the editor.
         }
         if (runScopeHandlers(client.editorView, ev, "editor")) {
           ev.preventDefault();
@@ -102,11 +89,13 @@ export class MainUI {
     });
 
     globalThis.addEventListener("touchstart", (ev) => {
+      // Launch the page picker on a two-finger tap
       if (ev.touches.length === 2) {
         ev.stopPropagation();
         ev.preventDefault();
-        void client.startPageNavigate("page");
+        client.startPageNavigate("page");
       }
+      // Launch the command palette using a three-finger tap
       if (ev.touches.length === 3) {
         ev.stopPropagation();
         ev.preventDefault();
@@ -121,13 +110,8 @@ export class MainUI {
     });
   }
 
-  private progressMap = new Map<
-    "index" | "sync",
-    {
-      percentage: number;
-      timeout: ReturnType<typeof setTimeout>;
-    }
-  >();
+  // Progress circle handling
+  private progressTimeout?: ReturnType<typeof setTimeout>;
 
   viewDispatch: (action: Action) => void = () => {};
 
@@ -168,50 +152,20 @@ export class MainUI {
     }
   }
 
-  private dispatchProgressState() {
-    if (this.progressMap.size === 0) {
-      this.viewDispatch({ type: "set-progress" });
-      return;
+  showProgress(progressPercentage?: number, progressType?: "sync" | "index") {
+    this.viewDispatch({
+      type: "set-progress",
+      progressPercentage,
+      progressType,
+    });
+    if (this.progressTimeout) {
+      clearTimeout(this.progressTimeout);
     }
-
-    // Sync takes precedence over index so the indicator
-    // doesn't flip between the two when both streams are firing.
-    const progressType: "sync" | "index" = this.progressMap.has("sync")
-      ? "sync"
-      : "index";
-    const entry = this.progressMap.get(progressType);
-    if (entry) {
+    this.progressTimeout = setTimeout(() => {
       this.viewDispatch({
         type: "set-progress",
-        progressPercentage: entry.percentage,
-        progressType,
       });
-    }
-  }
-
-  private removeProgressType(progressType: "index" | "sync") {
-    const entry = this.progressMap.get(progressType);
-    if (entry) {
-      clearTimeout(entry.timeout);
-      this.progressMap.delete(progressType);
-    }
-  }
-
-  showProgress(progressType: "sync" | "index", progressPercentage?: number) {
-    this.removeProgressType(progressType);
-
-    if (progressPercentage !== undefined) {
-      const timeout = setTimeout(() => {
-        this.removeProgressType(progressType);
-        this.dispatchProgressState();
-      }, 5000);
-      this.progressMap.set(progressType, {
-        percentage: progressPercentage,
-        timeout,
-      });
-    }
-
-    this.dispatchProgressState();
+    }, 5000);
   }
 
   filterBox(
@@ -276,12 +230,6 @@ export class MainUI {
 
     const client = this.client;
 
-    const navSlots = {
-      lhs: useNavigatorSlot("lhs"),
-      rhs: useNavigatorSlot("rhs"),
-      modal: useNavigatorSlot("modal"),
-    };
-
     useEffect(() => {
       if (viewState.current) {
         document.title =
@@ -330,56 +278,135 @@ export class MainUI {
         : "off";
     }, [viewState.uiOptions.markdownSyntaxRendering]);
 
-    // A navigator dock reserves top-bar space the same way a plug's own
-    // sidebar panel does, falling back to that panel's mode when no dock is
-    // open so nothing changes for a plug that has one.
-    const sidebarSpacer = (slot: "lhs" | "rhs") => {
-      const mode = navSlots[slot]?.mode ?? viewState.panels[slot].mode;
-      if (!mode) {
-        return false;
-      }
-      // The navigator's spacer deliberately doesn't carry the classic "panel"
-      // class: space styles that target `#sb-top .panel` (a common hack to
-      // neutralize the classic spacer) would otherwise break the title
-      // alignment this spacer exists for.
-      return (
-        <div
-          className={navSlots[slot] ? "sb-nav-spacer" : "panel"}
-          style={{ flex: mode }}
-        />
-      );
-    };
-    const navDockSignature = (["lhs", "rhs"] as const)
-      .map((slot) => `${slot}:${navSlots[slot]?.mode ?? ""}`)
-      .join(",");
-
     useEffect(() => {
       // Need to dispatch a resize event so that the top_bar can pick it up
       globalThis.dispatchEvent(new Event("resize"));
-    }, [viewState.panels, navDockSignature]);
-
+    }, [viewState.panels]);
     const actionButtons = client.config.get<ActionButton[]>(
       "actionButtons",
       [],
     );
-
-    // One modal at a time, last open wins: a navigator modal taking the slot
-    // closes the plug panel that had it, the way the keyed-panel reducer case
-    // used to. Both on screen means two stacked backdrops, with the
-    // navigator's (and the focus it took) hidden under the plug's.
-    const plugModalMode = viewState.panels.modal.mode;
-    useEffect(() => {
-      if (navSlots.modal && plugModalMode !== undefined) {
-        dispatch({ type: "hide-panel", id: "modal" });
-      }
-    }, [navSlots.modal, plugModalMode]);
-    const modalVisible = plugModalMode !== undefined && !navSlots.modal;
-    const modalInset = plugModalMode;
-
-    const bhsVisible = viewState.panels.bhs.mode !== undefined;
-
     return (
       <>
+        {viewState.showPageNavigator && (
+          <AnythingPicker
+            allDocuments={viewState.allDocuments}
+            allPages={viewState.allPages}
+            extensions={
+              new Set(
+                Array.from(
+                  client.clientSystem.documentEditorHook.documentEditors.values(),
+                ).flatMap(({ extensions }) => extensions),
+              )
+            }
+            currentPath={client.currentPath()}
+            mode={viewState.pageNavigatorMode}
+            darkMode={viewState.uiOptions.darkMode}
+            onModeSwitch={(mode) => {
+              dispatch({ type: "stop-navigate" });
+              setTimeout(() => {
+                dispatch({ type: "start-navigate", mode });
+              });
+            }}
+            onNavigate={(name) => {
+              dispatch({ type: "stop-navigate" });
+              setTimeout(() => {
+                client.focus();
+              });
+
+              if (!name) {
+                return;
+              }
+
+              safeRun(async () => {
+                const ref = parseToRef(name);
+
+                // Check beforhand, because we don't want to allow any link
+                // stuff like #header here. The `!ref` check is just for
+                // Typescript
+                if (!isValidName(name) || !ref) {
+                  // It's not a valid name so either, the user tried to create a
+                  // page or we have an invalid file in the space. Names are
+                  // only unique for files which follow our rules, so we are
+                  // kind of in unknown territory now.
+
+                  if (client.clientSystem.allKnownFiles.has(name)) {
+                    // Try it as a document name === path
+                    await this.promptDocumentOperation(
+                      name as Path,
+                      `'${name}' has an invalid name. You can now modify it`,
+                    );
+                  } else if (
+                    client.clientSystem.allKnownFiles.has(`${name}.md`)
+                  ) {
+                    // Try it as a page
+                    await this.promptDocumentOperation(
+                      `${name}.md`,
+                      `'${name}.md' has an invalid name. You can now modify it`,
+                    );
+                  } else {
+                    this.flashNotification(
+                      `Couldn't create page ${name}, name is invalid`,
+                      "error",
+                    );
+                  }
+
+                  return;
+                }
+
+                if (
+                  !isMarkdownPath(ref.path) &&
+                  !Array.from(
+                    client.clientSystem.documentEditorHook.documentEditors.values(),
+                  ).some(({ extensions }) =>
+                    extensions.includes(getPathExtension(ref.path)),
+                  )
+                ) {
+                  await this.promptDocumentOperation(
+                    ref.path,
+                    "This file cannot be edited, select your desired action.",
+                  );
+                } else {
+                  void client.open(ref);
+                }
+              });
+            }}
+            onNavigateRef={(ref) => {
+              dispatch({ type: "stop-navigate" });
+              setTimeout(() => {
+                client.focus();
+              });
+              // client.navigate resolves $-anchor refs to a page + position.
+              safeRun(async () => {
+                await client.navigate(ref);
+              });
+            }}
+          />
+        )}
+        {viewState.showCommandPalette && (
+          <CommandPalette
+            onTrigger={(cmd) => {
+              safeRun(async () => {
+                dispatch({ type: "hide-palette" });
+                if (cmd) {
+                  await this.client.registerCommandRun(cmd.name);
+                  try {
+                    const returnValue = await cmd.run!();
+                    if (returnValue !== false) {
+                      client.focus();
+                    }
+                  } catch (e: any) {
+                    this.client.reportError(e, "Command invocation");
+                  }
+                } else {
+                  setTimeout(() => client.focus());
+                }
+              });
+            }}
+            commands={client.getCommandsByContext(viewState)}
+            darkMode={viewState.uiOptions.darkMode}
+          />
+        )}
         {viewState.showFilterBox && (
           <FilterList
             label={viewState.filterBoxLabel}
@@ -436,6 +463,7 @@ export class MainUI {
               );
             } else {
               if (!newName) {
+                // Always move cursor to the start of the page
                 client.editorView.dispatch({
                   selection: { anchor: 0 },
                 });
@@ -451,6 +479,7 @@ export class MainUI {
             }
           }}
           actionButtons={[
+            // Vertical menu button
             ...(viewState.isMobile &&
             client.config
               .get<string>("mobileMenuStyle", "hamburger")
@@ -461,6 +490,7 @@ export class MainUI {
                     description: "Open Menu",
                     class: "expander",
                     callback: () => {
+                      // Make the expander button open/close the menu via toggling the CSS class "open"
                       document
                         .querySelector("#sb-top .sb-actions.hamburger")
                         ?.classList.toggle("open");
@@ -468,27 +498,34 @@ export class MainUI {
                   },
                 ]
               : []),
+            // Custom action buttons
             ...actionButtons
               .filter(
-                (button) =>
+                (
+                  // Filter out buttons without icons (invalid) and mobile buttons when not in mobile mode
+                  button,
+                ) =>
                   button.icon &&
                   (typeof button.mobile === "undefined" ||
                     button.mobile === viewState.isMobile) &&
                   (typeof button.standalone === "undefined" ||
                     button.standalone === viewState.isStandalone),
               )
+              // Then ensure all buttons have a priority set (by default based on array index)
               .map((button, index) => ({
                 ...button,
                 priority: button.priority ?? actionButtons.length - index,
               }))
               .sort((a, b) => b.priority - a.priority)
               .map((button) => {
-                const iconName = kebabToPascal(button.icon);
-                const mdiIcon = (mdi as any)[iconName];
-                let featherIcon = (featherIcons as any)[iconName];
+                const mdiIcon = (mdi as any)[kebabToCamel(button.icon)];
+                let featherIcon = (featherIcons as any)[
+                  kebabToCamel(button.icon)
+                ];
                 if (!featherIcon) {
                   featherIcon = featherIcons.HelpCircle;
                 }
+                // Build description with keyboard shortcut hint
                 let description = button.description || "";
                 if (button.command) {
                   const cmd = viewState.commands.get(button.command);
@@ -519,8 +556,22 @@ export class MainUI {
                 };
               }),
           ]}
-          rhs={sidebarSpacer("rhs")}
-          lhs={sidebarSpacer("lhs")}
+          rhs={
+            !!viewState.panels.rhs.mode && (
+              <div
+                className="panel"
+                style={{ flex: viewState.panels.rhs.mode }}
+              />
+            )
+          }
+          lhs={
+            !!viewState.panels.lhs.mode && (
+              <div
+                className="panel"
+                style={{ flex: viewState.panels.lhs.mode }}
+              />
+            )
+          }
           pageNamePrefix={
             client.currentPageMeta()?.pageDecoration?.prefix ?? ""
           }
@@ -537,39 +588,27 @@ export class MainUI {
           }
         />
         <div id="sb-main">
-          <NavigatorDock slot="lhs" state={navSlots.lhs} client={client} />
           {viewState.panels.lhs.mode !== undefined && (
-            <Panel config={viewState.panels.lhs} editor={client} slot="lhs" />
+            <Panel config={viewState.panels.lhs} editor={client} />
           )}
           <div id="sb-editor" />
           {viewState.panels.rhs.mode !== undefined && (
-            <Panel config={viewState.panels.rhs} editor={client} slot="rhs" />
+            <Panel config={viewState.panels.rhs} editor={client} />
           )}
-          <NavigatorDock slot="rhs" state={navSlots.rhs} client={client} />
         </div>
-        <NavigatorModal state={navSlots.modal} client={client} />
-        {modalVisible && (
+        {viewState.panels.modal.mode !== undefined && (
           <div className="sb-modal-backdrop">
             <div
               className="sb-modal"
-              style={{
-                inset:
-                  typeof modalInset === "number"
-                    ? `${modalInset}px`
-                    : modalInset,
-              }}
+              style={{ inset: `${viewState.panels.modal.mode}px` }}
             >
-              <Panel
-                config={viewState.panels.modal}
-                editor={client}
-                slot="modal"
-              />
+              <Panel config={viewState.panels.modal} editor={client} />
             </div>
           </div>
         )}
-        {bhsVisible && (
+        {viewState.panels.bhs.mode !== undefined && (
           <div className="sb-bhs">
-            <Panel config={viewState.panels.bhs} editor={client} slot="bhs" />
+            <Panel config={viewState.panels.bhs} editor={client} />
           </div>
         )}
       </>
@@ -577,10 +616,60 @@ export class MainUI {
   }
 
   render(container: Element) {
+    // const ViewComponent = this.ui.ViewComponent.bind(this.ui);
     container.innerHTML = "";
     preactRender(h(this.ViewComponent.bind(this), {}), container);
   }
+
+  async promptDocumentOperation(path: Path, msg: string) {
+    const options: string[] = ["View", "Delete", "Rename"];
+
+    const option = await this.filterBox(
+      "Modify",
+      options.map((x) => ({ name: x }) as FilterOption),
+      msg,
+    );
+    if (!option) return;
+
+    switch (option.name) {
+      case "View": {
+        await this.client.open({ path: path });
+        break;
+      }
+      case "Delete": {
+        if (
+          await this.confirm(
+            `Are you sure you would like delete ${getNameFromPath(path)}?`,
+            { destructive: true },
+          )
+        ) {
+          if (isMarkdownPath(path)) {
+            await this.client.space.deletePage(getNameFromPath(path));
+          } else {
+            await this.client.space.deleteDocument(getNameFromPath(path));
+          }
+        }
+        break;
+      }
+      case "Rename": {
+        if (isMarkdownPath(path)) {
+          await this.client.clientSystem.system.invokeFunction(
+            "index.renamePageCommand",
+            [{ oldPage: getNameFromPath(path) }],
+          );
+        } else {
+          await this.client.clientSystem.system.invokeFunction(
+            "index.renameDocumentCommand",
+            [{ oldDocument: getNameFromPath(path) }],
+          );
+        }
+        break;
+      }
+    }
+  }
 }
+
+// TODO: Parking this here for now, this is very similar to the definition in top_bar.tsx
 
 type ActionButton = {
   icon: string;
@@ -592,3 +681,9 @@ type ActionButton = {
   priority?: number;
   run?: () => void;
 };
+
+function kebabToCamel(str: string) {
+  return str
+    .replace(/-([a-z])/g, (g) => g[1].toUpperCase())
+    .replace(/^./, (g) => g.toUpperCase());
+}

@@ -5,7 +5,6 @@ export const WikiLinkPartTag = Tag.define();
 export const CodeInfoTag = Tag.define();
 export const CommentTag = Tag.define();
 export const CommentMarkerTag = Tag.define();
-export const ConflictMarkerTag = Tag.define();
 export const BulletList = Tag.define();
 export const OrderedList = Tag.define();
 export const Highlight = Tag.define();
@@ -17,9 +16,6 @@ export const AttributeValueTag = Tag.define();
 
 export const NamedAnchorTag = Tag.define();
 export const NamedAnchorMarkTag = Tag.define();
-
-export const AtMentionTag = Tag.define();
-export const AtMentionMarkTag = Tag.define();
 
 export const TaskTag = Tag.define();
 export const TaskMarkTag = Tag.define();

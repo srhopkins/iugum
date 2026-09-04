@@ -233,22 +233,6 @@ functions:
       key: "Ctrl-Alt-l"
       requireMode: rw
       requireEditor: page
-  # Comments
-  addComment:
-    path: "./comments.ts:addComment"
-    command:
-      name: "Comment: Add"
-      key: "Ctrl-Alt-c"
-      mac: "Cmd-Alt-c"
-      requireMode: rw
-      requireEditor: page
-  commentSelection:
-    path: "./comments.ts:commentSelection"
-    command:
-      name: "Comment: Selection"
-      requireMode: rw
-      requireEditor: page
-
   # Debug commands
   parseCommand:
     path: ./system.ts:parsePageCommand

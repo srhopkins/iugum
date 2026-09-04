@@ -1,16 +1,16 @@
-import type { ObjectValue } from "@silverbulletmd/silverbullet/type/index";
-import type { Client } from "../../client.ts";
+import type { SysCallMapping } from "../system.ts";
+import type {
+  LuaCollectionQuery,
+  LuaQueryCollection,
+} from "../../space_lua/query_collection.ts";
 
 import {
   type ObjectIndex,
   ObjectValidationError,
 } from "../../data/object_index.ts";
-import type {
-  LuaCollectionQuery,
-  LuaQueryCollection,
-} from "../../space_lua/query_collection.ts";
+import type { ObjectValue } from "@silverbulletmd/silverbullet/type/index";
+import type { Client } from "../../client.ts";
 import type { LuaTable } from "../../space_lua/runtime.ts";
-import type { SysCallMapping } from "../system.ts";
 import { describeSchemas, tagSchema } from "./schema_introspection.ts";
 
 export function indexSyscalls(
@@ -63,12 +63,10 @@ export function indexSyscalls(
       description: "Returns all indexed links as a query collection.",
     },
     "index.relations": {
-      callback: (_ctx, kind?: string): LuaQueryCollection => {
-        return objectIndex.relations(kind);
+      callback: (): LuaQueryCollection => {
+        return objectIndex.objectsWithTag("relation");
       },
-      description:
-        "Returns all indexed relations, optionally filtered by kind, as a query collection.",
-      signatures: ["index.relations(kind?)"],
+      description: "Returns all indexed relations as a query collection.",
     },
     "index.contentPages": {
       callback: (_ctx, tagName?: string): LuaQueryCollection => {
@@ -145,13 +143,6 @@ export function indexSyscalls(
       description:
         "Returns the raw JSON Schema for a tag, or nil when none is declared.",
       signatures: ["index.tagSchema(tagName)"],
-    },
-    "index.isAvailable": {
-      callback: (): Promise<boolean> => objectIndex.isIndexAvailable(),
-      description: `Whether a full indexing pass has ever completed for this space. False on a fresh client, and for as long as the first index takes on a large one: every object query answers with whatever has been indexed so far, which is nothing to begin with. Code that must work in that window reads the space directly instead.`,
-      returns: [
-        { type: "boolean", description: "Whether the index can be trusted." },
-      ],
     },
     "index.aspiringPages": {
       callback: (): LuaQueryCollection => {

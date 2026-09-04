@@ -7,9 +7,8 @@
 
   .main {
     flex: 2;
-    min-width: 0;
     max-width: 100%;
-    overflow: hidden;
+    overflow-y: auto;
     scrollbar-gutter: stable;
 
     .inner {
@@ -44,6 +43,14 @@
       .sb-input {
         font-family: var(--ui-font);
         font-size: inherit;
+        // Match the line box the old CodeMirror title used so the text stays
+        // vertically centred in the bar (a native input defaults to a shorter
+        // `line-height: normal`, which pulls the title upward).
+        //
+        // Must leave the row fitting inside #sb-top's 55px: at font-size 28px
+        // this line box plus .inner's 16px of vertical padding is the bar's
+        // whole height, and .main's `overflow-y: auto` turns any excess into a
+        // permanently visible scrollbar. 1.4 overflowed it by 0.2px.
         line-height: 1.35;
         color: inherit;
         background-color: transparent;
@@ -53,7 +60,6 @@
         border-radius: 0;
         outline: none;
         overflow-x: hidden;
-        text-overflow: ellipsis;
         caret-color: var(--editor-caret-color);
 
         &:focus {
@@ -82,30 +88,14 @@
   }
 
   .progress-bar {
-    position: relative;
-    width: 24px;
-    height: 24px;
-    font-size: 8px;
-  }
-
-  .progress-ring {
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-  }
-
-  .progress-hole {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 19px;
-    height: 19px;
-    border-radius: 50%;
-    background-color: var(--top-background-color);
     display: flex;
     justify-content: center;
     align-items: center;
+
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    font-size: 8px;
   }
 }
 
@@ -116,6 +106,7 @@
     overflow: visible;
   }
 
+  /* Style the menu as a vertical fly-out */
   #sb-top .cm-scroller:has(.hamburger) {
     position: relative;
   }
@@ -135,6 +126,7 @@
       max-height 0.3s ease-in-out,
       box-shadow 0.3s ease-in-out;
 
+    /* Initial collapsed height */
     max-height: 2.2rem;
 
     button {
@@ -160,7 +152,9 @@
       }
     }
 
+    // CSS class for toggling the hamburger menu, so it can be toggled via JS
     &.open:hover {
+      /* Expanded height limited to the viewport height minus some padding */
       max-height: calc(100vh - 24px);
 
       button {
@@ -170,6 +164,7 @@
     }
   }
 
+  /* Style the menu as a bottom bar */
   #sb-top .sb-actions.bottom-bar {
     position: fixed;
     bottom: 0;

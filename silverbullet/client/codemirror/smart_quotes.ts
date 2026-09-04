@@ -6,7 +6,7 @@ import type { Client } from "../client.ts";
 import type { SmartQuotesConfig } from "../../plug-api/types/config.ts";
 
 const straightQuoteContexts = [
-  "CommentMarkerBlock",
+  "CommentBlock",
   "CodeBlock",
   "CodeText",
   "FencedCode",

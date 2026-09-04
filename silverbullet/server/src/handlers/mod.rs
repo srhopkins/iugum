@@ -1,7 +1,6 @@
 pub mod auth;
 pub mod bundle;
 pub mod control;
-pub mod events;
 pub mod fs;
 pub mod proxy;
 pub mod runtime;
@@ -32,7 +31,6 @@ pub(crate) fn space_error_response(e: SpaceError) -> Response {
         SpaceError::PathOutsideRoot => (StatusCode::FORBIDDEN, e.to_string()),
         SpaceError::Unauthorized => (StatusCode::UNAUTHORIZED, e.to_string()),
         SpaceError::ReadOnly(_) => (StatusCode::FORBIDDEN, e.to_string()),
-        SpaceError::ReconcileIneligible => (StatusCode::CONFLICT, e.to_string()),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     Response::builder()

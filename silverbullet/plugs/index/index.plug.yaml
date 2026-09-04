@@ -116,27 +116,8 @@ functions:
     events:
       - editor:complete
 
-  atMentionComplete:
-    path: recipient.ts:atMentionComplete
-    events:
-      - editor:complete
-
-  resolveRecipient:
-    path: recipient.ts:resolveRecipient
-
-  resolveAtMention:
-    path: recipient.ts:resolveAtMention
-
-  listRecipients:
-    path: recipient.ts:listRecipients
-
   frontmatterTagComplete:
     path: tags.ts:frontmatterTagComplete
-    events:
-      - editor:complete
-
-  frontmatterRecipientComplete:
-    path: recipient.ts:frontmatterRecipientComplete
     events:
       - editor:complete
 
@@ -202,11 +183,6 @@ functions:
 
   lintAnchors:
     path: lint.ts:lintAnchors
-    events:
-      - editor:lint
-
-  lintAtMentions:
-    path: lint.ts:lintAtMentions
     events:
       - editor:lint
 

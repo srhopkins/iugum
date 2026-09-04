@@ -1,50 +1,16 @@
 use std::fs;
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ignore::gitignore::GitignoreBuilder;
 use walkdir::WalkDir;
 
-use crate::space::case;
 use crate::types::{FileMeta, SpaceError, SpacePrimitives};
-
-/// A snapshot of a space's gitignore-style ignore rules, for checking whether
-/// paths are visible without rebuilding the matcher on every call. See
-/// [`DiskSpacePrimitives::gitignore_matcher`].
-pub struct GitignoreMatcher(Option<ignore::gitignore::Gitignore>);
-
-impl GitignoreMatcher {
-    /// Whether `relative` (a forward-slash, space-relative path) is excluded,
-    /// checking the path and all of its parent directories — the same check
-    /// `fetch_file_list` applies to each candidate file.
-    pub fn is_ignored(&self, relative: &str, is_dir: bool) -> bool {
-        self.0
-            .as_ref()
-            .is_some_and(|gi| gi.matched_path_or_any_parents(relative, is_dir).is_ignore())
-    }
-}
-
-/// The "is this a listed space file" rule shared by `fetch_file_list` and
-/// `get_file_meta_if_listable`: not a directory, and has a file extension.
-fn is_listable_file(is_dir: bool, relative: &str) -> bool {
-    !is_dir && Path::new(relative).extension().is_some()
-}
-
-/// Disambiguates concurrent writers within one process: `DiskSpacePrimitives`
-/// is `Arc`-shared across request handlers, so two same-path writes can be in
-/// flight at once. Without a per-call-unique suffix, both would target the
-/// same temp file and one writer's `fs::write` could truncate the other's
-/// in-progress temp file out from under it.
-static WRITE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Filesystem-backed SpacePrimitives over a space folder on disk.
 pub struct DiskSpacePrimitives {
     root_path: PathBuf,
     gitignore_patterns: String,
-    /// Probed once at construction. When false, every case rule below is
-    /// skipped and the backend behaves exactly as it always has.
-    case_insensitive: bool,
 }
 
 impl DiskSpacePrimitives {
@@ -64,7 +30,6 @@ impl DiskSpacePrimitives {
         }
 
         Ok(Self {
-            case_insensitive: case::detect_case_insensitive(&root),
             root_path: root,
             gitignore_patterns: gitignore.to_string(),
         })
@@ -94,43 +59,6 @@ impl DiskSpacePrimitives {
         }
 
         Ok(self.root_path.join(clean))
-    }
-
-    pub fn is_case_insensitive(&self) -> bool {
-        self.case_insensitive
-    }
-
-    /// Lets tests exercise the case-sensitive path on a case-insensitive host.
-    #[cfg(test)]
-    pub(crate) fn force_case_insensitive(&mut self, value: bool) {
-        self.case_insensitive = value;
-    }
-
-    /// Re-case an aliased on-disk entry to match the requested casing. Inert on
-    /// case-sensitive filesystems, where a differently cased path simply
-    /// doesn't resolve and creating a separate entry is correct.
-    fn recase_to_requested(&self, path: &str) {
-        if !self.case_insensitive {
-            return;
-        }
-        let rel = Path::new(path);
-        if let Ok(Some(actual)) = case::true_relative_path(&self.root_path, rel) {
-            if actual.as_path() != rel {
-                case::apply_recase(&case::plan_recase(&self.root_path, &actual, rel));
-            }
-            return;
-        }
-        // The leaf doesn't exist yet: a plain create, or the create half of a
-        // rename whose delete already ran. The parent chain can still be
-        // aliased, and without this the write lands inside the old-cased folder.
-        let Some(parent) = rel.parent().filter(|p| !p.as_os_str().is_empty()) else {
-            return;
-        };
-        if let Ok(Some(actual)) = case::true_relative_path(&self.root_path, parent) {
-            if actual.as_path() != parent {
-                case::apply_recase(&case::plan_recase(&self.root_path, &actual, parent));
-            }
-        }
     }
 
     /// Convert an absolute path back to a relative forward-slash path.
@@ -171,43 +99,8 @@ impl DiskSpacePrimitives {
         }
     }
 
-    pub fn gitignore_matcher(&self) -> GitignoreMatcher {
-        GitignoreMatcher(self.build_gitignore())
-    }
-
-    pub fn get_file_meta_if_listable(&self, path: &str) -> Result<Option<FileMeta>, SpaceError> {
-        let local_path = self.safe_path(path)?;
-        let metadata = fs::metadata(&local_path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound || is_syntax_error(&e) {
-                SpaceError::NotFound
-            } else {
-                SpaceError::Io(e)
-            }
-        })?;
-        if !is_listable_file(metadata.is_dir(), path) {
-            return Ok(None);
-        }
-        if self.is_stale_casing(path)? {
-            return Ok(None);
-        }
-        Ok(Some(self.file_info_to_meta(path, &metadata)))
-    }
-
-    fn is_stale_casing(&self, path: &str) -> Result<bool, SpaceError> {
-        if !self.case_insensitive {
-            return Ok(false);
-        }
-        match case::true_relative_path(&self.root_path, Path::new(path)) {
-            Ok(Some(actual)) => Ok(actual.to_string_lossy().replace('\\', "/") != path),
-            Ok(None) => Ok(true),
-            Err(e) => Err(SpaceError::Io(e)),
-        }
-    }
-
-    /// Build a matcher from the configured space-ignore patterns. A
-    /// `.gitignore` file in the space is deliberately *not* consulted: it's an
-    /// ordinary space file that happens to be about git, not configuration for
-    /// SilverBullet.
+    /// Build a gitignore matcher combining the configured space-ignore
+    /// patterns with any `.gitignore` file in the space root.
     fn build_gitignore(&self) -> Option<ignore::gitignore::Gitignore> {
         let mut builder = GitignoreBuilder::new(&self.root_path);
         let mut has_pattern = false;
@@ -218,22 +111,39 @@ impl DiskSpacePrimitives {
                 has_pattern = true;
             }
         }
+        let dot_gitignore = self.root_path.join(".gitignore");
+        if dot_gitignore.is_file() && builder.add(&dot_gitignore).is_none() {
+            has_pattern = true;
+        }
         if !has_pattern {
             return None;
         }
         builder.build().ok()
     }
 
-    /// Walk every listable, non-ignored file (the same traversal and filters
-    /// as `fetch_file_list`), stopping early when `visit` breaks.
-    fn walk_listable<T>(
-        &self,
-        mut visit: impl FnMut(String, &walkdir::DirEntry) -> ControlFlow<T>,
-    ) -> Option<T> {
-        let matcher = self.gitignore_matcher();
+    /// Remove empty parent directories up to (but not including) root_path.
+    fn clean_orphaned(&self, deleted_file: &Path) {
+        let mut current = deleted_file.parent().map(Path::to_path_buf);
+        while let Some(dir) = current {
+            if dir == self.root_path || !dir.starts_with(&self.root_path) {
+                break;
+            }
+            if fs::remove_dir(&dir).is_err() {
+                // Directory not empty or other error — stop
+                break;
+            }
+            current = dir.parent().map(Path::to_path_buf);
+        }
+    }
+}
+
+impl SpacePrimitives for DiskSpacePrimitives {
+    fn fetch_file_list(&self) -> Result<Vec<FileMeta>, SpaceError> {
+        let gitignore = self.build_gitignore();
+        let mut files = Vec::new();
 
         let root_path = self.root_path.clone();
-        let gi_for_filter = matcher.0.clone();
+        let gi_for_filter = gitignore.clone();
         for entry in WalkDir::new(&self.root_path)
             .follow_links(true)
             .into_iter()
@@ -257,69 +167,38 @@ impl DiskSpacePrimitives {
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            let is_dir = entry.file_type().is_dir();
 
-            // Skip hidden files (hidden directories were already pruned above)
-            if !is_dir && entry.file_name().to_string_lossy().starts_with('.') {
+            // Skip directories
+            if entry.file_type().is_dir() {
+                continue;
+            }
+
+            let file_name = entry.file_name().to_string_lossy();
+
+            // Skip hidden files
+            if file_name.starts_with('.') {
                 continue;
             }
 
             let relative = self.path_to_filename(path);
 
-            if !is_listable_file(is_dir, &relative) {
+            // Skip files without extensions
+            if Path::new(&relative).extension().is_none() {
                 continue;
             }
 
             // Apply gitignore (check the file path and all parent directories)
-            if matcher.is_ignored(&relative, false) {
-                continue;
+            if let Some(ref gi) = gitignore {
+                if gi.matched_path_or_any_parents(&relative, false).is_ignore() {
+                    continue;
+                }
             }
 
-            if let ControlFlow::Break(value) = visit(relative, &entry) {
-                return Some(value);
-            }
-        }
-        None
-    }
-
-    /// Whether any listed file's name ends with `suffix`, without walking the
-    /// whole space: stops at the first match.
-    pub fn has_file_with_suffix(&self, suffix: &str) -> bool {
-        self.walk_listable(|relative, _| {
-            if relative.ends_with(suffix) {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        })
-        .is_some()
-    }
-
-    /// Remove empty parent directories up to (but not including) root_path.
-    fn clean_orphaned(&self, deleted_file: &Path) {
-        let mut current = deleted_file.parent().map(Path::to_path_buf);
-        while let Some(dir) = current {
-            if dir == self.root_path || !dir.starts_with(&self.root_path) {
-                break;
-            }
-            if fs::remove_dir(&dir).is_err() {
-                // Directory not empty or other error — stop
-                break;
-            }
-            current = dir.parent().map(Path::to_path_buf);
-        }
-    }
-}
-
-impl SpacePrimitives for DiskSpacePrimitives {
-    fn fetch_file_list(&self) -> Result<Vec<FileMeta>, SpaceError> {
-        let mut files = Vec::new();
-        self.walk_listable::<()>(|relative, entry| {
             if let Ok(metadata) = entry.metadata() {
                 files.push(self.file_info_to_meta(&relative, &metadata));
             }
-            ControlFlow::Continue(())
-        });
+        }
+
         Ok(files)
     }
 
@@ -362,44 +241,24 @@ impl SpacePrimitives for DiskSpacePrimitives {
     ) -> Result<FileMeta, SpaceError> {
         let local_path = self.safe_path(path)?;
 
-        // Without this, a case-insensitive filesystem truncates the aliased
-        // entry but keeps its old name, so the rename never lands.
-        self.recase_to_requested(path);
-
         // Ensure parent directory exists
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| SpaceError::WriteError(format!("{path}: {e}")))?;
         }
 
-        // Atomic replace: write a dot-prefixed sibling (invisible to /.fs and
-        // the watcher), stamp its mtime, then rename over the target so no
-        // reader or watcher ever observes a partial file or an mtime flap.
-        let file_name = local_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| SpaceError::WriteError(format!("{path}: invalid name")))?;
-        let counter = WRITE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp_path = local_path.with_file_name(format!(
-            ".{file_name}.sb-write-{}-{counter}",
-            std::process::id()
-        ));
-        let write_result = (|| -> std::io::Result<()> {
-            fs::write(&tmp_path, data)?;
-            if let Some(m) = meta {
-                if m.last_modified > 0 {
-                    let mtime = filetime::FileTime::from_unix_time(
-                        m.last_modified / 1000,
-                        ((m.last_modified % 1000) * 1_000_000) as u32,
-                    );
-                    let _ = filetime::set_file_mtime(&tmp_path, mtime);
-                }
+        // Write file
+        fs::write(&local_path, data).map_err(|e| SpaceError::WriteError(format!("{path}: {e}")))?;
+
+        // Set modification time if provided
+        if let Some(m) = meta {
+            if m.last_modified > 0 {
+                let mtime = filetime::FileTime::from_unix_time(
+                    m.last_modified / 1000,
+                    ((m.last_modified % 1000) * 1_000_000) as u32,
+                );
+                let _ = filetime::set_file_mtime(&local_path, mtime);
             }
-            fs::rename(&tmp_path, &local_path)
-        })();
-        if let Err(e) = write_result {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(SpaceError::WriteError(format!("{path}: {e}")));
         }
 
         self.get_file_meta(path)
@@ -407,27 +266,6 @@ impl SpacePrimitives for DiskSpacePrimitives {
 
     fn delete_file(&self, path: &str) -> Result<(), SpaceError> {
         let local_path = self.safe_path(path)?;
-
-        // The sync engine emits create and delete as independent, unordered
-        // operations, so without this guard a delete addressed to a stale
-        // casing destroys the file that now lives under the new casing.
-        //
-        // Reports success rather than NotFound on purpose: the client's
-        // `deleteFile` throws on any non-200 and `syncFile` calls it unguarded,
-        // so a 404 here would abort the whole sync round.
-        if self.case_insensitive {
-            let rel = Path::new(path);
-            match case::true_relative_path(&self.root_path, rel) {
-                Ok(Some(actual)) if actual.as_path() != rel => return Ok(()),
-                Ok(_) => {}
-                // Falling through to a real delete here would unlink whatever
-                // this path aliases, which may be the file a paired write just
-                // re-cased. A failed sync round is recoverable; a lost page is
-                // not.
-                Err(e) => return Err(SpaceError::Io(e)),
-            }
-        }
-
         fs::remove_file(&local_path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 SpaceError::NotFound
@@ -442,43 +280,20 @@ impl SpacePrimitives for DiskSpacePrimitives {
 
 /// Determine MIME type from file extension.
 pub fn lookup_content_type(path: &str) -> String {
+    // Custom mappings (override mime_guess defaults)
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
 
-    // Merge eligibility treats this table as its sole authority, so the types
-    // it depends on are pinned here rather than left to mime_guess version
-    // drift.
     match ext.as_str() {
         "md" => "text/markdown".to_string(),
-        "lua" => "text/x-lua".to_string(),
+        "heic" | "heif" => "image/heic".to_string(),
         _ => mime_guess::from_path(path)
             .first_or_octet_stream()
             .to_string(),
     }
-}
-
-/// Largest file size, in bytes, eligible for three-way reconciliation.
-pub const MERGE_SIZE_LIMIT: usize = 1_048_576;
-
-/// Whether `path` is a text-ish file under `MERGE_SIZE_LIMIT` and thus a
-/// candidate for three-way reconciliation.
-pub fn is_merge_eligible(path: &str, size: usize) -> bool {
-    if size > MERGE_SIZE_LIMIT {
-        return false;
-    }
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if matches!(ext.as_str(), "lua" | "yaml" | "yml" | "toml") {
-        return true;
-    }
-    let content_type = lookup_content_type(path);
-    content_type.starts_with("text/") || content_type == "application/json"
 }
 
 /// Check if an IO error is due to invalid filename syntax (e.g., colons on some OSes).
@@ -517,45 +332,6 @@ mod plan_tests {
     }
 
     #[test]
-    fn has_file_with_suffix_matches_fetch_file_list_semantics() {
-        let dir = tempdir().unwrap();
-        let sp = DiskSpacePrimitives::new(dir.path(), "ignored.md").unwrap();
-
-        assert!(!sp.has_file_with_suffix(".md"));
-
-        sp.write_file("ignored.md", b"x", None).unwrap();
-        sp.write_file(".hidden.md", b"x", None).unwrap();
-        assert!(!sp.has_file_with_suffix(".md"));
-
-        sp.write_file("notes/deep/a.md", b"x", None).unwrap();
-        assert!(sp.has_file_with_suffix(".md"));
-        assert!(!sp.has_file_with_suffix(".txt"));
-    }
-
-    #[test]
-    fn dot_gitignore_in_the_space_is_not_applied() {
-        // Regression (#2074): a `.gitignore` in the space root is a user's git
-        // config, not SilverBullet's — only SB_SPACE_IGNORE/spaceIgnore hides
-        // files. Its own name still starts with a dot, so it stays unlisted.
-        let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join(".gitignore"), "Library/\n_plug/\n").unwrap();
-        let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-
-        sp.write_file("Library/Std/Config.md", b"x", None).unwrap();
-        sp.write_file("_plug/foo.plug.js", b"x", None).unwrap();
-
-        let names: Vec<String> = sp
-            .fetch_file_list()
-            .unwrap()
-            .into_iter()
-            .map(|m| m.name)
-            .collect();
-        assert!(names.contains(&"Library/Std/Config.md".to_string()));
-        assert!(names.contains(&"_plug/foo.plug.js".to_string()));
-        assert!(!names.contains(&".gitignore".to_string()));
-    }
-
-    #[test]
     fn rejects_path_traversal() {
         let dir = tempdir().unwrap();
         let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
@@ -585,279 +361,6 @@ mod plan_tests {
         let dir = tempdir().unwrap();
         let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
         crate::space::conformance::run_read_write_conformance(&sp);
-    }
-
-    #[test]
-    fn write_is_atomic_and_leaves_no_temp_files() {
-        let dir = tempdir().unwrap();
-        let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-        sp.write_file("note.md", b"v1", None).unwrap();
-        let meta = FileMeta {
-            name: "note.md".to_string(),
-            created: 0,
-            last_modified: 1_700_000_000_000,
-            content_type: "text/markdown".to_string(),
-            size: 2,
-            perm: "rw".to_string(),
-        };
-        let written = sp.write_file("note.md", b"v2", Some(&meta)).unwrap();
-        assert_eq!(written.last_modified, 1_700_000_000_000);
-        let (data, _) = sp.read_file("note.md").unwrap();
-        assert_eq!(&data, b"v2");
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.contains("sb-write"))
-            .collect();
-        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
-    }
-
-    fn names(sp: &DiskSpacePrimitives) -> Vec<String> {
-        let mut v: Vec<String> = sp
-            .fetch_file_list()
-            .unwrap()
-            .into_iter()
-            .map(|m| m.name)
-            .collect();
-        v.sort();
-        v
-    }
-
-    #[test]
-    fn write_leaves_an_exact_match_alone() {
-        let dir = tempdir().unwrap();
-        let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-
-        sp.write_file("Notes/A.md", b"one", None).unwrap();
-        sp.write_file("Notes/A.md", b"two", None).unwrap();
-
-        assert_eq!(names(&sp), vec!["Notes/A.md".to_string()]);
-        assert_eq!(sp.read_file("Notes/A.md").unwrap().0, b"two");
-    }
-
-    /// With the flag off, the backend must behave exactly as it did before this
-    /// change — this is what protects Linux servers.
-    #[test]
-    fn write_does_nothing_special_when_case_sensitive() {
-        let dir = tempdir().unwrap();
-        let mut sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-        sp.force_case_insensitive(false);
-
-        sp.write_file("OldName.md", b"body", None).unwrap();
-        sp.write_file("oldname.md", b"body", None).unwrap();
-
-        let mut found = names(&sp);
-        found.sort();
-        if sp_fs_is_case_insensitive(dir.path()) {
-            // Historical behavior: the alias truncates and the name survives.
-            assert_eq!(found, vec!["OldName.md".to_string()]);
-        } else {
-            assert_eq!(
-                found,
-                vec!["OldName.md".to_string(), "oldname.md".to_string()]
-            );
-        }
-    }
-
-    fn sp_fs_is_case_insensitive(root: &std::path::Path) -> bool {
-        crate::space::case::detect_case_insensitive(root)
-    }
-
-    #[test]
-    fn delete_still_removes_an_exact_match() {
-        let dir = tempdir().unwrap();
-        let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-
-        sp.write_file("Notes/A.md", b"body", None).unwrap();
-        sp.delete_file("Notes/A.md").unwrap();
-
-        assert!(names(&sp).is_empty());
-    }
-
-    /// A genuinely missing file must still report NotFound — only a *case
-    /// mismatch* is silently ignored.
-    #[test]
-    fn delete_of_missing_file_still_reports_not_found() {
-        let dir = tempdir().unwrap();
-        let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-
-        assert!(matches!(
-            sp.delete_file("nope.md"),
-            Err(crate::types::SpaceError::NotFound)
-        ));
-    }
-
-    /// Tests needing a filesystem that actually aliases casings. Gated to macOS
-    /// so they are absent on Linux rather than present and vacuous.
-    ///
-    /// A case-sensitive APFS volume is possible but opt-in at format time; the
-    /// `is_case_insensitive` guard covers that rare case.
-    #[cfg(target_os = "macos")]
-    mod fs_tests {
-        use super::*;
-
-        #[test]
-        fn write_recases_an_aliased_file() {
-            let dir = tempdir().unwrap();
-            let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-            if !sp.is_case_insensitive() {
-                return;
-            }
-
-            sp.write_file("OldName.md", b"body", None).unwrap();
-            sp.write_file("oldname.md", b"body", None).unwrap();
-
-            assert_eq!(names(&sp), vec!["oldname.md".to_string()]);
-        }
-
-        #[test]
-        fn write_recases_an_aliased_folder() {
-            let dir = tempdir().unwrap();
-            let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-            if !sp.is_case_insensitive() {
-                return;
-            }
-
-            sp.write_file("Notes/a.md", b"body", None).unwrap();
-            sp.write_file("notes/a.md", b"body", None).unwrap();
-
-            assert_eq!(names(&sp), vec!["notes/a.md".to_string()]);
-        }
-
-        /// A re-case that can't be applied must never fail the user's save —
-        /// the write still lands through the case-insensitive alias.
-        #[test]
-        fn write_succeeds_when_recasing_is_skipped() {
-            let dir = tempdir().unwrap();
-            let outside = tempdir().unwrap();
-            std::os::unix::fs::symlink(outside.path(), dir.path().join("Linked")).unwrap();
-            let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-            if !sp.is_case_insensitive() {
-                return;
-            }
-            sp.write_file("Linked/a.md", b"one", None).unwrap();
-
-            sp.write_file("linked/a.md", b"two", None).unwrap();
-
-            // Reads the literal directory entry name rather than doing a
-            // case-insensitive path lookup (`.join("Linked").is_symlink()`) —
-            // on default APFS that lookup would still resolve to a renamed
-            // `linked` entry and pass either way, masking a regression.
-            let entries: Vec<String> = std::fs::read_dir(dir.path())
-                .unwrap()
-                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-                .collect();
-            assert_eq!(entries, vec!["Linked".to_string()]);
-            assert_eq!(sp.read_file("linked/a.md").unwrap().0, b"two");
-        }
-
-        /// After a re-case, a delete addressed to the *old* casing must not
-        /// touch the file — this is what stops the sync engine's unordered
-        /// create/delete pair from destroying the page.
-        #[test]
-        fn delete_ignores_a_stale_casing() {
-            let dir = tempdir().unwrap();
-            let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-            if !sp.is_case_insensitive() {
-                return;
-            }
-
-            sp.write_file("OldName.md", b"body", None).unwrap();
-            sp.write_file("oldname.md", b"body", None).unwrap();
-
-            sp.delete_file("OldName.md").unwrap();
-
-            assert_eq!(names(&sp), vec!["oldname.md".to_string()]);
-            assert_eq!(sp.read_file("oldname.md").unwrap().0, b"body");
-        }
-
-        /// The sync engine iterates the union of changed paths with no ordering
-        /// guarantee, so a case-only rename reaches the server as an unordered
-        /// create/delete pair. Both orders must end with exactly one file,
-        /// under the new casing, with the right content.
-        #[test]
-        fn sync_pair_converges_create_then_delete() {
-            let dir = tempdir().unwrap();
-            let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-            if !sp.is_case_insensitive() {
-                return;
-            }
-            sp.write_file("OldName.md", b"body", None).unwrap();
-
-            sp.write_file("oldname.md", b"body", None).unwrap();
-            sp.delete_file("OldName.md").unwrap();
-
-            assert_eq!(names(&sp), vec!["oldname.md".to_string()]);
-            assert_eq!(sp.read_file("oldname.md").unwrap().0, b"body");
-        }
-
-        #[test]
-        fn sync_pair_converges_delete_then_create() {
-            let dir = tempdir().unwrap();
-            let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-            if !sp.is_case_insensitive() {
-                return;
-            }
-            sp.write_file("OldName.md", b"body", None).unwrap();
-
-            sp.delete_file("OldName.md").unwrap();
-            sp.write_file("oldname.md", b"body", None).unwrap();
-
-            assert_eq!(names(&sp), vec!["oldname.md".to_string()]);
-            assert_eq!(sp.read_file("oldname.md").unwrap().0, b"body");
-        }
-
-        /// Same property one level up, which is where the whole-path comparison
-        /// matters: the file component matches exactly, only the folder differs.
-        #[test]
-        fn folder_sync_pair_converges_in_both_orders() {
-            for delete_first in [false, true] {
-                let dir = tempdir().unwrap();
-                let sp = DiskSpacePrimitives::new(dir.path(), "").unwrap();
-                if !sp.is_case_insensitive() {
-                    return;
-                }
-                sp.write_file("Notes/a.md", b"body", None).unwrap();
-                sp.write_file("Notes/keep.md", b"keep", None).unwrap();
-
-                if delete_first {
-                    sp.delete_file("Notes/a.md").unwrap();
-                    sp.write_file("notes/a.md", b"body", None).unwrap();
-                } else {
-                    sp.write_file("notes/a.md", b"body", None).unwrap();
-                    sp.delete_file("Notes/a.md").unwrap();
-                }
-
-                assert_eq!(
-                    names(&sp),
-                    vec!["notes/a.md".to_string(), "notes/keep.md".to_string()],
-                    "delete_first={delete_first}"
-                );
-                assert_eq!(sp.read_file("notes/a.md").unwrap().0, b"body");
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod merge_eligible_tests {
-    use super::*;
-
-    #[test]
-    fn truth_table() {
-        assert!(is_merge_eligible("a.md", 3));
-        assert!(is_merge_eligible("a.lua", 3));
-        assert!(is_merge_eligible("a.json", 3));
-        assert!(is_merge_eligible("a.yaml", 3));
-        assert!(!is_merge_eligible("a.png", 3));
-        assert!(!is_merge_eligible("a.bin", 3));
-    }
-
-    #[test]
-    fn size_boundary() {
-        assert!(is_merge_eligible("a.md", MERGE_SIZE_LIMIT));
-        assert!(!is_merge_eligible("a.md", MERGE_SIZE_LIMIT + 1));
     }
 }
 

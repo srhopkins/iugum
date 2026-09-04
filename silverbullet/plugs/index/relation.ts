@@ -1,38 +1,32 @@
 import {
-  getNameFromPath,
-  isMarkdownPath,
-  parseToRef,
-} from "@silverbulletmd/silverbullet/lib/ref";
-import {
-  isLocalURL,
-  resolveMarkdownLink,
-} from "@silverbulletmd/silverbullet/lib/resolve";
-import {
   addParentPointers,
   collectNodesOfType,
   findNodeOfType,
-  findParentMatching,
   type ParseTree,
   renderToText,
   traverseTree,
 } from "@silverbulletmd/silverbullet/lib/tree";
+import {
+  isLocalURL,
+  resolveMarkdownLink,
+} from "@silverbulletmd/silverbullet/lib/resolve";
 import { index, lua, space } from "@silverbulletmd/silverbullet/syscalls";
+import type { FrontMatter } from "./frontmatter.ts";
+import {
+  getNameFromPath,
+  isMarkdownPath,
+  parseToRef,
+} from "@silverbulletmd/silverbullet/lib/ref";
 import type {
   ObjectValue,
   PageMeta,
 } from "@silverbulletmd/silverbullet/type/index";
+import { buildLineIndex, extractSnippet } from "./snippet.ts";
 import {
   mdLinkRegex,
   wikiLinkRegex,
 } from "../../client/markdown_parser/constants.ts";
 import { collectAnchor } from "./anchor.ts";
-import type { FrontMatter } from "./frontmatter.ts";
-import {
-  deriveAliasNickname,
-  parseDeclaredRecipients,
-  RECIPIENT_PREFIX,
-} from "./recipient.ts";
-import { buildLineIndex, extractSnippet } from "./snippet.ts";
 
 // ---- Types ----
 
@@ -55,9 +49,7 @@ export type RelationObject = ObjectValue<{
   kind: string;
   via?: string;
   page: string;
-  /** Absent on records with no span in the page text, e.g. a `recipients:`
-   * frontmatter nickname. */
-  range?: [number, number];
+  range: [number, number];
   alias?: string;
   snippet?: string;
   pageLastModified: string;
@@ -230,16 +222,9 @@ export async function indexRelations(
   const pageFrom = pageMeta.name;
   const pageFromTag = "page";
 
-  const atMentionNodes: ParseTree[] = [];
-
   traverseTree(
     tree,
     (n) => {
-      if (n.type === "AtMention") {
-        atMentionNodes.push(n);
-        return true;
-      }
-
       if (n.type === "WikiLink") {
         const wikiLinkPage = findNodeOfType(n, "WikiLinkPage");
         if (!wikiLinkPage) return true;
@@ -425,89 +410,7 @@ export async function indexRelations(
 
   emitCoMentions(ctx, tree);
   await emitAspiringPages(ctx);
-
-  // A mention records the nickname only, as the namespaced identifier
-  // `recipient:<lowercased nickname>` (so @Bob and @bob converge). Which
-  // page — if any — claims that nickname is joined at read time, because
-  // resolving it here would depend on whether the recipient's page happened
-  // to be indexed first.
-  for (const n of atMentionNodes) {
-    const nickname = renderToText(n).slice(1);
-    const { from, fromTag } = innermostContainer(n, pageMeta.name);
-    emitTextualEdge(ctx, {
-      kind: "at-mention",
-      from,
-      fromTag,
-      to: RECIPIENT_PREFIX + nickname.toLowerCase(),
-      toTag: "recipient",
-      range: [n.from!, n.to!],
-      alias: nickname,
-    });
-  }
-
-  emitDeclaredRecipients(ctx, frontmatter);
-
-  // A `recipients:` declaration addresses the whole page, so the frontmatter
-  // line it happens to be written on identifies nothing. Every form of it —
-  // nickname or wikilink — is shown by the page's opening line instead.
-  const summary = firstParagraphSnippet(ctx, tree);
-  if (summary) {
-    for (const rec of ctx.out) {
-      if (rec.kind === "recipients") {
-        rec.snippet = summary;
-      }
-    }
-  }
-
   return ctx.out;
-}
-
-/** The page's first top-level paragraph, snippet-truncated. */
-function firstParagraphSnippet(
-  ctx: EmitCtx,
-  tree: ParseTree,
-): string | undefined {
-  let first: ParseTree | undefined;
-  traverseTree(tree, (n) => {
-    if (first) return true;
-    if (n.type !== "Paragraph") return false;
-    if (findParentMatching(n, (p) => p.type === "ListItem")) return true;
-    first = n;
-    return true;
-  });
-  return first
-    ? extractSnippet(ctx.pageMeta.name, ctx.lineIndex, first.from!)
-    : undefined;
-}
-
-/**
- * `recipients:` frontmatter entries written as a bare nickname. The wikilink
- * form is already covered by the frontmatter pass above, which resolves it
- * to a page; a nickname resolves to nothing at index time, so it takes the
- * same `recipient:` identifier an inline `@mention` does.
- *
- * These carry no range: unlike a mention there is no `@nickname` in the text
- * to rewrite, so nothing downstream may treat them as an editable span.
- */
-function emitDeclaredRecipients(ctx: EmitCtx, frontmatter: FrontMatter): void {
-  for (const entry of parseDeclaredRecipients(frontmatter.recipients)) {
-    wikiLinkRegex.lastIndex = 0;
-    if (wikiLinkRegex.exec(entry)) continue;
-    const nickname = deriveAliasNickname(entry);
-    if (nickname === "") continue;
-    ctx.out.push({
-      ref: `${ctx.pageMeta.name}@recipients/${nickname.toLowerCase()}`,
-      tag: "relation",
-      kind: "recipients",
-      from: ctx.pageMeta.name,
-      fromTag: "page",
-      to: RECIPIENT_PREFIX + nickname.toLowerCase(),
-      toTag: "recipient",
-      page: ctx.pageMeta.name,
-      alias: nickname,
-      pageLastModified: ctx.pageMeta.lastModified,
-    });
-  }
 }
 
 // Emits one `aspiring-page` record per (page-targeted) ref that does
@@ -685,10 +588,8 @@ export async function getTextualBackRelations(
     "relation",
     {
       objectVariable: "_",
-      // at-mentions are excluded: their range covers literal `@nickname`
-      // text, which the rename refactor never rewrites.
       where: await lua.parseExpression(
-        `_.to == name and _.kind ~= "co-mention" and _.kind ~= "at-mention" and _.toTag ~= "url"`,
+        `_.to == name and _.kind ~= "co-mention" and _.toTag ~= "url"`,
       ),
     },
     { name: to },

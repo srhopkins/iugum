@@ -121,15 +121,11 @@ tag.define {
 ```
 
 The result is the following:
-<!--#lua query[[
+${query[[
   from t = tags.task
   where t.deadline
   select table.select(t, "name", "done", "deadline")
-]] -->
-|name|done|deadline|
-|--|--|--|
-|Hello |false|2026-12-31|
-<!--/lua-->
+]]}
 
 ## Styling
 Tags get assigned a `data-tag-name` attribute in the DOM, which you can use to do custom styling with [[Space Style]].
@@ -142,4 +138,3 @@ a[data-tag-name="my-red-tag"] {
   background-color: red;
 }
 ```
-

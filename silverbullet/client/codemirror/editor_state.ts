@@ -47,12 +47,9 @@ import { postScriptPrefacePlugin } from "./top_bottom_panels.ts";
 import { lazyLanguages, languageFor, loadLanguageFor } from "../languages.ts";
 import { plugLinter } from "./lint.ts";
 import { readOnlyCursorActive } from "./util.ts";
-import { isValidEditor } from "../lib/command_filters.ts";
 import { buildExtendedMarkdownLanguage } from "../markdown_parser/parser.ts";
 import { safeRun } from "@silverbulletmd/silverbullet/lib/async";
 import { codeCopyPlugin } from "../codemirror/code_copy.ts";
-import { externalPresence } from "./external_presence.ts";
-import { conflictMarkers } from "./conflict_markers.ts";
 import { disableSpellcheck } from "../codemirror/spell_checking.ts";
 import type { ClickEvent } from "@silverbulletmd/silverbullet/type/client";
 import {
@@ -163,8 +160,6 @@ export function createEditorState(
       }),
       inlineContentPlugin(client),
       codeCopyPlugin(client),
-      externalPresence(),
-      conflictMarkers(client),
       highlightSpecialChars(),
       undoHistory,
       dropCursor(),
@@ -189,7 +184,7 @@ export function createEditorState(
         { selector: "ATXHeading5", class: "sb-line-h5" },
         { selector: "ATXHeading6", class: "sb-line-h6" },
         { selector: "ListItem", class: "sb-line-li", nesting: true },
-        { selector: "Blockquote", class: "sb-line-blockquote", nesting: true },
+        { selector: "Blockquote", class: "sb-line-blockquote" },
         { selector: "Task", class: "sb-line-task" },
         { selector: "CodeBlock", class: "sb-line-code" },
         { selector: "FencedCode", class: "sb-line-fenced-code" },
@@ -354,6 +349,20 @@ export function createEditorState(
       closeBrackets(),
     ],
   });
+}
+
+// TODO: Move this elsewhere
+export function isValidEditor(
+  currentEditor: string | undefined,
+  requiredEditor: string | undefined,
+): boolean {
+  return (
+    requiredEditor === undefined ||
+    (currentEditor === undefined && requiredEditor === "page") ||
+    requiredEditor === "any" ||
+    currentEditor === requiredEditor ||
+    (currentEditor !== undefined && requiredEditor === "notpage")
+  );
 }
 
 export function createCommandKeyBindings(client: Client): Extension {

@@ -70,7 +70,6 @@ const blockTypes = new Set([
   "HTMLBlock",
   "LuaDirective",
   "CommentBlock",
-  "CommentMarkerBlock",
   "FrontMatter",
 ]);
 
@@ -176,10 +175,8 @@ function render(t: ParseTree, options: MarkdownRenderOptions = {}): Tag | null {
     case "FrontMatter":
       return null;
     case "CommentBlock":
-    case "CommentMarkerBlock":
+      // Remove, for now
       return null;
-    case "ConflictMarker":
-      return renderToText(t);
     case "ATXHeading1":
       return {
         name: "h1",
@@ -262,7 +259,7 @@ function render(t: ParseTree, options: MarkdownRenderOptions = {}): Tag | null {
       return {
         name: "span",
         attrs: {
-          class: "sb-highlight",
+          class: "highlight",
         },
         body: cleanTags(mapRender(t.children!)),
       };
@@ -440,17 +437,6 @@ function render(t: ParseTree, options: MarkdownRenderOptions = {}): Tag | null {
         ],
       };
     }
-    case "AtMention": {
-      const literal = renderToText(t);
-      return {
-        name: "span",
-        attrs: { class: "sb-at-mention" },
-        body: [
-          { name: "span", attrs: { class: "sb-at-mention-mark" }, body: "@" },
-          literal.slice(1),
-        ],
-      };
-    }
     case "Task": {
       let externalTaskRef = "";
       collectNodesOfType(t, "WikiLinkPage").forEach((wikilink) => {
@@ -467,7 +453,6 @@ function render(t: ParseTree, options: MarkdownRenderOptions = {}): Tag | null {
         }
       });
 
-      const hasHtml = t.children!.some((c) => c.type === "HTMLTag");
       return {
         name: "span",
         attrs: {
@@ -476,11 +461,7 @@ function render(t: ParseTree, options: MarkdownRenderOptions = {}): Tag | null {
             ? { "data-external-task-ref": externalTaskRef }
             : {}),
         },
-        body: cleanTags(
-          hasHtml
-            ? groupInlineHtml(t.children!, options, posPreservingRender)
-            : mapRender(t.children!),
-        ),
+        body: cleanTags(mapRender(t.children!)),
       };
     }
     case "TaskState": {

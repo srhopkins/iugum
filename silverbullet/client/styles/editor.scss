@@ -2,29 +2,6 @@
   outline: none !important;
 }
 
-// An unregistered custom property inherits as an unresolved token stream, so a
-// `ch` inside one re-resolves against every element that references it — 1.5x
-// wider on a heading line, tilting a quoted heading out of its own quote's
-// column. Registering them as lengths pins both to the font of the element
-// that declares them.
-@property --editor-column {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: 0px;
-}
-
-@property --editor-base-font {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: 0px;
-}
-
-@property --blockquote-step {
-  syntax: "<length>";
-  inherits: true;
-  initial-value: 0px;
-}
-
 #sb-main .cm-editor {
   font-size: 18px;
   height: 100%;
@@ -35,13 +12,6 @@
     margin-right: auto;
     max-width: var(--#{"editor-width"});
     padding: 5px 20px;
-
-    // A column, the body size and a `> ` in the editor's own font, which is
-    // set on this element.
-    --editor-column: 1ch;
-    --editor-base-font: 1em;
-    --blockquote-bar: 2px;
-    --blockquote-step: 2ch;
   }
 
   .cm-line {
@@ -119,59 +89,6 @@
     border-right: none;
   }
 
-  .sb-external-delete-marker {
-    position: relative;
-    display: inline-block;
-    width: 0;
-    height: 0;
-
-    // Anchored to the text baseline and drawn out of flow in the column's
-    // left padding, so a deletion marker never reflows the line it marks.
-    .sb-external-delete-dot {
-      position: absolute;
-      left: -10px;
-      bottom: 0.2em;
-      width: 4px;
-      height: 4px;
-      border-radius: 50%;
-      background-color: var(--editor-external-caret-color);
-      pointer-events: none;
-    }
-  }
-
-  .sb-external-edit {
-    background-color: var(--editor-external-edit-color);
-    transition: background-color 3s ease-out 1s;
-  }
-
-  .sb-external-caret {
-    position: relative;
-    border-left: 2px solid var(--editor-external-caret-color);
-    margin-left: -1px;
-    animation: sb-external-caret-blink 1s steps(1) infinite;
-
-    .sb-external-caret-label {
-      position: absolute;
-      top: -1.1em;
-      left: -2px;
-      text-indent: 0;
-      font-size: 0.65em;
-      line-height: 1.3;
-      padding: 0 4px;
-      border-radius: 3px;
-      background-color: var(--editor-external-caret-color);
-      color: var(--ui-accent-contrast-color);
-      white-space: nowrap;
-      pointer-events: none;
-    }
-  }
-
-  @keyframes sb-external-caret-blink {
-    50% {
-      border-left-color: transparent;
-    }
-  }
-
   .cm-foldPlaceholder {
     background-color: transparent;
     border: 0;
@@ -196,8 +113,8 @@
   }
 
   .sb-line-comment {
-    text-indent: calc(-3 * var(--editor-column));
-    padding-left: calc(3 * var(--editor-column));
+    text-indent: -1 * 3ch;
+    padding-left: 3ch;
   }
 
   .cm-list-bullet {
@@ -270,16 +187,12 @@
     text-indent: -7ch;
   }
 
-  // When the editor column itself narrows to ≤ the default editor-width --
-  // whether from a narrow viewport or a dock squeezing a wide one -- the
-  // gutter to the left of `.cm-content` is gone, so the hanging `#`-markers
-  // would slide off-screen. Render them inline instead — the heading text
-  // shifts right by `Nch + 1` but stays fully visible. A container query
-  // (keyed on #sb-editor, see main.scss) rather than a viewport media query,
-  // because a dock shrinks the editor column while the viewport stays wide.
-  // CSS variables don't work in container size queries either, so this
-  // threshold tracks the default `--editor-width` (800px).
-  @container sb-editor-col (max-width: 800px) {
+  // On narrow viewports (≤ default editor-width), the gutter to the left of
+  // `.cm-content` is gone, so the hanging `#`-markers would slide off-screen.
+  // Render them inline instead — the heading text shifts right by `Nch + 1`
+  // but stays fully visible. CSS variables can't be used in media queries,
+  // so this threshold tracks the default `--editor-width` (800px).
+  @media (max-width: 800px) {
 
     .sb-header-inside.sb-line-h1,
     .sb-header-inside.sb-line-h2,
@@ -348,14 +261,6 @@
   }
 
   a.sb-hashtag {
-    text-decoration: none;
-  }
-
-  a.sb-at-mention {
-    border-radius: 6px;
-    padding: 0 3px;
-    margin: 0 1px 0 0;
-    font-size: 0.9em;
     text-decoration: none;
   }
 
@@ -474,41 +379,13 @@
     color: transparent;
   }
 
-  // The indent is the marker spacer in the text flow, not CSS, so it composes
-  // with the inline `padding-left` listIndentPlugin puts on list lines. Each bar
-  // paints over the spacer of its own level, standing in for the `>` it
-  // replaced; border-box origin anchors them to the line's left edge rather than
-  // letting a list item's padding drag them along.
   .sb-line-blockquote {
+    text-indent: -2ch;
+  }
+
+  .sb-blockquote-outside {
+    text-indent: -1ch;
     min-height: 1em;
-    background-image: repeating-linear-gradient(to right,
-        var(--editor-blockquote-border-color) 0,
-        var(--editor-blockquote-border-color) var(--blockquote-bar),
-        transparent var(--blockquote-bar),
-        transparent var(--blockquote-step));
-    background-origin: border-box;
-    background-repeat: no-repeat;
-    background-size: var(--blockquote-step) 100%;
-  }
-
-  .sb-quote-spacer {
-    display: inline;
-  }
-
-  // A revealed marker is real text, so on a heading line it would be 1.5x the
-  // spacer it stands in for and shift the line as the caret arrives. Pinned to
-  // the body size it measures the same two columns either way.
-  .sb-quote-mark {
-    font-size: var(--editor-base-font);
-  }
-
-  // A line inside a nested quote carries the class of every level it sits in,
-  // so the deepest rule — declared last — supplies the whole indent and the
-  // matching number of bars. Past level 6 a line keeps level 6's gutter.
-  @for $depth from 2 through 6 {
-    .sb-line-blockquote-#{$depth} {
-      background-size: calc(#{$depth} * var(--blockquote-step)) 100%;
-    }
   }
 
   .sb-line-table-outside {
@@ -851,102 +728,6 @@
     border-radius: 0;
   }
 
-  .sb-conflict-widget {
-    display: block;
-    margin: 10px 0;
-    border: 1px solid var(--alert-warning-border-color);
-    border-radius: 5px;
-    overflow: hidden;
-    white-space: normal;
-  }
-
-  .sb-conflict-button-bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
-    background-color: var(--alert-warning-background-color);
-
-    button {
-      border: 1px solid var(--button-border-color);
-      border-radius: 4px;
-      background: var(--button-background-color);
-      color: var(--button-color);
-      cursor: pointer;
-      padding: 3px 8px;
-      font-family: var(--editor-font);
-      font-size: 0.85em;
-      white-space: nowrap;
-
-      &:hover {
-        background: var(--button-hover-background-color);
-      }
-    }
-
-    // Same corner-label look as frontmatter/comment, pushed via flex auto-margin instead of their line-float since this bar is already the widget's top strip.
-    .sb-comment-label {
-      margin-left: auto;
-      float: none;
-    }
-  }
-
-  .sb-conflict-prompt {
-    padding: 6px 8px 0;
-    font-size: 0.8em;
-    color: var(--editor-meta-color);
-  }
-
-  .sb-conflict-sections {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 1px;
-    background-color: var(--editor-widget-background-color);
-  }
-
-  .sb-conflict-section {
-    min-width: 0;
-    padding: 6px 8px;
-    background-color: var(--root-background-color);
-    cursor: pointer;
-
-    &:hover,
-    &:focus-visible {
-      background-color: var(--hover-background-color);
-      outline: 1px solid var(--action-button-hover-color);
-      outline-offset: -1px;
-    }
-  }
-
-  .sb-conflict-section-header {
-    margin-bottom: 4px;
-    font-size: 0.8em;
-    font-weight: 600;
-    color: var(--editor-meta-color);
-  }
-
-  .sb-conflict-section-hash {
-    margin-left: 6px;
-    font-weight: normal;
-    font-family: var(--editor-monospace-font, monospace);
-    font-size: 0.9em;
-    opacity: 0.6;
-  }
-
-  .sb-conflict-section-body {
-    margin: 0;
-    padding: 4px 6px;
-    max-height: 240px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-family: var(--editor-monospace-font, monospace);
-    font-size: 0.85em;
-    color: var(--editor-code-color);
-    background-color: var(--editor-code-background-color);
-    border-radius: 3px;
-  }
-
   .sb-inline-content>div>.content>* {
     max-width: 100%;
     display: block;
@@ -971,19 +752,14 @@
     }
   }
 
+  .sb-line-blockquote.sb-line-ul.sb-line-li>.sb-quote.sb-meta:first-child {
+    margin-left: -1ch;
+  }
+
   .sb-admonition {
     border-left-width: 4px !important;
     border-left-style: solid;
     padding-left: 5px;
-    background-image: none;
-
-    // The border stands in for the marker of the quote this is, so the spacer
-    // holding that marker's columns has nothing left to reserve: it would only
-    // push a line's first row a step right of the rows it wraps into. Narrowed
-    // rather than removed, so it keeps the inline box posAtCoords expects.
-    >.sb-quote-spacer {
-      padding-left: 0 !important;
-    }
   }
 
   .sb-admonition-type::before {
@@ -999,72 +775,6 @@
     height: 1.1em;
     display: inline-flex;
     vertical-align: middle;
-  }
-
-  .sb-comment-block {
-    // The indent is a border rather than padding because list lines inside a
-    // comment carry an inline `padding-left` from listIndentPlugin: a border
-    // adds to that instead of losing to it. The bar is a background gradient
-    // over the border box for the same reason an inset box-shadow won't do —
-    // that is clipped to the padding box and would land a step in. Widths are
-    // shared with the blockquote gutter so the two systems stay aligned.
-    border-left-width: var(--blockquote-step);
-    border-left-style: solid;
-    background-color: var(--editor-blockquote-background-color);
-    background-image: linear-gradient(to right,
-        var(--editor-code-comment-color) 0,
-        var(--editor-code-comment-color) var(--blockquote-bar),
-        transparent var(--blockquote-bar));
-    background-origin: border-box;
-    background-repeat: no-repeat;
-  }
-
-  // A quote inside a comment sits in both gutters: the comment's bar stays at
-  // the edge and the quote's bars start one step in. The combined selector
-  // outranks both single-class rules, so their order no longer matters.
-  .sb-comment-block.sb-line-blockquote {
-    background-image: linear-gradient(to right,
-        var(--editor-code-comment-color) 0,
-        var(--editor-code-comment-color) var(--blockquote-bar),
-        transparent var(--blockquote-bar)),
-      repeating-linear-gradient(to right,
-        var(--editor-blockquote-border-color) 0,
-        var(--editor-blockquote-border-color) var(--blockquote-bar),
-        transparent var(--blockquote-bar),
-        transparent var(--blockquote-step));
-    background-position: 0 0, var(--blockquote-step) 0;
-  }
-
-  @for $depth from 1 through 6 {
-    .sb-comment-block.sb-line-blockquote-#{$depth} {
-      background-size: var(--blockquote-step) 100%,
-      calc(#{$depth} * var(--blockquote-step)) 100%;
-    }
-  }
-
-  .sb-comment-resolve {
-    // Floated rather than right-aligning the line, so the button sits right in
-    // both states without dragging a revealed `-->` across with it.
-    float: right;
-    font-size: 80%;
-    // line-height 1 on an 80% font keeps the inline box well inside the line
-    // box, so neither the padding nor the border can grow the line.
-    line-height: 1;
-    padding: 1px 8px;
-    margin-right: 7px;
-    border-width: 1px;
-    border-style: solid;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .sb-comment-label {
-    float: right;
-    font-size: 80%;
-    padding-right: 7px;
-    // Safari still drops the unprefixed property.
-    -webkit-user-select: none;
-    user-select: none;
   }
 
   .sb-frontmatter-marker {

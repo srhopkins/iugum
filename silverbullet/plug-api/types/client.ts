@@ -33,10 +33,7 @@ export type Notification = {
   persistent?: boolean;
 };
 
-// A plain number is a flex-grow ratio (or, for the modal slot, a pixel
-// inset); a string is a raw CSS `flex` shorthand, e.g. "0 0 260px" for a
-// fixed-width sidebar.
-export type PanelMode = number | string;
+export type PanelMode = number;
 
 export type CodeWidgetContent = {
   html?: string;

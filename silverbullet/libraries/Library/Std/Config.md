@@ -52,7 +52,7 @@ config.define("sync", {
     documents = {
       type = "boolean",
       default = false,
-      description = "Sync document files (non-markdown) locally from the server. Allows access to document files while offline.",
+      description = "Sync document files (non-markdown) to the server",
       ui = { category = "Sync", label = "Sync documents", priority = 1 },
     },
     -- In .gitignore format, either in a single string, or as a list of strings
@@ -397,14 +397,6 @@ config.define("taskStates", {
     },
     required = {"name"},
   },
-})
-
--- Recipients
-config.define("recipients.tag", {
-  type = "string",
-  default = "recipient",
-  description = "Tag that marks a page as a recipient, addressable with @nickname.",
-  ui = { category = "Indexing", label = "Recipient tag", priority = 0 },
 })
 
 -- Don't use directly, WIP

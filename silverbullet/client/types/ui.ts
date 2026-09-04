@@ -1,4 +1,4 @@
-import type { Path } from "@silverbulletmd/silverbullet/lib/ref";
+import type { Command } from "./command.ts";
 import type {
   FilterOption,
   Notification,
@@ -9,10 +9,8 @@ import type {
   DocumentMeta,
   PageMeta,
 } from "@silverbulletmd/silverbullet/type/index";
+import type { Path } from "@silverbulletmd/silverbullet/lib/ref";
 import type { SyncStatus } from "../spaces/sync.ts";
-import type { Command } from "./command.ts";
-
-export type PanelSlot = "lhs" | "rhs" | "bhs" | "modal";
 
 export type PanelConfig = {
   mode?: PanelMode;
@@ -27,15 +25,20 @@ export type AppViewState = {
   };
 
   allPages: PageMeta[];
+  allDocuments: DocumentMeta[];
 
   isLoading: boolean;
   isMobile: boolean;
   isStandalone: boolean;
+  showPageNavigator: boolean;
+  showCommandPalette: boolean;
+  showCommandPaletteContext?: string;
   unsavedChanges: boolean;
   isOnline: boolean;
 
-  progressPercentage?: number;
-  progressType?: string;
+  // Progress tracker
+  progressPercentage?: number; // Used to show progress circle
+  progressType?: string; // Used for styling
 
   panels: { [key: string]: PanelConfig };
   commands: Map<string, Command>;
@@ -49,6 +52,10 @@ export type AppViewState = {
     customStyles?: string;
   };
 
+  // Page navigator mode
+  pageNavigatorMode: "page" | "meta" | "document" | "all";
+
+  // Filter box
   showFilterBox: boolean;
   filterBoxLabel: string;
   filterBoxPlaceHolder: string;
@@ -56,11 +63,13 @@ export type AppViewState = {
   filterBoxHelpText: string;
   filterBoxOnSelect: (option: FilterOption | undefined) => void;
 
+  // Prompt
   showPrompt: boolean;
   promptMessage?: string;
   promptDefaultValue?: string;
   promptCallback?: (value: string | undefined) => void;
 
+  // Confirm
   showConfirm: boolean;
   confirmMessage?: string;
   confirmDestructive?: boolean;
@@ -69,6 +78,9 @@ export type AppViewState = {
 
 export const initialViewState: AppViewState = {
   isLoading: false,
+  showPageNavigator: false,
+  showCommandPalette: false,
+  pageNavigatorMode: "page",
   unsavedChanges: false,
   isOnline: true,
   uiOptions: {
@@ -86,6 +98,7 @@ export const initialViewState: AppViewState = {
     modal: {},
   },
   allPages: [],
+  allDocuments: [],
   commands: new Map(),
 
   notifications: [],
@@ -110,10 +123,15 @@ export type Action =
   | { type: "online-status-change"; isOnline: boolean }
   | { type: "update-current-page-meta"; meta: PageMeta }
   | { type: "update-page-list"; allPages: PageMeta[] }
+  | { type: "update-document-list"; allDocuments: DocumentMeta[] }
+  | { type: "start-navigate"; mode: "page" | "meta" | "document" | "all" }
+  | { type: "stop-navigate" }
   | {
       type: "update-commands";
       commands: Map<string, Command>;
     }
+  | { type: "show-palette"; context?: string; commands: Map<string, Command> }
+  | { type: "hide-palette" }
   | { type: "show-notification"; notification: Notification }
   | { type: "dismiss-notification"; id: number }
   | {
@@ -160,6 +178,7 @@ export type BootConfig = {
   indexPage: string;
   readOnly: boolean;
   logPush?: boolean;
+  // Sync configuration
   syncDocuments?: boolean;
   syncIgnore?: string;
   // These are all configured via ?query parameters, e.g. ?disableSpaceLua=1
@@ -172,7 +191,6 @@ export type BootConfig = {
   enableClientEncryption: boolean;
   accountManaged?: boolean;
   disableServiceWorker?: boolean;
-  syncProtocolVersion?: number;
 };
 
 /**
@@ -186,20 +204,11 @@ export type ServiceWorkerTargetMessage =
   | { type: "flush-cache" }
   | { type: "shutdown" }
   | { type: "wipe-data" }
-  | {
-      type: "perform-file-sync";
-      path: string;
-      remoteLastModified?: number;
-      remoteRevisionHash?: string;
-    }
+  | { type: "perform-file-sync"; path: string }
   | { type: "perform-space-sync" }
-  | { type: "declare-divergent-base"; path: string; baseText: string }
-  | { type: "realtime-status"; connected: boolean }
   | { type: "force-connection-status"; enabled: boolean }
   | { type: "get-encryption-key" }
-  | { type: "set-encryption-key"; key: string }
-  | { type: "list-safety" }
-  | { type: "get-safety"; hash: string };
+  | { type: "set-encryption-key"; key: string };
 /**
  * Events received from the service worker -> client
  */
@@ -210,10 +219,6 @@ export type ServiceWorkerSourceMessage =
     }
   | {
       type: "sync-conflict";
-      path: string;
-    }
-  | {
-      type: "suppressed-deletion";
       path: string;
     }
   | {
@@ -255,32 +260,4 @@ export type ServiceWorkerSourceMessage =
   | {
       type: "server-version";
       serverVersion: string;
-    }
-  | {
-      type: "safety-list";
-      entries: { hash: string; size: number; ts: number; binary: boolean }[];
-    }
-  | {
-      type: "safety-content";
-      hash: string;
-      data: Uint8Array | null;
     };
-
-export function syncMessageNotification(
-  msg: ServiceWorkerSourceMessage,
-): { style: "error" | "info"; text: string } | null {
-  switch (msg.type) {
-    case "sync-conflict":
-      return {
-        style: "error",
-        text: `Sync conflict in ${msg.path} — open the page to resolve`,
-      };
-    case "suppressed-deletion":
-      return {
-        style: "info",
-        text: `Deletion of ${msg.path} was suppressed — it was edited elsewhere`,
-      };
-    default:
-      return null;
-  }
-}

@@ -1,10 +1,10 @@
-import type { PageMeta } from "@silverbulletmd/silverbullet/type/index";
 import { expect, test } from "vitest";
 import { parseMarkdown } from "../../client/markdown_parser/parser.ts";
 import { createMockSystem } from "../../plug-api/system_mock.ts";
+import type { PageMeta } from "@silverbulletmd/silverbullet/type/index";
 import { extractFrontMatter } from "./frontmatter.ts";
-import { indexMarkdown } from "./indexer.ts";
 import { indexRelations } from "./relation.ts";
+import { indexMarkdown } from "./indexer.ts";
 
 function pageMeta(name = "Test"): PageMeta {
   return {
@@ -556,160 +556,10 @@ test("document markdown link emits document relation", async () => {
   expect(r!.to).toEqual("attachment.pdf");
 });
 
-test("at-mentions index as relations", async () => {
-  createMockSystem();
-  await (globalThis as any).syscall("index.indexObjects", "People/Pete Smith", [
-    {
-      ref: "People/Pete Smith",
-      tag: "page",
-      name: "People/Pete Smith",
-      tags: ["recipient"],
-      aliases: ["PeteSmith"],
-    },
-  ]);
-
-  const text = [
-    "Talked to @PeteSmith today.",
-    "",
-    "* [ ] Follow up @petesmith @Petra",
-    "",
-    "And @nobody is captured too.",
-  ].join("\n");
-  const tree = parseMarkdown(text);
-  const fm = extractFrontMatter(tree);
-  const objects = await indexRelations(pageMeta("Test"), fm, tree, text);
-  const atMentions = objects.filter(
-    (o) => o.tag === "relation" && o.kind === "at-mention",
-  );
-  expect(atMentions.length).toBe(4);
-  // Every mention records the nickname, never the page claiming it: which
-  // page that is gets joined at read time, so index order can't change it.
-  expect(atMentions[0].to).toBe("recipient:petesmith");
-  expect(atMentions[0].toTag).toBe("recipient");
-  expect(atMentions[0].fromTag).toBe("page");
-  expect(atMentions[0].alias).toBe("PeteSmith");
-  // Case-insensitive: a differently cased spelling converges, task container
-  expect(atMentions[1].to).toBe("recipient:petesmith");
-  expect(atMentions[1].fromTag).toBe("task");
-  expect(atMentions[1].alias).toBe("petesmith");
-  expect(atMentions[2].to).toBe("recipient:petra");
-  expect(atMentions[2].toTag).toBe("recipient");
-  expect(atMentions[2].alias).toBe("Petra");
-  expect(atMentions[3].to).toBe("recipient:nobody");
-  expect(atMentions[3].toTag).toBe("recipient");
-  // A recipient: identifier is not a page target: no aspiring page
-  expect(
-    objects.filter(
-      (o) =>
-        o.tag === "aspiring-page" && (o as any).name.startsWith("recipient:"),
-    ).length,
-  ).toBe(0);
-});
-
 test("relation records flow through indexMarkdown", async () => {
   createMockSystem();
   const text = "Hello [[Target]] world.";
   const objects = await indexMarkdown(text, pageMeta("Source"));
   const relations = objects.filter((o: any) => o.tag === "relation");
   expect(relations.length).toBeGreaterThan(0);
-});
-
-test("a frontmatter recipients nickname emits a recipient relation", async () => {
-  createMockSystem();
-  const text = [
-    "---",
-    "recipients:",
-    "- zef",
-    "- Pete Smith",
-    "---",
-    "Yo there",
-  ].join("\n");
-  const tree = parseMarkdown(text);
-  const fm = extractFrontMatter(tree);
-  const objects = await indexRelations(pageMeta("Notes"), fm, tree, text);
-  const declared = objects.filter(
-    (o) => o.tag === "relation" && o.kind === "recipients",
-  );
-  expect(declared.length).toBe(2);
-  expect(declared[0].to).toBe("recipient:zef");
-  expect(declared[0].toTag).toBe("recipient");
-  expect(declared[0].from).toBe("Notes");
-  expect(declared[0].fromTag).toBe("page");
-  expect(declared[0].alias).toBe("zef");
-  expect(declared[0].range).toBeUndefined();
-  // Spaces are stripped the same way an alias-derived nickname is, so
-  // `Pete Smith` and `@PeteSmith` converge.
-  expect(declared[1].to).toBe("recipient:petesmith");
-  expect(declared[1].alias).toBe("PeteSmith");
-  // Each entry needs its own ref, or the second overwrites the first
-  expect(declared[0].ref).not.toBe(declared[1].ref);
-});
-
-test("a frontmatter recipients wikilink stays a page relation", async () => {
-  const { space } = createMockSystem();
-  await space.writePage("Team/Operations", "");
-  const text = [
-    "---",
-    "recipients:",
-    "- zef",
-    '- "[[Team/Operations]]"',
-    "---",
-    "Yo there",
-  ].join("\n");
-  const tree = parseMarkdown(text);
-  const fm = extractFrontMatter(tree);
-  const objects = await indexRelations(pageMeta("Notes"), fm, tree, text);
-  const declared = objects.filter(
-    (o) => o.tag === "relation" && o.kind === "recipients",
-  );
-  expect(declared.length).toBe(2);
-  const page = declared.find((o) => o.toTag === "page")!;
-  expect(page.to).toBe("Team/Operations");
-  // The wikilink form keeps its range: unlike a nickname it is link syntax
-  // the rename refactor rewrites.
-  expect(page.range).toBeDefined();
-  expect(declared.filter((o) => o.toTag === "recipient").length).toBe(1);
-});
-
-test("a recipients declaration is summarised by the page's opening line", async () => {
-  const { space } = createMockSystem();
-  await space.writePage("Team/Operations", "");
-  const text = [
-    "---",
-    "recipients:",
-    "- zef",
-    '- "[[Team/Operations]]"',
-    "---",
-    "",
-    "Please review the launch plan",
-    "before Friday.",
-    "",
-    "A second paragraph.",
-  ].join("\n");
-  const tree = parseMarkdown(text);
-  const fm = extractFrontMatter(tree);
-  const objects = await indexRelations(pageMeta("Handoff"), fm, tree, text);
-  const declared = objects.filter(
-    (o) => o.tag === "relation" && o.kind === "recipients",
-  );
-  expect(declared.length).toBe(2);
-  // Both forms: the frontmatter line a declaration was written on says
-  // nothing about the page it addresses.
-  for (const d of declared) {
-    expect(d.snippet).toBe("Please review the launch plan");
-  }
-});
-
-test("a recipients declaration on a page with no paragraph has no snippet", async () => {
-  createMockSystem();
-  const text = ["---", "recipients:", "- zef", "---", "# Just a heading"].join(
-    "\n",
-  );
-  const tree = parseMarkdown(text);
-  const fm = extractFrontMatter(tree);
-  const objects = await indexRelations(pageMeta("Bare"), fm, tree, text);
-  const declared = objects.find(
-    (o) => o.tag === "relation" && o.kind === "recipients",
-  )!;
-  expect(declared.snippet).toBeUndefined();
 });
