@@ -537,7 +537,7 @@ function reorderUnit(sourceText, movedUnitKey, targetUnitKey, placement) {
   // touched that seam. A brand new seam (created by the move) gets exactly
   // one blank line, matching every top-level separator already used in
   // atomdown/testdata/valid/{groups,split-list}.md.
-  const PREAMBLE_KEY = " preamble";
+  const PREAMBLE_KEY = "\u0000preamble";
   const gapMap = new Map();
   if (preambleEndLine >= 0) {
     gapMap.set(
