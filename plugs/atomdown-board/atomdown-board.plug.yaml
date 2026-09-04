@@ -26,3 +26,8 @@ functions:
 
   ungroupAtoms:
     path: "./atomdown-board.js:ungroupAtoms"
+
+  # Rewrites one atom-group's opening marker to change its readable name
+  # (its slug). The group's id never changes - a slug is not identity.
+  setGroupSlug:
+    path: "./atomdown-board.js:setGroupSlug"
