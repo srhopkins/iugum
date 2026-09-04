@@ -28,11 +28,18 @@ NOT implemented" below.
    one directive line in the document (see "How the write path works"),
    and leaves everything else byte-identical.
 5. Drag a card by its header (the grip icon, id, or badges — anywhere in
-   the header strip, not the prose body below it) to reorder it. Dropping
-   on the top half of another card moves it before that card; the bottom
-   half moves it after. Dropping in the empty space below the last card
-   moves it to the very end. See "Drag-to-reorder" below for exactly what
-   this rewrites in the file and how atom groups are handled.
+   the header strip, not the prose body below it) to reorder it. The drop
+   lands on the seam the pointer is over: releasing anywhere above a card's
+   vertical midpoint puts the dragged block before that card, and releasing
+   below the last card's bottom edge puts it at the very end. The space
+   *between* two cards is the seam between them, not "the end" — see
+   "Where a drop lands" below. See "Drag-to-reorder" for exactly what this
+   rewrites in the file and how atom groups are handled.
+6. Click a card to select it; modifier-click or shift-click to select
+   several, or lasso them by dragging on empty background. With a valid
+   selection, the three-dot menu's **Group** item wraps those blocks in an
+   Atomdown `atom-group`; on a card that is already in a group the item
+   reads **Ungroup**. Cmd-Z undoes either. See "Selection and grouping".
 6. Closing the modal (the **Close** button, or running the toggle command
    again) returns to the normal page. The document is otherwise
    unchanged unless you explicitly clicked Save on an attribute edit or
@@ -65,25 +72,142 @@ binary (a browser worker cannot run a subprocess). It was verified
 against the real test document (see "What was verified" below), not
 just synthetic input.
 
-## How the write path works
+## How the write path works — the editor buffer, so Cmd-Z works
 
-Saving an attribute edit calls the plug's `saveAttrs(atomId, attrsJson)`
-function, which:
+Every change this plug makes — an attribute edit, a reorder, a group, an
+ungroup — reaches the document as **one `editor.replaceRange` call**, and
+nothing writes the space file directly any more.
 
-1. Re-reads the current page text fresh via `space.readPage`.
-2. Finds that one atom's `<atom .../>` directive line by id.
-3. Rebuilds just that line from the id (always first, always preserved)
-   plus the attribute list you edited in the panel — every attribute you
-   did not touch is still there, because the panel starts pre-populated
-   with all of them and only drops what you explicitly remove.
-4. Writes the line back into the full document text via
-   `space.writePage`, and reloads the live editor buffer via
-   `editor.reloadPage` so the page behind the modal doesn't show stale
-   content — the rest of the document is untouched.
+That syscall dispatches one CodeMirror transaction on the live editor view
+(`silverbullet/client/plugos/syscalls/editor.ts`), and CodeMirror's
+`history()` extension is installed
+(`silverbullet/client/codemirror/editor_state.ts`), so the change becomes one
+entry in the editor's own undo history. **The user's native Cmd-Z / Cmd-Shift-Z
+undo and redo a group, an ungroup, a reorder or an attribute edit like any
+other edit.** SilverBullet then autosaves the buffer as usual.
+
+There is therefore **no undo stack in this plug and no "Undo group" button**.
+That is the point: a private stack would be a second history the editor's own
+one knows nothing about, and Cmd-Z would still not reach a group.
+
+The earlier path was `space.readPage` + `space.writePage` +
+`editor.reloadPage`. That wrote *around* the editor, so the change was
+invisible to the undo history and Cmd-Z could not reach it — and a write could
+silently discard an unsaved buffer. `applyBufferEdit()` replaces it:
+
+1. Read the live buffer with `editor.getText` (not the file on disk — the
+   offsets must be offsets into what the editor actually holds).
+2. Compute the whole new document text with a pure function
+   (`insertGroupMarkers`, `removeGroupMarkers`, `reorderUnit`, or the
+   directive-line rewrite in `saveAttrs`).
+3. `minimalEdit(oldText, newText)` trims the common prefix and suffix, so the
+   one transaction covers only the part that actually changed.
+4. `editor.replaceRange(from, to, insert)`.
+
+For an attribute edit specifically, step 2 rebuilds just that one atom's
+directive line from the id (always first, always preserved) plus the attribute
+list you edited in the panel — every attribute you did not touch is still
+there, because the panel starts pre-populated with all of them and only drops
+what you explicitly remove.
 
 The directive is always rebuilt onto one source line, since `SPEC.md`
 requires that ("Each directive must occupy one source line") and the
 `inline-directive` lint diagnostic (`atomdown/parser.go`) enforces it.
+
+## Selection and grouping
+
+Clicking a card selects it. A selected card gets a 2px border in
+`var(--ui-accent-color)` — SilverBullet's own accent token, the *same* blue the
+drop indicator (`.board-card-dropbefore`) and the grouped-card left edge
+already use. Selection never introduces a second blue and never invents a hex.
+
+- **Modifier-click** adds or removes one card (`metaKey` on a Mac, `ctrlKey`
+  elsewhere; the code tests both, so either works).
+- **Shift-click** selects the contiguous range from the anchor.
+- **Lasso**: drag on empty board background to rubber-band a range. It starts
+  only on background, never on a card, so it cannot compete with a card drag —
+  a drag starts on the card's own header.
+- **Clicking empty background** with no modifier clears the selection.
+
+Selection is pure UI state. **Nothing about it reaches the document**: no
+coordinate, no index, no attribute. The only things that ever reach the file
+are a block move and a group marker, and both of those *are* the document's
+content.
+
+The three-dot card menu gains one item: **Group**, or **Ungroup** when the card
+whose menu is open is already in a group. A disabled item stays **visible and
+grayed**, never hidden, with the reason in its tooltip — a user who selected
+the wrong set needs to see that the action exists and read why it is not
+offered. `groupMenuState()` is the whole decision, and it is unit-tested:
+
+| Situation | Item | Reason in the tooltip |
+|---|---|---|
+| The menu's card is in a group | `Ungroup`, enabled | — |
+| Fewer than two units selected | `Group`, disabled | Select two or more cards |
+| The selection contains a group | `Group`, disabled | Core 1 does not permit a group inside a group |
+| The menu's card is not selected | `Group`, disabled | Open the menu on a selected card |
+| The selection is not contiguous | `Group`, disabled | Grouping would have to move blocks |
+| Two or more adjacent units | `Group`, enabled | — |
+
+### Contiguity: Group is offered only for an already-adjacent selection
+
+An `atom-group` wraps a contiguous span, so `Group` is enabled **only** for a
+selection whose units are already adjacent in source order. A non-contiguous
+selection leaves the item disabled with a tooltip saying that grouping would
+have to move blocks.
+
+**The board never silently reorders the document to make a selection
+groupable.** Steve decided this directly (`iugum-w6y.3`): a reorder is a real
+content change, worth reviewing in a diff, and the board only makes one when
+the user drags a card. Inventing one as a side effect of a grouping click would
+be exactly the kind of invisible edit this design exists to avoid.
+
+`isContiguousUnitSelection()` is the check, and it works on *units*, not cards:
+a group is one unit, so selecting two members of the same group is one unit,
+not two.
+
+### What grouping writes
+
+Atomdown's `atom-group`, per `atomdown/SPEC.md`: an opening marker and a
+closing marker, each on its own source line, with the member atoms between
+them, and an eight-character Crockford Base32 `id` on the opening marker.
+
+```markdown
+<!-- <atom-group id="ZZZZZZZZ"> -->
+<!-- <atom id="QX69DE00" digest="sha256:…"/> -->
+First member.
+
+<!-- <atom id="RCF2B8FF" digest="sha256:…"/> -->
+Second member.
+<!-- </atom-group> -->
+```
+
+The id comes from `newAtomdownId()`, which reproduces `atomdown`'s own
+`NewID` (`atomdown/id.go`, printed by the `atomdown id` CLI): eight characters
+of the uppercase Crockford Base32 alphabet, 40 random bits, no `I`/`L`/`O`/`U`.
+A worker cannot shell out to that binary, so the generator is reproduced rather
+than called; the id is then checked against every id already in the document,
+so it cannot collide.
+
+**Nesting is refused.** Atomdown Core 1 does not permit nested groups
+(`SPEC.md`: "Atomdown Core 1 does not permit nested groups"), so a selection
+containing a group unit disables `Group` — and `insertGroupMarkers()` refuses
+it again server-side, because the document may have changed since the board
+was drawn.
+
+**The two markers are the only bytes added.** No block's text moves, so no
+atom's `digest` can go stale, and no atom's directive line is rewritten, so
+every `id` and every unknown extension attribute survives byte for byte. That
+is why grouping inserts two lines instead of re-emitting the atoms. Ungrouping
+removes exactly those two lines, so **group then ungroup restores the document
+byte for byte** — there is a test for that identity. A group written loosely by
+hand (`atomdown/testdata/valid/groups.md` puts a blank line after the open
+marker) would leave a doubled blank line behind, so `removeLineCollapsingSeam`
+drops one blank when removing a marker leaves two against each other.
+
+The markers go hard against the run, with no blank line of their own, which is
+the shape `atomdown materialize --split list-item` already writes
+(`atomdown/testdata/valid/split-list.md`).
 
 ## Drag-to-reorder
 
@@ -91,6 +215,29 @@ Dragging a card moves that block in the source file. There are no
 coordinates and no layout attributes anywhere — the card's position in the
 column IS its position in the document, per Steve's design direction in
 `iugum-w6y`. This is implemented separately from the rendering path above:
+
+### Where a drop lands
+
+`pickDropTarget(clientY, cards)` decides, from the cards' own
+`getBoundingClientRect()` values: **drop before the first card whose vertical
+midpoint sits below the pointer**; past the last card's midpoint means after
+that card, and past its bottom edge means the end of the document. There is
+one `dragover`/`drop` pair for the whole panel and no per-card or per-container
+handler.
+
+This replaces a handler that decided from *which element* the pointer landed
+on. The flex `gap` between cards, and the container's own 16px padding, belong
+to the cards container, not to either card — so a release in the space between
+two cards fired the container's handler, which hardcoded `(null, "end")`, and
+the block went to the end of the document instead of between the two cards.
+Geometry does not care which element the pointer technically hit. The container
+now uses `gap: 0` with a card `margin-top` as well, so the strip has no holes
+in it, but the geometric decision is what actually fixes the bug.
+
+`pickDropTarget` is a standalone pure function with unit tests
+(`atomdown-board.test.mjs`), including one for exactly the gap case above.
+Its absence as a seam is why the bug shipped: the first version made that
+decision inline inside an event listener, where no test could reach it.
 
 - `computeUnits(sourceText)` scans the document into an ordered list of
   "units" — a standalone atom (explicit or implicit) is one unit; a whole
@@ -241,6 +388,42 @@ plug's change took effect), but `borderRadius: 8px` and a visible
 edge right at the screen border — everything else (backdrop dimming, the
 floating margin) is gone.
 
+## Tests
+
+```sh
+node --test plugs/atomdown-board/     # directly
+go test ./plugs/atomdown-board        # same tests, through go test ./...
+```
+
+`atomdown-board.test.mjs` imports the **real** plug file (only `self` and the
+`syscall` bridge are stubbed) and covers two layers:
+
+- **The pure decision functions**, exported for tests as `plug.internals`:
+  `pickDropTarget`, `unitOrderFromCards`, `isContiguousUnitSelection`,
+  `groupMenuState`, `rectsIntersect`, `minimalEdit`, `newAtomdownId`,
+  `insertGroupMarkers`, `removeGroupMarkers`. These are the seams whose
+  absence let the drop bug ship.
+- **The exported plug functions**, driven with a recording `syscall` stub, so
+  the tests assert the real syscall sequence: exactly one
+  `editor.replaceRange` per action, and no `space.writePage`, `space.readPage`
+  or `editor.reloadPage` at all. That is the check that keeps Cmd-Z working —
+  a future change that reaches for `space.writePage` fails the suite.
+
+The panel script is not duplicated for testing. `injectSharedFunctions()`
+stringifies those same functions into the panel script at render time, and a
+test evaluates the injected source and checks it answers identically, so the
+panel and the worker cannot drift.
+
+`board_test.go` is the only Go file in this directory. It shells out to
+`node --test`, and skips when node is absent, so the JavaScript is covered by
+`go test ./...` on a machine that has node without making node a build
+dependency (CONTRIBUTING.md rule 1). It also runs `node --check` on the plug
+file, because nothing else in the repo would catch a syntax error in a
+hand-authored bundle — SilverBullet only finds it when a user runs the command.
+
+There is no `package.json` and no bundler here on purpose; see "Why
+hand-authored" below.
+
 ## Build
 
 There is no build step. This plug is hand-authored JavaScript, not the
@@ -299,7 +482,67 @@ for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
 
-## What was verified
+## What was verified — the drop fix, the popover fix, selection and grouping
+
+Bugs `iugum-w6y.1` (drop always landed at the end) and `iugum-w6y.2` (the
+popover closed on any click inside itself), and the selection/grouping feature
+`iugum-w6y.3`, were verified three ways.
+
+**1. Unit tests** — 57 of them, `node --test plugs/atomdown-board/`. See
+"Tests" above for what they cover.
+
+**2. A real browser, against the real panel.** The panel's html and script were
+captured from the actual `toggleBoard()` (a `syscall` stub recording what it
+passed `editor.showPanel`), served over HTTP and driven with dispatched
+`MouseEvent`s and `DragEvent`s. This exercises the shipped client script, not a
+copy of it. Confirmed, with the real 231-line page rendering 62 cards:
+
+- Releasing a drag in the 14px space between card 1 and card 2 invoked
+  `reorderAtom(moved, "atom:X1R0XMS8", "before")` — the seam under the
+  pointer. That is the bug: it previously invoked `(null, "end")`.
+- The top half of a card still resolves to `before` it, the bottom half to
+  `before` the next one, below the last card's bottom edge to `(null, "end")`,
+  and a drop on its own card makes no call at all.
+- Clicking `+ Add attribute`, clicking an attribute input, and clicking a
+  remove button all left the popover **open** (`rowsAfterAdd: 3`,
+  `rowsAfterRemove: 2`); a click on the board background still closed it.
+- Selection: plain click selects one; modifier-click adds then removes;
+  shift-click selected the contiguous range `[3,4,5,6]`; a plain click
+  elsewhere collapsed to one; a background click cleared it.
+- The selected border computed to `rgb(35, 131, 226)` at `2px` — that is
+  `#2383e2`, the live value of `--ui-accent-color`, the same token the drop
+  indicator's rule names. Both CSS rules were read back from the live
+  stylesheet to confirm they name the same custom property.
+- The lasso appeared on a background drag, selected `[1,2,3]`, was removed on
+  mouseup, and survived the trailing background click. It did **not** start on
+  a card body or on the toolbar.
+- Menu states matched `groupMenuState` exactly: disabled with "Select two or
+  more cards" for no selection, enabled for a contiguous three, disabled with
+  the "would have to move blocks" reason for a non-contiguous pair, disabled
+  when the menu was opened on an unselected card, `Ungroup` enabled on a
+  grouped card, and disabled with "does not permit a group inside a group" for
+  a selection mixing a group with a neighbour. Clicking the items invoked
+  `groupAtoms(["atom:WRVM8B6Q","atom:X1R0XMS8"])` and
+  `ungroupAtoms("ZZZZZZZZ")`. A grouped card that is also selected kept its
+  3px left edge and gained the 2px top border.
+
+**3. The real `atomdown` binary, against the real 231-line page.** A copy of
+`_silverbullet/Todo/running.md` (62 units, every atom carrying a digest) was
+worked on in a scratch directory; the live file was never touched.
+
+- After grouping three contiguous atoms: `atomdown lint` → `ok`,
+  `atomdown lint --strict` → `ok`, `atomdown verify` → `ok - no drift`.
+- Every atom id identical, every `digest` identical, every block's text
+  identical — checked by comparing the parsed atoms before and after, not by
+  eye. Exactly two lines were added, both of them markers.
+- Ungrouping that group produced a file **byte-identical** to the original.
+- After a reorder: `atomdown lint` → `ok`, `atomdown verify` →
+  `ok - no drift`.
+- Grouping across an unmarked block (a `---` divider) also lints clean;
+  `lint --strict` warns only about the pre-existing implicit atom, which it
+  warned about before the group too.
+
+### Earlier spike verification (rendering, theme, modal chrome, reorder)
 
 The rendering/edit spike (commits `a171a7f`, `61d85be`) was verified only
 without a browser; the theme fix, modal-chrome fix, and drag-to-reorder
@@ -378,6 +621,18 @@ one Chromium-based browser this was exercised in.
 - **Reordering members within a group.** Dragging a group card moves the
   whole group (see "Group contiguity decision" above); there is no way to
   change the order of atoms *inside* one group's markers from the board.
+- **Grouping a non-contiguous selection.** Deliberate, not a gap — see
+  "Contiguity" above. The board will not move a block you did not drag.
+- **Nested groups.** Atomdown Core 1 does not permit them, so `Group` is
+  disabled for a selection containing a group.
+- **Adding a `slug` to a new group.** `insertGroupMarkers` writes only the
+  required `id`. A slug can be added afterwards through the group's own
+  attribute editing — except that groups do not get their own card yet, so
+  today it needs an edit in the page itself.
+- **Selecting a whole group by clicking one member.** Clicking one member
+  selects that card only; its *unit* is the group, which is what the Group and
+  Ungroup decision uses.
+- **Keyboard selection.** No arrow-key or Ctrl-A selection; mouse only.
 - **Locking.** No atom is treated as non-draggable or protected on the
   basis of any attribute — see "Drag-to-reorder" above for why that is
   deliberate, not a gap.
