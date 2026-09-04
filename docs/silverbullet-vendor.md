@@ -1,7 +1,10 @@
 # Vendored SilverBullet tree
 
 `silverbullet/` is a **git subtree** of Steve's fork of SilverBullet.
-The tree stays in upstream form. iugum carries no patches to it.
+The tree stays in upstream form except for one patch: the editor decoration
+seam. That patch adds three files and edits two.
+See [`silverbullet-decoration-seam.md`](silverbullet-decoration-seam.md) for the
+config shape and for the two hunks to re-apply after a conflict.
 
 | Item | Value |
 |---|---|
@@ -35,7 +38,8 @@ git fetch sb-fork --tags
 ```
 
 The fork is a plain GitHub fork. It holds no iugum commits.
-Keep it as the pull source so a local patch has a place to live later.
+Keep it as the pull source. The decoration seam patch lives in this repo, not in
+the fork.
 
 ## Move the pin
 
@@ -45,6 +49,10 @@ git subtree pull --prefix=silverbullet sb-fork <new-tag> --squash
 ```
 
 Then edit `scripts/vendor/silverbullet.pin` and the table above, and rebuild.
+
+Then re-apply the decoration seam edits if the pull dropped them
+(`silverbullet-decoration-seam.md` holds the two hunks), and run
+`cd silverbullet && npm test && npm run check`.
 
 The working tree must be clean. `git subtree` refuses to run on modified files.
 If another change is in progress, do the pull in a separate worktree
