@@ -388,18 +388,66 @@ Steve: *"every refresh to the page and I have to go re-apply the atomdown view
 can we make that view persist on refresh if I am on that view (not make it
 default, just don't lose it)"*.
 
-Two pieces of presentation state are remembered, both keyed by page name:
+Every piece of presentation state the board keeps is remembered under its own
+key, and every key is scoped to the page name:
 
 | key | value |
 |-----|-------|
-| `atomdown-board.open:<page>` | `true` while the board is showing on that page |
+| `atomdown-board.open:<page>` | the boolean `true` while the board is showing on that page |
 | `atomdown-board.collapsed:<page>` | the ids of that page's collapsed groups |
+| `atomdown-board.view:<page>` | `{ boardView, cardViews }` for raw vs rendered |
+| `atomdown-board.density:<page>` | `"comfortable"` or `"compact"` |
+
+No key is a prefix of another, and **`rememberBoardOpen()` is the only writer
+of the open key**. Persisting the density, the raw/rendered view or the
+collapsed set must never touch it: a stray truthy value there would reopen a
+board the user dismissed. A test pins both the four shapes and the fact that
+the panel never writes the open key by any spelling.
 
 `restoreBoard()` is wired to `editor:pageLoaded` and `editor:pageReloaded`
 (the manifest declares the events; SilverBullet dispatches them from
-`client/content_manager.ts`). It opens the board only for a page whose key is
-set. It is **never a default**: a page whose key was never written gets
-nothing, and Close deletes the key, so closed stays closed.
+`client/content_manager.ts`). It opens the board only for a page whose key
+holds **the literal boolean `true`** -- not a truthiness test. A missing key,
+`null`, `""`, `0`, `1`, the *string* `"true"`, or a leftover value from any
+other feature all read as closed, because reopening a full-screen view the
+user did not ask for is the worse failure. It is **never a default**: a page
+whose key was never written gets nothing, and Close deletes the key, so closed
+stays closed.
+
+### Closing: forget first, hide second
+
+This order is load-bearing, and getting it wrong shipped a real bug. Steve
+left the board, reloaded, and the board came back.
+
+**Hiding the modal unmounts the panel iframe, and the host tears down its
+postMessage bridge to it at the same moment** (`client/components/panel.tsx`
+removes its `message` listener on unmount). A syscall made after that is never
+delivered and never even rejects -- it simply vanishes. The Close button used
+to call `editor.hidePanel` and *then* invoke `notifyClosed`, so the "forget
+this page" call was lost every single time: the board closed, the flag stayed
+`true`, and the next reload brought the board back.
+
+The fix is ordering, in two places:
+
+- The Close button invokes `notifyClosed` **first**, awaits it, and only then
+  hides the panel as a fallback.
+- `notifyClosed()` clears the flag **before** it hides the panel, and hides
+  the panel itself, so the whole sequence runs worker-side where nothing can
+  cut it off half way. Hiding an already-hidden panel is a no-op dispatch, so
+  the panel's own trailing `hidePanel` is harmless.
+
+Both exits go through `notifyClosed()`: the toolbar Close button and the
+toggle command run a second time. Those are the only two ways to leave the
+board -- this plug binds no key and registers no action button, and
+SilverBullet has no Escape-closes-a-panel handler (its `Escape` binding is
+Close Completion, scoped to the editor). The board's own `Escape` handlers
+belong to the card editor, the digest review and the naming form, and none of
+them closes the board.
+
+Navigating away is not "closing": `restoreBoard()` takes a stale panel down
+with a direct `hidePanel` and deliberately does **not** go through
+`notifyClosed()`, so the page you left with the board open keeps its flag and
+going back there still reopens it.
 
 **The store is `clientStore`, not `localStorage`.** A plug's code runs in a
 Web Worker, and a worker has no `localStorage` at all, so the worker could not
@@ -426,6 +474,25 @@ Three things stop a reopen racing the editor:
 Every read and write is failure-tolerant. A store that is missing or throwing
 (private browsing, site data blocked, an older host, a test stub) degrades to
 "not remembered" -- a closed board and expanded groups -- never to an error.
+
+### The matrix, verified on the live wiki
+
+Driven against the running SilverBullet at `Todo/running`, reading the flag
+straight out of the browser's IndexedDB (`sb_data_*`, store `data`, key
+`client\0atomdown-board.open:<page>`) after each step:
+
+| case | flag after | board after |
+|------|-----------|-------------|
+| open, reload | `true` | **open** |
+| open, Close, reload | key deleted | **closed** |
+| open, toggle command again, reload | key deleted | **closed** |
+| never opened, reload | no key | closed |
+| open on `Todo/running`, go to `index` | `Todo/running` still `true` | closed on `index`, stale panel taken down |
+| back to `Todo/running` | `true` | **open** |
+| flag holds the string `"true"`, reload | unchanged | **closed** |
+| store unavailable or throwing | not written | closed (unit test) |
+
+Before the fix, row 2 read "flag still `true`, board **open**" -- the bug.
 
 ### Shape and collisions
 
