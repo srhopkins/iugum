@@ -1,4 +1,27 @@
 #!/usr/bin/env sh
+# iugum pre-push: public audit, then the conditional Atomdown front-end gate,
+# then the beads/factory pre-push hook.
+#
+# The order is deliberate. The public audit is instant and blocks on secrets,
+# so it goes first — no point spending a minute in a browser to then refuse the
+# push over a leaked key. The front-end suite is the slow one and runs only
+# when the push actually touches what it tests. The factory hook keeps the last
+# word, exactly as it did before, and it is still `exec`ed so nothing changes
+# about its behaviour or its exit code.
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 1
+
 "$root/scripts/public-audit.sh" --all --no-agent || exit 1
-exec "$root/.beads/hooks/pre-push" "$@"
+
+# --- stdin, shared between two hooks ----------------------------------------
+#
+# git feeds a pre-push hook its ref list on stdin, and this script now has two
+# consumers for it: the path check below, and the factory hook. A stream can
+# only be read once, so it is captured to a temp file and replayed to both.
+# Without this the factory hook would receive an empty ref list.
+refs="$(mktemp -t iugum-prepush)"
+trap 'rm -f "$refs"' EXIT INT TERM
+cat >"$refs"
+
+"$root/.githooks/atomdown-fe-gate.sh" "$root" <"$refs" || exit 1
+
+exec "$root/.beads/hooks/pre-push" "$@" <"$refs"
