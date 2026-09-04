@@ -108,6 +108,10 @@ The `wiki` command starts the server.
 
 If port `3000` is in use, pass `--port`.
 
+To run a build of the vendored SilverBullet source instead of the embedded
+binary, set `IUGUM_WIKI_SB_SRC` (or `IUGUM_WIKI_SB_BIN` for a binary you already
+have). See `docs/silverbullet-vendor.md`.
+
 ### Observe
 
 This starts the metrics and logs server (sqlite file + embedded graphs).
@@ -131,4 +135,5 @@ After clone, run `scripts/install-hooks.sh`. The hook blocks secrets ([gitleaks]
 Install: copy `iugum` onto your `PATH`.
 Vendored upstream trees: `beads/`, `silverbullet/`.
 `beads/` carries a small patch set (package rename, `Execute` export, memory hook). See `docs/beads-vendor.md`. Re-vendor with `scripts/vendor-beads.sh <version>`.
+`silverbullet/` is a git subtree of `srhopkins/silverbullet`, pinned to the upstream `2.10.0` tag and unpatched. See `docs/silverbullet-vendor.md`.
 Feature beads live in this repo (prefix `iugum`).
