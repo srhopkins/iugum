@@ -94,7 +94,10 @@ export type AppEvent =
   | "plugs:loaded"
   | "cron:secondPassed"
   | "hooks:renderTopWidgets"
-  | "hooks:renderBottomWidgets";
+  | "hooks:renderBottomWidgets"
+  // Editor decoration seam, see client/codemirror/decoration_seam.ts
+  | "editor:decorationClick"
+  | "editor:decorationSelect";
 
 export type ClickEvent = {
   page: string;

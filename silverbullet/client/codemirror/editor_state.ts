@@ -40,6 +40,7 @@ import { loadVim } from "../vim_loader.ts";
 import { inlineContentPlugin } from "./inline_content.ts";
 import { cleanModePlugins } from "./clean.ts";
 import { lineWrapper } from "./line_wrapper.ts";
+import { decorationSeam } from "./decoration_seam.ts";
 import { createSmartQuoteKeyBindings } from "./smart_quotes.ts";
 import { documentExtension, pasteLinkExtension } from "./editor_paste.ts";
 import type { TextChange } from "./change.ts";
@@ -197,6 +198,10 @@ export function createEditorState(
           class: "sb-frontmatter",
         },
       ]),
+      // The editor decoration seam: line classes, range marks, block widgets
+      // and click/selection events driven by the `editorDecorations` config
+      // key. See client/codemirror/decoration_seam.ts.
+      ...decorationSeam(client, pageName),
       disableSpellcheck(["InlineCode", "CodeText", "CodeInfo", "FrontMatter"]),
       regularKeyBindings,
       EditorView.domEventHandlers({
