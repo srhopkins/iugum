@@ -1150,6 +1150,353 @@ function removeGroupMarkers(sourceText, groupId) {
   return { ok: true, text: out.join("\n") };
 }
 
+// ---------------------------------------------------------------------------
+// RENDERED MARKDOWN
+//
+// A card shows its block RENDERED by default — a heading as a heading, a table
+// as a table, a link as a link — because the board is supposed to read as the
+// document it came from. Raw markdown is still one click away (see the
+// Raw/Rendered toggle in buildBoardHtml's toolbar), but it is not the default.
+//
+// The rendering is SilverBullet's OWN markdown pipeline, reached through the
+// `markdown.markdownToHtml` syscall (silverbullet client/plugos/syscalls/
+// markdown.ts, registered for plugs in client/client_system.ts). That syscall
+// parses with the same extended CommonMark grammar the editor uses and renders
+// with client/markdown_renderer/markdown_render.ts, which is the same renderer
+// upstream's own configuration-manager plug uses for library descriptions. So
+// there is NO markdown library bundled into this file and none should ever be
+// added: reusing the host's pipeline is what makes a card's table, task list
+// and wiki link look like the editor's, and it follows the host's own syntax
+// extensions for free.
+//
+// Escaping, precisely.
+//   renderMarkdownToHtml builds a Tag tree and serializes it with renderHtml
+//   (client/markdown_renderer/html_render.ts). Every text node and every
+//   attribute VALUE goes through htmlEscape, so markdown text can never inject
+//   markup. The one hole is deliberate on upstream's side: a raw HTML tag in
+//   the markdown source is re-emitted verbatim as a RawHtml tag. That is the
+//   whole reason sanitizeRenderedHtml exists below — the input to it is
+//   already-escaped HTML plus whatever raw HTML the document happened to carry,
+//   and it filters exactly that.
+// ---------------------------------------------------------------------------
+
+// Tags a card body may contain. Everything CommonMark and SilverBullet's
+// extensions produce, and nothing that can run code, load a remote document,
+// or take over the page.
+const SAFE_TAGS = new Set([
+  "p", "br", "hr", "span", "div",
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "strong", "em", "b", "i", "u", "s", "del", "ins", "mark", "small",
+  "sub", "sup", "code", "pre", "kbd", "samp", "var", "abbr", "time",
+  "a", "img",
+  "ul", "ol", "li", "dl", "dt", "dd",
+  "blockquote", "figure", "figcaption",
+  "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
+  "colgroup", "col",
+  "input",
+]);
+
+// Tags with no closing tag of their own. Never pushed on the balance stack.
+const VOID_TAGS = new Set([
+  "br", "hr", "img", "input", "col", "wbr", "area", "base", "embed",
+  "link", "meta", "param", "source", "track",
+]);
+
+// Tags that cannot directly contain one of their own peers. A second one
+// closes the first, the way a browser's parser does, so raw HTML in the
+// document that leaves list items or table cells open still renders as a flat
+// list rather than as a chain of ever-deeper nesting.
+const IMPLIED_CLOSE = {
+  li: ["li"],
+  dt: ["dt", "dd"],
+  dd: ["dt", "dd"],
+  p: ["p"],
+  tr: ["tr"],
+  td: ["td", "th"],
+  th: ["td", "th"],
+};
+
+// A disallowed tag normally drops the TAG and keeps its text, because the text
+// is content the user wrote. For these, the text is not content — it is code or
+// a stylesheet — so the tag and everything up to its close tag go.
+const STRIP_CONTENT_TAGS = new Set([
+  "script", "style", "iframe", "object", "embed", "noscript", "template",
+  "svg", "math", "applet", "frame", "frameset", "noembed", "xmp", "title",
+]);
+
+// Attributes a card body may carry. No `style` (a fixed-position overlay is a
+// clickjack, and this panel is same-origin with the app), no `id` (it would
+// collide with the panel's own element ids), and no `on*` of any kind — an
+// allowlist means those need no separate rule.
+const SAFE_ATTRS = new Set([
+  "class", "href", "src", "alt", "title", "colspan", "rowspan", "start",
+  "reversed", "type", "checked", "disabled", "dir", "lang", "width",
+  "height", "align", "datetime", "cite",
+]);
+
+// URL schemes a card body's href or src may use. A relative URL (no scheme at
+// all) is allowed too. Everything else — javascript:, data:, vbscript:, blob:,
+// file: — is dropped along with the attribute.
+const SAFE_URL_SCHEMES = new Set(["http", "https", "mailto", "tel", "ftp"]);
+
+// The named entities a browser decodes inside an attribute value that could
+// hide a scheme. Numeric entities are handled generically alongside these.
+const URL_ENTITIES = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", colon: ":",
+  newline: "\n", tab: "\t", sol: "/", nbsp: " ",
+};
+
+/**
+ * Decodes an attribute value the way a browser would before it resolves a URL,
+ * so a scheme hidden as `&#106;avascript:` or `java&Tab;script:` cannot slip
+ * past the scheme test. Used ONLY for the safety decision — the value written
+ * back out is the original, untouched.
+ */
+function decodeUrlEntities(value) {
+  return String(value).replace(
+    /&(#[Xx]?[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);?/g,
+    (whole, body) => {
+      if (body[0] === "#") {
+        const hex = body[1] === "x" || body[1] === "X";
+        const code = parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
+        if (!isFinite(code) || code < 0 || code > 0x10ffff) return whole;
+        try {
+          return String.fromCodePoint(code);
+        } catch (e) {
+          return whole;
+        }
+      }
+      const named = URL_ENTITIES[body.toLowerCase()];
+      return named === undefined ? whole : named;
+    },
+  );
+}
+
+/**
+ * Drops every space and every control character, by code point rather than by
+ * a regular expression, so this file stays plain ASCII with no control bytes
+ * of its own. A browser's URL parser ignores exactly these before it reads a
+ * scheme, which is why `java<tab>script:x` is a javascript: URL.
+ */
+function stripBlankAndControl(value) {
+  let out = "";
+  for (const ch of String(value)) {
+    const code = ch.codePointAt(0);
+    if (code <= 0x20 || code === 0x7f) continue;
+    out += ch;
+  }
+  return out;
+}
+
+/** True when this href/src value is safe to keep. */
+function isSafeUrl(value) {
+  // Control characters and whitespace are ignored by a browser's URL parser,
+  // so `java\nscript:x` is a javascript: URL. Strip them before testing.
+  const bare = stripBlankAndControl(decodeUrlEntities(value));
+  const scheme = bare.match(/^([A-Za-z][A-Za-z0-9+.\-]*):/);
+  if (!scheme) return true; // relative, fragment, or query-only
+  return SAFE_URL_SCHEMES.has(scheme[1].toLowerCase());
+}
+
+/**
+ * Reads one tag's attributes out of the text between the tag name and its `>`.
+ * Quote-aware, because a raw HTML tag copied from the document has NOT had its
+ * attribute values escaped, so a `>` can legitimately sit inside a quoted
+ * value.
+ */
+function readTagAttrs(text) {
+  const out = [];
+  const re = /([A-Za-z_:][-\w:.]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let value = m[2];
+    if (value === undefined) {
+      out.push({ name: m[1], value: null });
+      continue;
+    }
+    if (value[0] === '"' || value[0] === "'") value = value.slice(1, -1);
+    out.push({ name: m[1], value });
+  }
+  return out;
+}
+
+/**
+ * Rebuilds one allowed tag with only its allowed attributes.
+ *
+ * An absolute link also gets target="_blank" and a rel that blocks
+ * window.opener. The panel already calls preventDefault on a card link (see
+ * the click handler in buildBoardHtml, which is what keeps a link from
+ * hijacking a card-selecting click), so this never normally fires — it is the
+ * fallback that keeps a click which escapes that handler from navigating the
+ * panel iframe away and taking the board with it.
+ */
+function safeTagHtml(name, attrText, selfClosing) {
+  const parts = [name];
+  let href = null;
+  for (const attr of readTagAttrs(attrText)) {
+    const lower = attr.name.toLowerCase();
+    if (!SAFE_ATTRS.has(lower)) continue;
+    if (attr.value === null) {
+      parts.push(lower);
+      continue;
+    }
+    if ((lower === "href" || lower === "src") && !isSafeUrl(attr.value)) continue;
+    if (lower === "href") href = attr.value;
+    parts.push(`${lower}="${escapeAttrValue(attr.value)}"`);
+  }
+  if (name === "a" && href && /^[A-Za-z][A-Za-z0-9+.\-]*:/.test(href.trim())) {
+    parts.push('target="_blank"', 'rel="noopener noreferrer"');
+  }
+  const close = selfClosing || VOID_TAGS.has(name) ? "/>" : ">";
+  return `<${parts.join(" ")}${close}`;
+}
+
+/**
+ * Filters one card body's rendered HTML down to a safe, BALANCED fragment.
+ *
+ * Two jobs, and the second one matters as much as the first:
+ *
+ *  1. Safety. Only SAFE_TAGS survive, only SAFE_ATTRS on them, only
+ *     SAFE_URL_SCHEMES in an href or src. A disallowed tag is dropped but its
+ *     text is kept, because that text is the user's content; a
+ *     STRIP_CONTENT_TAGS tag takes its contents with it.
+ *  2. Balance. Every close tag must match an open tag this function itself
+ *     emitted, and anything still open at the end is closed here. A stray
+ *     `</div>` in the document would otherwise close the CARD's own element,
+ *     which would break the card rectangles pickDropTarget reads and put the
+ *     rest of the board inside one card.
+ *
+ * The input contract: already-escaped HTML from markdown.markdownToHtml. Text
+ * runs are passed through untouched rather than re-escaped, because escaping
+ * them twice would show `&amp;` to the user. A `<` that does not begin a tag
+ * IS escaped, so an unterminated or malformed tag degrades to visible text.
+ */
+function sanitizeRenderedHtml(html) {
+  if (typeof html !== "string") return "";
+  const out = [];
+  const openStack = [];
+  let i = 0;
+
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out.push(html.slice(i));
+      break;
+    }
+    if (lt > i) out.push(html.slice(i, lt));
+
+    // A comment. Atomdown's own markers are comments, and a comment carries
+    // nothing a card should show, so it goes entirely.
+    if (html.startsWith("<!--", lt)) {
+      const end = html.indexOf("-->", lt + 4);
+      i = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    // A doctype, CDATA or processing instruction.
+    if (html.startsWith("<!", lt) || html.startsWith("<?", lt)) {
+      const end = html.indexOf(">", lt);
+      i = end === -1 ? html.length : end + 1;
+      continue;
+    }
+
+    const closing = html[lt + 1] === "/";
+    const nameStart = lt + (closing ? 2 : 1);
+    const nameMatch = html.slice(nameStart).match(/^[A-Za-z][A-Za-z0-9]*/);
+    if (!nameMatch) {
+      // Not a tag at all: a bare `<` in the text. Show it.
+      out.push("&lt;");
+      i = lt + 1;
+      continue;
+    }
+    const name = nameMatch[0].toLowerCase();
+
+    // Find this tag's `>`, skipping any inside a quoted attribute value.
+    let j = nameStart + nameMatch[0].length;
+    let quote = null;
+    while (j < html.length) {
+      const ch = html[j];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === ">") {
+        break;
+      }
+      j++;
+    }
+    if (j >= html.length) {
+      // Unterminated tag. Nothing after it can be trusted to be markup, so
+      // show the rest as text rather than guess.
+      out.push("&lt;", escapeHtml(html.slice(lt + 1)));
+      i = html.length;
+      break;
+    }
+    const inner = html.slice(nameStart + nameMatch[0].length, j);
+    i = j + 1;
+
+    if (closing) {
+      if (!SAFE_TAGS.has(name)) continue;
+      const at = openStack.lastIndexOf(name);
+      if (at === -1) continue; // a stray close tag: drop it, keep the card intact
+      while (openStack.length > at) out.push(`</${openStack.pop()}>`);
+      continue;
+    }
+
+    if (STRIP_CONTENT_TAGS.has(name)) {
+      // Skip to this tag's own close tag, or to the end of the input.
+      const closeAt = html.toLowerCase().indexOf(`</${name}`, i);
+      if (closeAt === -1) {
+        i = html.length;
+        break;
+      }
+      const closeEnd = html.indexOf(">", closeAt);
+      i = closeEnd === -1 ? html.length : closeEnd + 1;
+      continue;
+    }
+
+    if (!SAFE_TAGS.has(name)) continue; // drop the tag, keep the text inside it
+
+    const peers = IMPLIED_CLOSE[name];
+    while (
+      peers && openStack.length &&
+      peers.indexOf(openStack[openStack.length - 1]) !== -1
+    ) {
+      out.push(`</${openStack.pop()}>`);
+    }
+
+    const selfClosing = /\/\s*$/.test(inner);
+    out.push(safeTagHtml(name, inner, selfClosing));
+    if (!selfClosing && !VOID_TAGS.has(name)) openStack.push(name);
+  }
+
+  while (openStack.length) out.push(`</${openStack.pop()}>`);
+  return out.join("");
+}
+
+/**
+ * Renders every atom's block to safe HTML through the host's markdown
+ * pipeline, returning a NEW atom list carrying a `renderedHtml` string.
+ *
+ * Failure is per card and never fatal: an older host with no
+ * markdown.markdownToHtml syscall, or one block the renderer chokes on, leaves
+ * `renderedHtml` null and that card falls back to its raw markdown (see
+ * buildCardHtml). The board still draws.
+ */
+async function renderAtomBodies(atoms) {
+  const out = [];
+  for (const atom of atoms) {
+    let renderedHtml = null;
+    try {
+      const html = await syscall("markdown.markdownToHtml", atom.text);
+      if (typeof html === "string") renderedHtml = sanitizeRenderedHtml(html);
+    } catch (e) {
+      // No markdown syscall on this host, or this block would not render.
+    }
+    out.push(Object.assign({}, atom, { renderedHtml }));
+  }
+  return out;
+}
+
 // CSS custom property names SilverBullet's own theme defines on the
 // PARENT document's <html> element. A plug panel renders in an iframe, and
 // CSS custom properties do not cross that boundary on their own — see
@@ -1172,6 +1519,29 @@ const THEME_VAR_NAMES = [
   "--link-color",
 ];
 
+/**
+ * Which body a card shows: "rendered" (the default) or "raw".
+ *
+ * Two levels, and the board-wide one is the level Steve will actually use — he
+ * wants to read the document, and only occasionally inspect one block's
+ * syntax. So the toolbar carries the board-wide switch, and a card's three-dot
+ * menu carries an override for that one card.
+ *
+ * RENDERED IS THE DEFAULT AT BOTH LEVELS. An absent boardView, an absent
+ * override, and any value neither side recognises all mean rendered.
+ *
+ * Pure and self-contained: it is injected into the panel script, so the
+ * toolbar, a card's menu and the initial markup cannot disagree about what a
+ * card is showing.
+ */
+function effectiveCardView(atomId, viewState) {
+  const state = viewState || {};
+  const overrides = state.cardViews || {};
+  const own = overrides[atomId];
+  if (own === "raw" || own === "rendered") return own;
+  return state.boardView === "raw" ? "raw" : "rendered";
+}
+
 // The pure decision functions the panel script needs. They are injected into
 // that script by source (Function.prototype.toString) rather than duplicated,
 // so the panel and the worker cannot disagree about where a drop lands or
@@ -1188,6 +1558,7 @@ const CLIENT_SHARED_FUNCTIONS = [
   rectsIntersect,
   sanitizeSlug,
   deriveGroupSlug,
+  effectiveCardView,
 ];
 
 function injectSharedFunctions() {
@@ -1206,8 +1577,24 @@ function injectSharedFunctions() {
  * field is the plainer surface behind it, so the cards read as the group's
  * contents. That is a background difference, not a second border, so it
  * cannot compete with either the container edge or the selection ring.
+ *
+ * THE BODY IS RENDERED COMMONMARK BY DEFAULT, and the raw markdown ships
+ * alongside it in a hidden <pre>. Both are in the markup rather than one being
+ * fetched on demand, for three reasons:
+ *   - toggling is then instant and needs no round trip to the worker, so Raw
+ *     and back is a CSS-level change, not a redraw;
+ *   - a card the renderer could not handle (renderedHtml null) falls back to
+ *     the raw body with no extra path;
+ *   - the panel still has each block's EXACT original text, which is what
+ *     deriveGroupSlug reads when it defaults a new group's name. Reading a
+ *     rendered heading would have lost the `##` it looks for.
  */
-function buildCardHtml(atom) {
+function buildCardHtml(atom, viewState) {
+  const view = effectiveCardView(atom.id, viewState);
+  const hasRendered = typeof atom.renderedHtml === "string" &&
+    atom.renderedHtml !== "";
+  // A card with nothing to render shows raw, whatever the board is set to.
+  const showRaw = view === "raw" || !hasRendered;
   const classes = ["board-card"];
   if (atom.implicit) classes.push("board-card-implicit");
   const badges = [];
@@ -1224,7 +1611,7 @@ function buildCardHtml(atom) {
     ? "This block has no directive yet, so it has no id of its own."
     : `Atom id ${atom.id} — this is the identity. A name (slug) is only an alias.`;
   return `
-      <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}">
+      <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}" data-card-view="${showRaw ? "raw" : "rendered"}"${hasRendered ? "" : ' data-no-rendered="1"'}>
         <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
           <span class="board-drag-handle" aria-hidden="true">&#10021;&#10021;</span>
           ${nameHtml}
@@ -1235,7 +1622,8 @@ function buildCardHtml(atom) {
             <div class="board-menu-popover" data-menu-popover="${escapeHtml(atom.id)}" hidden></div>
           </div>
         </div>
-        <pre class="board-card-body">${escapeHtml(atom.text)}</pre>
+        <div class="board-card-body board-card-rendered" data-card-rendered="${escapeHtml(atom.id)}"${showRaw ? " hidden" : ""}>${hasRendered ? atom.renderedHtml : ""}</div>
+        <pre class="board-card-body board-card-raw" data-card-raw="${escapeHtml(atom.id)}"${showRaw ? "" : " hidden"}>${escapeHtml(atom.text)}</pre>
       </div>`;
 }
 
@@ -1261,7 +1649,7 @@ function buildCardHtml(atom) {
  * rendered into the markup rather than applied by the panel script afterwards,
  * so a collapsed group never flashes open on the way in.
  */
-function buildGroupHtml(groupId, groupSlug, members, collapsed) {
+function buildGroupHtml(groupId, groupSlug, members, collapsed, viewState) {
   const nameHtml = groupSlug
     ? `<span class="board-group-name" title="${escapeHtml(`Name (slug) "${groupSlug}" — the group's id is ${groupId}`)}">${escapeHtml(groupSlug)}</span>`
     : "";
@@ -1287,7 +1675,7 @@ function buildGroupHtml(groupId, groupSlug, members, collapsed) {
             <button type="button" class="board-group-btn" data-group-ungroup="${escapeHtml(groupId)}" title="Remove this group's markers. Every atom inside it stays.">Ungroup</button>
           </div>
         </div>
-        <div class="board-group-cards" data-group-cards="${escapeHtml(groupId)}"${isCollapsed ? " hidden" : ""}>${members.map(buildCardHtml).join("\n")}</div>
+        <div class="board-group-cards" data-group-cards="${escapeHtml(groupId)}"${isCollapsed ? " hidden" : ""}>${members.map((m) => buildCardHtml(m, viewState)).join("\n")}</div>
       </div>`;
 }
 
@@ -1300,13 +1688,13 @@ function buildGroupHtml(groupId, groupSlug, members, collapsed) {
  * keeps the drop geometry, the lasso and the unit order working unchanged —
  * every one of those reads `.board-card[data-atom-id]` in document order.
  */
-function buildStripHtml(atoms, collapsedIds) {
+function buildStripHtml(atoms, collapsedIds, viewState) {
   const collapsed = collapsedIds || [];
   const parts = [];
   let i = 0;
   while (i < atoms.length) {
     if (!atoms[i].groupId) {
-      parts.push(buildCardHtml(atoms[i]));
+      parts.push(buildCardHtml(atoms[i], viewState));
       i++;
       continue;
     }
@@ -1318,15 +1706,25 @@ function buildStripHtml(atoms, collapsedIds) {
       i++;
     }
     parts.push(
-      buildGroupHtml(groupId, groupSlug, members, collapsed.indexOf(groupId) !== -1),
+      buildGroupHtml(
+        groupId,
+        groupSlug,
+        members,
+        collapsed.indexOf(groupId) !== -1,
+        viewState,
+      ),
     );
   }
   return parts.join("\n");
 }
 
-function buildBoardHtml(atoms, pageName, collapsedIds) {
+function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
   const collapsed = Array.isArray(collapsedIds) ? collapsedIds : [];
-  const cardsHtml = buildStripHtml(atoms, collapsed);
+  const view = {
+    boardView: viewState && viewState.boardView === "raw" ? "raw" : "rendered",
+    cardViews: (viewState && viewState.cardViews) || {},
+  };
+  const cardsHtml = buildStripHtml(atoms, collapsed, view);
 
   const style = `
     :root {
@@ -1568,15 +1966,126 @@ function buildBoardHtml(atoms, pageName, collapsedIds) {
       background: var(--ui-surface-hover-background-color);
       color: var(--subtle-color);
     }
+    .board-toolbar-actions { display: flex; gap: 8px; align-items: center; }
     .board-card-body {
       margin: 0;
       padding: 8px;
-      font-family: ui-monospace, monospace;
-      font-size: 12px;
-      white-space: pre-wrap;
       word-break: break-word;
       flex: 1;
     }
+    .board-card-body[hidden] { display: none; }
+    /* RAW markdown. Monospace and pre-wrap, exactly as before, because the
+       point of this view is to see the source byte for byte. */
+    .board-card-raw {
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    /* RENDERED CommonMark — the default.
+       ------------------------------------------------------------------
+       The rule here is "look like the document, not like a widget", so this
+       block sets structure and rhythm and takes every colour and the body
+       font from the parent theme's own tokens (applyParentTheme copies them
+       in live). There is no palette of its own.
+       First and last child margins are collapsed so a card whose block is a
+       single heading or paragraph is not padded twice. */
+    .board-card-rendered {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .board-card-rendered > :first-child { margin-top: 0; }
+    .board-card-rendered > :last-child { margin-bottom: 0; }
+    .board-card-rendered p { margin: 0.5em 0; }
+    .board-card-rendered h1,
+    .board-card-rendered h2,
+    .board-card-rendered h3,
+    .board-card-rendered h4,
+    .board-card-rendered h5,
+    .board-card-rendered h6 {
+      margin: 0.4em 0 0.3em;
+      line-height: 1.25;
+      font-weight: 600;
+    }
+    /* A card is a block, not a page, so a heading inside one is sized by its
+       LEVEL relative to the card rather than at document scale — a document
+       h1 at 2em would dwarf the card it sits in. */
+    .board-card-rendered h1 { font-size: 1.5em; }
+    .board-card-rendered h2 { font-size: 1.3em; }
+    .board-card-rendered h3 { font-size: 1.15em; }
+    .board-card-rendered h4,
+    .board-card-rendered h5,
+    .board-card-rendered h6 { font-size: 1em; }
+    .board-card-rendered ul,
+    .board-card-rendered ol { margin: 0.4em 0; padding-left: 1.5em; }
+    .board-card-rendered li { margin: 0.15em 0; }
+    .board-card-rendered a {
+      color: var(--link-color);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .board-card-rendered code {
+      font-family: ui-monospace, monospace;
+      font-size: 0.88em;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: var(--subtle-background-color);
+    }
+    .board-card-rendered pre {
+      margin: 0.5em 0;
+      padding: 8px;
+      border-radius: 4px;
+      background: var(--subtle-background-color);
+      overflow-x: auto;
+    }
+    .board-card-rendered pre code { background: none; padding: 0; }
+    .board-card-rendered blockquote {
+      margin: 0.5em 0;
+      padding: 0 0 0 10px;
+      border-left: 3px solid var(--ui-surface-border-color);
+      color: var(--subtle-color);
+    }
+    .board-card-rendered hr {
+      border: none;
+      border-top: 1px solid var(--ui-surface-border-color);
+      margin: 0.7em 0;
+    }
+    .board-card-rendered img { max-width: 100%; height: auto; }
+    /* A TABLE must not widen the card.
+       ------------------------------------------------------------------
+       pickDropTarget reads each card's own rectangle, so a card that grows
+       wider than the column would change the geometry a drop is decided
+       from. The table scrolls INSIDE its own wrapper instead, which leaves
+       the card's box exactly where the flex column put it. */
+    .board-card-rendered table {
+      border-collapse: collapse;
+      margin: 0.5em 0;
+      font-size: 0.92em;
+      display: block;
+      max-width: 100%;
+      overflow-x: auto;
+    }
+    .board-card-rendered th,
+    .board-card-rendered td {
+      border: 1px solid var(--ui-surface-border-color);
+      padding: 3px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .board-card-rendered th {
+      background: var(--ui-surface-hover-background-color);
+      font-weight: 600;
+    }
+    /* A rendered task-list checkbox is a picture of the document's state, not
+       a control: this board never writes a byte from a card body, so letting
+       it be clicked would promise an edit that cannot happen. */
+    .board-card-rendered input[type="checkbox"] {
+      pointer-events: none;
+      margin-right: 4px;
+    }
+    /* Selecting a card is a click gesture, so text selection inside a card
+       body would fight it. The RAW view keeps text selectable, because
+       copying the source is the reason to open it. */
+    .board-card-rendered { user-select: none; }
     .board-card-menu { position: relative; margin-left: auto; }
     .board-menu-btn {
       cursor: pointer;
@@ -1707,7 +2216,10 @@ function buildBoardHtml(atoms, pageName, collapsedIds) {
     <style>${style}</style>
     <div class="board-toolbar">
       <div class="board-title">Atomdown Board${pageName ? " — " + escapeHtml(pageName) : ""}</div>
-      <button class="board-close" id="atomdown-board-close">Close</button>
+      <div class="board-toolbar-actions">
+        <button class="board-close" id="atomdown-board-view" data-board-view="${view.boardView}" title="${view.boardView === "raw" ? "Show every card as rendered CommonMark" : "Show every card's raw markdown source"}">${view.boardView === "raw" ? "Rendered" : "Raw markdown"}</button>
+        <button class="board-close" id="atomdown-board-close">Close</button>
+      </div>
     </div>
     <div class="board-cards">${cardsHtml || "<p style=\"padding:16px;color:var(--subtle-color);\">No atoms found in this document.</p>"}</div>
   `;
@@ -1913,6 +2425,106 @@ ${injectSharedFunctions()}
         }
       }
     });
+
+    // --- Rendered or raw ------------------------------------------------
+    //
+    // Both bodies are already in the DOM (see buildCardHtml), so switching is
+    // a hidden flag, not a redraw and not a round trip to the worker. Nothing
+    // here touches the document: which body a card shows is presentation, the
+    // same class of state as a collapsed group, and it lives in the same
+    // client-local key-value store.
+    //
+    // The board-wide switch is the master. Flipping it CLEARS every per-card
+    // override, so "show me the whole document as markdown" means the whole
+    // document and not "the whole document except the four cards I poked".
+    var VIEW = {
+      boardView: (ATOMDOWN_BOARD_VIEW && ATOMDOWN_BOARD_VIEW.boardView) === "raw"
+        ? "raw"
+        : "rendered",
+      cardViews: (ATOMDOWN_BOARD_VIEW && ATOMDOWN_BOARD_VIEW.cardViews) || {},
+    };
+
+    async function persistView() {
+      try {
+        await syscall(
+          "clientStore.set",
+          "atomdown-board.view:" + ATOMDOWN_BOARD_PAGE,
+          { boardView: VIEW.boardView, cardViews: VIEW.cardViews },
+        );
+      } catch (e) {
+        // No store (a stub host, private browsing, an older SilverBullet). The
+        // view applied for this session; only remembering it failed, and that
+        // is not worth an error in the user's face.
+      }
+    }
+
+    // Applies one card's effective view to its two bodies. A card whose block
+    // the renderer could not handle carries data-no-rendered and stays raw
+    // whatever the board is set to — there is nothing else to show it.
+    function applyCardView(cardEl) {
+      var atomId = cardEl.getAttribute("data-atom-id");
+      var rendered = cardEl.querySelector("[data-card-rendered]");
+      var raw = cardEl.querySelector("[data-card-raw]");
+      var view = effectiveCardView(atomId, VIEW);
+      if (cardEl.getAttribute("data-no-rendered") === "1") view = "raw";
+      if (rendered) rendered.hidden = view !== "rendered";
+      if (raw) raw.hidden = view !== "raw";
+      cardEl.setAttribute("data-card-view", view);
+      return view;
+    }
+
+    function applyEveryCardView() {
+      CARD_ELS.forEach(applyCardView);
+    }
+
+    var viewBtn = document.getElementById("atomdown-board-view");
+
+    function refreshViewButton() {
+      if (!viewBtn) return;
+      var raw = VIEW.boardView === "raw";
+      viewBtn.textContent = raw ? "Rendered" : "Raw markdown";
+      viewBtn.title = raw
+        ? "Show every card as rendered CommonMark"
+        : "Show every card's raw markdown source";
+      viewBtn.setAttribute("data-board-view", VIEW.boardView);
+    }
+
+    if (viewBtn) {
+      viewBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        VIEW.boardView = VIEW.boardView === "raw" ? "rendered" : "raw";
+        VIEW.cardViews = {};
+        applyEveryCardView();
+        refreshViewButton();
+        persistView();
+      });
+    }
+
+    // Sets, or clears, ONE card's override. Setting it to the board-wide value
+    // clears the override rather than storing a redundant copy, so a later flip
+    // of the board switch still moves that card.
+    function setCardOverride(atomId, view) {
+      if (view === VIEW.boardView) delete VIEW.cardViews[atomId];
+      else VIEW.cardViews[atomId] = view;
+      var cardEl = document.querySelector(
+        '.board-card[data-atom-id="' + atomId + '"]',
+      );
+      if (cardEl) applyCardView(cardEl);
+      persistView();
+    }
+
+    // A rendered link is a real <a> with a real href, so it looks and hovers
+    // like the link in the document. It must not NAVIGATE, though: this panel
+    // is the board, and following a link inside it would replace the board with
+    // the target page. So a click on a card link is swallowed here and falls
+    // through to the card's own selection handler — selection wins, which is
+    // the gesture the click was for. The sanitizer also puts target="_blank"
+    // on an absolute link, so a click that somehow escapes this opens a tab
+    // instead of destroying the board.
+    document.addEventListener("click", function (e) {
+      var anchor = e.target && e.target.closest && e.target.closest("a");
+      if (anchor && anchor.closest(".board-card-rendered")) e.preventDefault();
+    }, true);
 
     // --- Group containers ----------------------------------------------
     //
@@ -2239,9 +2851,13 @@ ${injectSharedFunctions()}
     // deriveGroupSlug() reads to find the first heading. Taken from the
     // rendered card bodies rather than shipped in ATOMDOWN_BOARD_DATA, so the
     // panel payload does not carry a second copy of the whole page.
+    // Deliberately the RAW body, never the rendered one. deriveGroupSlug looks
+    // for the first markdown heading, and a rendered heading no longer carries
+    // the "##" it matches on — so reading the rendered node would silently
+    // stop defaulting a new group's name.
     function selectedCardTexts() {
       return selectedCards().map(function (card) {
-        var body = card.querySelector(".board-card-body");
+        var body = card.querySelector(".board-card-raw");
         return body ? body.textContent : "";
       });
     }
@@ -2254,6 +2870,9 @@ ${injectSharedFunctions()}
       var btn = popoverEl.boardGroupBtn;
       if (!btn) return;
       if (popoverEl.boardCloseSlugForm) popoverEl.boardCloseSlugForm();
+      // The board-wide switch may have moved this card since the menu was
+      // last open, so the view item is re-decided here too.
+      if (popoverEl.boardRefreshCardView) popoverEl.boardRefreshCardView();
       var state = groupMenuStateFor(atom);
       btn.textContent = state.label;
       btn.disabled = !state.enabled;
@@ -2310,6 +2929,58 @@ ${injectSharedFunctions()}
 
       popoverEl.appendChild(groupRow);
       popoverEl.boardGroupBtn = groupBtn;
+
+      // This ONE card's view. The board-wide switch in the toolbar is the one
+      // Steve asked for and the one he will use; this is the exception for
+      // "show me the syntax of just this block", which is why it sits in the
+      // card's own menu rather than adding a second toolbar control.
+      //
+      // A card the renderer could not handle gets a disabled item with the
+      // reason in its tooltip, the same rule the Group item follows: an action
+      // that is not offered stays visible and says why.
+      var viewRow = el("div", "board-menu-group-row");
+      var cardViewBtn = el("button", "board-menu-item");
+      cardViewBtn.type = "button";
+      var noRendered = false;
+
+      function refreshCardViewBtn() {
+        var cardEl = popoverEl.closest(".board-card");
+        noRendered = !!cardEl &&
+          cardEl.getAttribute("data-no-rendered") === "1";
+        var showing = cardEl
+          ? cardEl.getAttribute("data-card-view")
+          : effectiveCardView(atom.id, VIEW);
+        if (noRendered) {
+          cardViewBtn.textContent = "Raw markdown";
+          cardViewBtn.disabled = true;
+          cardViewBtn.title =
+            "This block did not render, so the card is already showing its raw markdown.";
+          return;
+        }
+        cardViewBtn.disabled = false;
+        cardViewBtn.textContent = showing === "raw"
+          ? "Show rendered"
+          : "Show raw markdown";
+        cardViewBtn.title = showing === "raw"
+          ? "Render this card's CommonMark. Only this card."
+          : "Show this card's markdown source. Only this card.";
+      }
+
+      cardViewBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (cardViewBtn.disabled) return;
+        var cardEl = popoverEl.closest(".board-card");
+        var showing = cardEl
+          ? cardEl.getAttribute("data-card-view")
+          : effectiveCardView(atom.id, VIEW);
+        setCardOverride(atom.id, showing === "raw" ? "rendered" : "raw");
+        refreshCardViewBtn();
+      });
+
+      viewRow.appendChild(cardViewBtn);
+      popoverEl.appendChild(viewRow);
+      popoverEl.boardRefreshCardView = refreshCardViewBtn;
+      refreshCardViewBtn();
 
       // Live preview of exactly what will be written, plus the duplicate
       // warning. The warning never disables the button: Atomdown permits two
@@ -2785,6 +3456,7 @@ ${injectSharedFunctions()}
   const script = `var ATOMDOWN_BOARD_DATA = ${JSON.stringify(clientData)};\n` +
     `var ATOMDOWN_BOARD_PAGE = ${JSON.stringify(pageName || "")};\n` +
     `var ATOMDOWN_BOARD_COLLAPSED = ${JSON.stringify(collapsed)};\n` +
+    `var ATOMDOWN_BOARD_VIEW = ${JSON.stringify(view)};\n` +
     clientScript;
 
   return { html, script };
@@ -2820,6 +3492,42 @@ function boardOpenKey(pageName) {
 
 function collapsedKey(pageName) {
   return "atomdown-board.collapsed:" + (pageName || "");
+}
+
+function viewKey(pageName) {
+  return "atomdown-board.view:" + (pageName || "");
+}
+
+/**
+ * This page's remembered rendered/raw choice, board-wide and per card.
+ *
+ * Always returns a usable state, and that state DEFAULTS TO RENDERED: a page
+ * that was never toggled, a store that is missing or throwing, and a stored
+ * value in any shape this function does not recognise all come back as
+ * rendered with no overrides. Raw is only ever the answer when the user
+ * asked for it and the store still says so.
+ */
+async function loadViewState(pageName) {
+  const fallback = { boardView: "rendered", cardViews: {} };
+  if (!pageName) return fallback;
+  let stored;
+  try {
+    stored = await syscall("clientStore.get", viewKey(pageName));
+  } catch (e) {
+    return fallback;
+  }
+  if (!stored || typeof stored !== "object") return fallback;
+  const cardViews = {};
+  const raw = stored.cardViews;
+  if (raw && typeof raw === "object") {
+    for (const id of Object.keys(raw)) {
+      if (raw[id] === "raw" || raw[id] === "rendered") cardViews[id] = raw[id];
+    }
+  }
+  return {
+    boardView: stored.boardView === "raw" ? "raw" : "rendered",
+    cardViews,
+  };
 }
 
 /** Remembers, or forgets, that the board is showing for this page. */
@@ -2859,9 +3567,12 @@ async function loadCollapsedGroups(pageName) {
  * the reopen-on-load path, so those cannot drift apart.
  */
 async function showBoard(sourceText, pageName) {
-  const atoms = parseAtoms(sourceText);
+  // Rendering happens HERE rather than inside buildBoardHtml, because
+  // buildBoardHtml is pure markup assembly and rendering needs a syscall.
+  const atoms = await renderAtomBodies(parseAtoms(sourceText));
   const collapsed = await loadCollapsedGroups(pageName);
-  const { html, script } = buildBoardHtml(atoms, pageName, collapsed);
+  const viewState = await loadViewState(pageName);
+  const { html, script } = buildBoardHtml(atoms, pageName, collapsed, viewState);
 
   // Inset 0: this reads as a page VIEW, not a floating dialog, matching
   // Steve's expectation ("an option in the UI" that switches the current
@@ -3286,6 +3997,13 @@ const internals = {
   buildStripHtml,
   boardOpenKey,
   collapsedKey,
+  viewKey,
+  loadViewState,
+  effectiveCardView,
+  sanitizeRenderedHtml,
+  isSafeUrl,
+  decodeUrlEntities,
+  renderAtomBodies,
 };
 
 const plugExport = { manifest, functionMapping, internals };
