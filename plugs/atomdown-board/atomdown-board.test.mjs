@@ -54,6 +54,12 @@ const {
   collapsedKey,
   viewKey,
   loadViewState,
+  densityKey,
+  loadDensity,
+  normalizeDensity,
+  otherDensity,
+  densityLabel,
+  densityTitle,
   effectiveCardView,
   sanitizeRenderedHtml,
   isSafeUrl,
@@ -591,18 +597,24 @@ function fakeMarkdownToHtml(text) {
     const level = heading[1].length;
     return `<h${level}>${heading[2]}</h${level}>`;
   }
+  // Inline markdown, applied EVERYWHERE a real renderer applies it, table
+  // cells included. An earlier version substituted only outside tables, and a
+  // reader of a rig built on it reported that links in cells "stayed as raw
+  // markdown" - a defect of this function, never of the plug.
+  const inline = (t) => t
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   if (text.startsWith("|")) {
     const rows = text.split("\n").filter((l) => !/^\|[\s|:-]+\|$/.test(l));
     const cells = rows.map((row) => {
       const parts = row.split("|").slice(1, -1);
-      return "<tr>" + parts.map((p) => `<td>${p.trim()}</td>`).join("") + "</tr>";
+      return "<tr>" + parts.map((p) => `<td>${inline(p.trim())}</td>`).join("") +
+        "</tr>";
     });
     return `<table><tbody>${cells.join("")}</tbody></table>`;
   }
-  let body = text
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  let body = inline(text);
   if (/^\d+\.\s/m.test(text)) {
     const items = body.split("\n").map((l) => l.replace(/^\d+\.\s*/, ""));
     return "<ol>" + items.map((i) => `<li>${i}</li>`).join("") + "</ol>";
@@ -1331,8 +1343,14 @@ test("a member card carries no group accent and no group badge", () => {
 test("the container reuses the accent token, and adds no second colour", () => {
   const html = boardHtml(TIGHT_GROUP);
   assert.ok(html.includes(".board-group {"));
-  assert.ok(html.includes("border: 2px solid var(--ui-accent-color)"));
-  assert.ok(html.includes("background: var(--ui-accent-color)"));
+  // The accent now travels through the board's own knob, which DEFAULTS to
+  // SilverBullet's accent token (see the :root block), so the board still has
+  // exactly one blue and a user can retint it from a space-style page.
+  assert.ok(html.includes("--board-accent-color: var(--ui-accent-color)"));
+  assert.ok(html.includes(
+    "border: var(--board-group-border-width) solid var(--board-accent-color)",
+  ));
+  assert.ok(html.includes("background: var(--board-accent-color)"));
   // Every literal colour in the stylesheet is a :root fallback for a theme
   // variable. Nothing added a hue of its own.
   const style = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
@@ -1407,8 +1425,8 @@ test("a selected card is a double ring, not the container's single edge", () => 
   );
   // Same hue, different shape: a border plus a second ring set outside it,
   // plus a lifted background. No second colour token.
-  assert.ok(rule.includes("border: 2px solid var(--ui-accent-color)"));
-  assert.ok(rule.includes("outline: 2px solid var(--ui-accent-color)"));
+  assert.ok(rule.includes("border: 2px solid var(--board-accent-color)"));
+  assert.ok(rule.includes("outline: 2px solid var(--board-accent-color)"));
   assert.ok(rule.includes("outline-offset: 2px"));
   assert.ok(rule.includes("background: var(--ui-surface-hover-background-color)"));
   // The old "grouped card keeps a thicker left edge" special case is gone.
@@ -1418,9 +1436,11 @@ test("a selected card is a double ring, not the container's single edge", () => 
 test("a collapsed group's cards are hidden, and nothing else changes", () => {
   const open = boardHtml(TIGHT_GROUP, []);
   const shut = boardHtml(TIGHT_GROUP, ["KF53ASNE"]);
-  assert.ok(!open.includes("board-group-collapsed"));
+  // On the container's own class attribute, not merely somewhere in the
+  // stylesheet - the resting-chrome rules name the collapsed class too.
+  assert.ok(!open.includes('class="board-group board-group-collapsed"'));
   assert.ok(open.includes('data-group-cards="KF53ASNE">'));
-  assert.ok(shut.includes("board-group-collapsed"));
+  assert.ok(shut.includes('class="board-group board-group-collapsed"'));
   assert.ok(shut.includes('data-group-cards="KF53ASNE" hidden>'));
   assert.ok(shut.includes('aria-expanded="false"'));
   // Every member card is still rendered, only not shown.
@@ -2077,3 +2097,903 @@ test("sanitizeRenderedHtml never throws, whatever it is handed", () => {
     assert.equal(typeof sanitizeRenderedHtml(input), "string", String(input));
   }
 });
+
+// --- Display density: comfortable and compact ------------------------------
+//
+// The rules under test are the ones a change to the stylesheet could break
+// silently: that compact removes the card header row and puts NO seam in its
+// place, that identity moves into the menu, that the group outline and every
+// content size are identical at both densities, that the interactions the
+// board depends on are still wired to the same elements, and that switching
+// density does not touch the document.
+
+const DENSITY_PAGE = "Todo/running";
+
+function densityHtml(sourceText, density, collapsedIds) {
+  return buildBoardHtml(
+    parseAtoms(sourceText),
+    "Board",
+    collapsedIds || [],
+    null,
+    density,
+  ).html;
+}
+
+// The stylesheet, and one density's block of it.
+function styleOf(html) {
+  return html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+}
+
+// The stylesheet as {selector, body} rules, comments stripped. A crude split
+// on "}" drags neighbouring rules and comment prose into the answer, which is
+// exactly how a test can pass while asserting nothing.
+function cssRules(html) {
+  const style = styleOf(html).replace(/\/\*[\s\S]*?\*\//g, "");
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(style))) {
+    out.push({ sel: m[1].trim(), body: m[2].trim() });
+  }
+  return out;
+}
+
+function rulesFor(html, needle) {
+  return cssRules(html).filter((r) => r.sel.includes(needle));
+}
+
+// Every rule that only applies at compact density.
+function compactRules(html) {
+  return rulesFor(html, '[data-density="compact"]');
+}
+
+function ruleBodies(rules) {
+  return rules.map((r) => r.body).join("\n");
+}
+
+test("normalizeDensity: comfortable is the default and the fallback", () => {
+  assert.equal(normalizeDensity("compact"), "compact");
+  assert.equal(normalizeDensity("comfortable"), "comfortable");
+  for (const junk of [undefined, null, "", "bare", "COMPACT", 7, {}, []]) {
+    assert.equal(normalizeDensity(junk), "comfortable", String(junk));
+  }
+});
+
+test("there are two densities and no third", () => {
+  assert.equal(otherDensity("comfortable"), "compact");
+  assert.equal(otherDensity("compact"), "comfortable");
+  assert.equal(otherDensity(otherDensity("compact")), "compact");
+});
+
+test("the switch is labelled with the state it would give you", () => {
+  // Same idiom as the raw/rendered switch beside it.
+  assert.equal(densityLabel("comfortable"), "Compact");
+  assert.equal(densityLabel("compact"), "Comfortable");
+  assert.match(densityTitle("comfortable"), /^Compact:/);
+  assert.match(densityTitle("compact"), /^Comfortable:/);
+  // The tooltip promises what compact actually does, content size included.
+  assert.match(densityTitle("comfortable"), /same content size/);
+});
+
+test("the board root carries the density in the markup, so nothing flashes", () => {
+  const roomy = densityHtml(TIGHT_GROUP, "comfortable");
+  const tight = densityHtml(TIGHT_GROUP, "compact");
+  assert.ok(roomy.includes(
+    '<div class="board-root" id="atomdown-board-root" data-density="comfortable">',
+  ));
+  assert.ok(tight.includes(
+    '<div class="board-root" id="atomdown-board-root" data-density="compact">',
+  ));
+});
+
+test("an absent or unknown density draws comfortable", () => {
+  const fallback = densityHtml(TIGHT_GROUP, undefined);
+  assert.ok(fallback.includes('id="atomdown-board-root" data-density="comfortable"'));
+  assert.equal(
+    densityHtml(TIGHT_GROUP, "bare"),
+    densityHtml(TIGHT_GROUP, "comfortable"),
+  );
+});
+
+test("the toolbar carries the density switch beside the raw switch", () => {
+  const html = densityHtml(TIGHT_GROUP, "comfortable");
+  assert.ok(html.includes('id="atomdown-board-density"'));
+  assert.ok(html.includes('data-board-density="comfortable"'));
+  assert.ok(html.includes(">Compact</button>"));
+  // Same class, so it is the same control in the same place.
+  assert.ok(html.includes('class="board-close" id="atomdown-board-density"'));
+  assert.ok(
+    html.indexOf('id="atomdown-board-density"') <
+      html.indexOf('id="atomdown-board-view"'),
+  );
+});
+
+test("densityKey is scoped by page and carries no document data", () => {
+  assert.equal(densityKey(DENSITY_PAGE), "atomdown-board.density:Todo/running");
+  assert.notEqual(densityKey("A"), densityKey("B"));
+  assert.equal(densityKey(undefined), "atomdown-board.density:");
+});
+
+test("loadDensity defaults to comfortable, and never throws", async () => {
+  const store = {};
+  store[densityKey(DENSITY_PAGE)] = "compact";
+  recordingSyscall(THREE_ATOMS, { store });
+  assert.equal(await loadDensity(DENSITY_PAGE), "compact");
+  assert.equal(await loadDensity("Another"), "comfortable");
+
+  for (const junk of ["bare", "", 3, {}, null]) {
+    const s2 = {};
+    s2[densityKey(DENSITY_PAGE)] = junk;
+    recordingSyscall(THREE_ATOMS, { store: s2 });
+    assert.equal(await loadDensity(DENSITY_PAGE), "comfortable", String(junk));
+  }
+
+  recordingSyscall(THREE_ATOMS, { storeThrows: true });
+  assert.equal(await loadDensity(DENSITY_PAGE), "comfortable");
+});
+
+test("a page left compact opens compact", async () => {
+  const store = {};
+  store[densityKey(DENSITY_PAGE)] = "compact";
+  const { calls } = await closedStart(TIGHT_GROUP, {
+    page: DENSITY_PAGE,
+    store,
+  });
+  await plug.functionMapping.toggleBoard();
+  const { html, script } = lastPanel(calls);
+  assert.ok(html.includes('id="atomdown-board-root" data-density="compact"'));
+  assert.ok(script.includes('var ATOMDOWN_BOARD_DENSITY = "compact"'));
+});
+
+test("the density is remembered per page, never as a default for another", async () => {
+  const store = {};
+  store[densityKey("Compact page")] = "compact";
+  const { calls } = await closedStart(TIGHT_GROUP, {
+    page: "Roomy page",
+    store,
+  });
+  await plug.functionMapping.toggleBoard();
+  assert.ok(lastPanel(calls).html.includes('data-density="comfortable">'));
+});
+
+test("the density lives in clientStore and nowhere else", async () => {
+  const { calls, script } = await openBoard(TIGHT_GROUP, { page: DENSITY_PAGE });
+  // The panel persists it through the one store the plug already uses.
+  assert.ok(script.includes('"atomdown-board.density:" + ATOMDOWN_BOARD_PAGE'));
+  assert.ok(script.includes('"clientStore.set"'));
+  // No second mechanism: a worker has no localStorage at all.
+  assert.ok(!script.includes("localStorage"));
+  assert.ok(!script.includes("sessionStorage"));
+  // And nothing about the density is written to the document.
+  assert.equal(calls.filter((c) => c.name === "editor.replaceRange").length, 0);
+  assert.equal(calls.some((c) => c.name === "space.writePage"), false);
+});
+
+test("switching density is a CSS change, not a redraw and not a write", async () => {
+  const { script } = await openBoard(TIGHT_GROUP, { page: DENSITY_PAGE });
+  // setDensity flips an attribute and persists. It does not call back into
+  // the worker, so there is no round trip and no chance of an edit.
+  const setDensity = script.slice(script.indexOf("function setDensity("));
+  const body = setDensity.slice(0, setDensity.indexOf("\n    }"));
+  assert.ok(body.includes("applyDensity()"));
+  assert.ok(body.includes("persistDensity()"));
+  assert.ok(!body.includes("invokeFunction"));
+  assert.ok(script.includes(
+    'document.documentElement.setAttribute("data-density", DENSITY)',
+  ));
+});
+
+test("no density value ever reaches a directive line", async () => {
+  const store = {};
+  store[densityKey(DENSITY_PAGE)] = "compact";
+  const { state } = recordingSyscall(THREE_ATOMS, {
+    page: DENSITY_PAGE,
+    store,
+  });
+  const grouped = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "two",
+  );
+  assert.equal(grouped.ok, true);
+  for (const word of ["density", "compact", "comfortable", "collapsed"]) {
+    assert.ok(!state.text.includes(word), word);
+  }
+});
+
+test("a board action at compact density is still one edit and no page write", async () => {
+  const store = {};
+  store[densityKey(DENSITY_PAGE)] = "compact";
+  const { calls } = recordingSyscall(THREE_ATOMS, {
+    page: DENSITY_PAGE,
+    store,
+  });
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:BBBBBBBB", "atom:CCCCCCCC"]),
+    "",
+  );
+  assert.equal(result.ok, true);
+  const names = calls.map((c) => c.name);
+  assert.equal(names.filter((n) => n === "editor.replaceRange").length, 1);
+  assert.equal(names.includes("space.writePage"), false);
+  assert.equal(names.includes("editor.reloadPage"), false);
+  // And the redraw came back compact, not reset to the default.
+  assert.ok(lastPanel(calls).html.includes('data-density="compact">'));
+});
+
+// --- Compact: the card header row is gone ---------------------------------
+
+test("compact lifts the card header out of the layout entirely", () => {
+  const html = densityHtml(TIGHT_GROUP, "compact");
+  const block = rulesFor(html, '[data-density="compact"] .board-card-header')[0]
+    .body;
+  assert.match(block, /position:\s*absolute/);
+  assert.match(block, /padding:\s*0/);
+  assert.match(block, /min-height:\s*0/);
+  assert.match(block, /border-bottom:\s*none/);
+  assert.match(block, /background:\s*transparent/);
+  assert.match(block, /pointer-events:\s*none/);
+});
+
+test("compact puts NO seam where the header was", () => {
+  const bodies = ruleBodies(compactRules(densityHtml(TIGHT_GROUP, "compact")));
+  // No dotted line, no dashed line, no replacement rule of any kind. The
+  // card border is the card. Steve rejected a seam explicitly.
+  assert.ok(!bodies.includes("dotted"));
+  assert.ok(!bodies.includes("dashed"));
+  assert.ok(!bodies.includes("border-top"));
+  for (const decl of bodies.split(";")) {
+    if (decl.includes("border-bottom")) assert.match(decl, /border-bottom:\s*none/);
+  }
+});
+
+test("compact hides the card's own identity spans, and the menu carries them", () => {
+  const html = densityHtml(TIGHT_GROUP, "compact");
+  const hidden = compactRules(html).filter((r) => r.body.includes("display: none"));
+  const sels = hidden.map((r) => r.sel).join(" ");
+  assert.ok(sels.includes('[data-density="compact"] .board-card-slug'));
+  assert.ok(sels.includes('[data-density="compact"] .board-card-id'));
+  assert.ok(sels.includes(".board-card .board-badge"));
+  // The spans are still in the markup - the same markup serves both
+  // densities, which is why switching needs no redraw.
+  assert.ok(html.includes('class="board-card-id"'));
+});
+
+test("only the grip and the menu take the pointer back in compact", () => {
+  const rules = compactRules(densityHtml(TIGHT_GROUP, "compact"));
+  const auto = rules.filter((r) => r.body.includes("pointer-events: auto"));
+  // Exactly one rule, naming exactly those two controls. So a click on the
+  // strip the header occupies falls through to the card and still selects it.
+  assert.equal(auto.length, 1);
+  assert.ok(auto[0].sel.includes(".board-card-drag"));
+  assert.ok(auto[0].sel.includes(".board-card-menu"));
+});
+
+test("compact reserves room at the top right of the body text", () => {
+  const rule = rulesFor(
+    densityHtml(TIGHT_GROUP, "compact"),
+    ".board-card > .board-card-body",
+  )[0];
+  assert.ok(rule.sel.includes('[data-density="compact"]'));
+  assert.equal(
+    rule.body,
+    "padding-right: calc(var(--board-card-padding) + var(--board-card-chrome-space));",
+  );
+});
+
+test("compact does not scale one byte of content", () => {
+  const html = densityHtml(RICH_PAGE, "compact");
+  const rules = compactRules(html);
+  // A heading is a heading at its full rendered size. The ONE font-size in
+  // the compact rules is the collapse chevron's, which is restated at its
+  // full value precisely so it cannot shrink.
+  const sized = rules.filter((r) => r.body.includes("font-size"));
+  assert.equal(sized.length, 1);
+  assert.ok(sized[0].sel.includes(".board-group-collapse"));
+  assert.ok(sized[0].body.includes("font-size: 12px"));
+  // No compact rule reaches a card body at all.
+  for (const r of rules) {
+    assert.ok(!r.sel.includes(".board-card-rendered"), r.sel);
+    assert.ok(!r.sel.includes(".board-card-raw"), r.sel);
+  }
+  // And the compact variable block sets no font and does not touch the
+  // group outline's width.
+  const vars = rulesFor(html, ':root[data-density="compact"]')[0].body;
+  assert.ok(!vars.includes("font"));
+  assert.ok(!vars.includes("--board-group-border-width"));
+});
+
+test("compact renames nothing: every class the board already had survives", () => {
+  const roomy = densityHtml(RICH_PAGE, "comfortable");
+  const tight = densityHtml(RICH_PAGE, "compact");
+  for (
+    const name of [
+      "board-cards",
+      "board-card",
+      "board-card-header",
+      "board-card-body",
+      "board-card-rendered",
+      "board-card-raw",
+      "board-card-slug",
+      "board-card-id",
+      "board-card-menu",
+      "board-menu-btn",
+      "board-menu-popover",
+      "board-drag-handle",
+      "board-group",
+      "board-group-header",
+      "board-group-cards",
+      "board-group-collapse",
+      "board-group-name",
+      "board-group-id",
+      "board-group-count",
+      "board-group-actions",
+      "board-toolbar",
+    ]
+  ) {
+    assert.ok(roomy.includes(name), "comfortable: " + name);
+    assert.ok(tight.includes(name), "compact: " + name);
+  }
+  // The CARD STRIP is byte-identical between the two densities, so the switch
+  // cannot move, add or remove an element the geometry, the lasso, the drag
+  // or the selection reads. Only the root's attribute and the toolbar
+  // switch's own label differ.
+  const strip = (html) => html.slice(html.indexOf('<div class="board-cards">'));
+  assert.equal(strip(tight), strip(roomy));
+});
+
+// --- Compact: what drags ---------------------------------------------------
+
+test("the grip is a drag source in its own right, so compact can still drag", () => {
+  const html = densityHtml(THREE_ATOMS, "compact");
+  assert.ok(html.includes(
+    '<span class="board-drag-handle board-card-drag" draggable="true" data-drag-unit="atom:AAAAAAAA"',
+  ));
+  // Keyboard reachable and named, because in compact it is the drag source
+  // rather than a decoration inside a draggable row.
+  assert.ok(html.includes('role="button" tabindex="0" aria-label="Drag to move this card"'));
+});
+
+test("a grouped card's grip carries the whole group's unit key", () => {
+  const html = densityHtml(TIGHT_GROUP, "compact");
+  assert.ok(html.includes('data-drag-unit="group:KF53ASNE"'));
+  // The standalone card above the group still carries its own.
+  assert.ok(html.includes('data-drag-unit="atom:J1BBCED5"'));
+});
+
+test("comfortable's drag source is unchanged: the header still drags", () => {
+  const html = densityHtml(THREE_ATOMS, "comfortable");
+  assert.ok(html.includes(
+    '<div class="board-card-header" draggable="true" data-drag-atom="AAAAAAAA"',
+  ));
+});
+
+test("the panel wires both drag sources, and the grip wins by stopping there", () => {
+  const script = buildBoardHtml(
+    parseAtoms(THREE_ATOMS),
+    "Board",
+    [],
+    null,
+    "compact",
+  ).script;
+  assert.ok(script.includes('querySelectorAll(".board-card-header[data-drag-atom]")'));
+  assert.ok(script.includes('querySelectorAll("[data-drag-unit]")'));
+  // The generic handler stops propagation, so a grip drag never runs the
+  // header's handler as well - one dragstart, one unit key.
+  const generic = script.slice(script.indexOf('querySelectorAll("[data-drag-unit]")'));
+  assert.ok(generic.slice(0, 400).includes("e.stopPropagation()"));
+});
+
+test("the geometry the drop reads is still the cards' own rectangles", () => {
+  const script = buildBoardHtml(
+    parseAtoms(TIGHT_GROUP),
+    "Board",
+    [],
+    null,
+    "compact",
+  ).script;
+  // cardGeometry() is untouched by density: it reads .board-card rectangles,
+  // and in compact the header is out of flow, so a card's rectangle IS its
+  // body's rectangle. Shorter cards, same decision function.
+  assert.ok(script.includes("function cardGeometry()"));
+  assert.ok(script.includes("card.getBoundingClientRect()"));
+  assert.ok(script.includes("pickDropTarget(e.clientY, cards)"));
+});
+
+// --- Identity moved into the menu -----------------------------------------
+
+test("the card menu shows the name and the id, at BOTH densities", () => {
+  for (const density of ["comfortable", "compact"]) {
+    const script = buildBoardHtml(
+      parseAtoms(THREE_ATOMS),
+      "Board",
+      [],
+      null,
+      density,
+    ).script;
+    // Identity is the first thing appended to a card's popover.
+    const build = script.slice(script.indexOf("function buildPopover("));
+    assert.ok(
+      build.indexOf('identityLabel("atom"') <
+        build.indexOf('el("div", "board-menu-group-row")'),
+      density,
+    );
+    assert.ok(script.includes('function identityLabel(kind, slug, id)'), density);
+    assert.ok(script.includes('board-menu-identity-name'), density);
+    assert.ok(script.includes('board-menu-identity-id'), density);
+  }
+});
+
+test("the identity label is a label, not an action", () => {
+  const script = buildBoardHtml(parseAtoms(THREE_ATOMS), "Board", [], null, "compact")
+    .script;
+  const fn = script.slice(
+    script.indexOf("function identityLabel("),
+    script.indexOf("function identityLabel(") + 900,
+  );
+  // Divs and spans only: no button, and no click listener.
+  assert.ok(!fn.includes('el("button"'));
+  assert.ok(!fn.includes("addEventListener"));
+});
+
+test("an implicit atom says it has no id, rather than inventing one", () => {
+  const script = buildBoardHtml(parseAtoms(THREE_ATOMS), "Board", [], null, "compact")
+    .script;
+  assert.ok(script.includes('"no id yet (implicit atom)"'));
+  assert.ok(script.includes('"unnamed block"'));
+});
+
+test("the group menu carries what the thin bar folded into it", () => {
+  const html = densityHtml(LOOSE_GROUP, "compact");
+  const script = buildBoardHtml(
+    parseAtoms(LOOSE_GROUP),
+    "Board",
+    [],
+    null,
+    "compact",
+  ).script;
+  assert.ok(html.includes('data-group-menu-toggle="3G7K9R5V"'));
+  assert.ok(html.includes('data-group-menu-popover="3G7K9R5V"'));
+  // Identity, then the two actions, then the density readout.
+  assert.ok(script.includes('identityLabel("group", slug, groupId)'));
+  assert.ok(script.includes('renameItem.textContent = "Rename"'));
+  assert.ok(script.includes('ungroupItem.textContent = "Ungroup"'));
+  assert.ok(script.includes('"Density: " + DENSITY'));
+  assert.ok(script.includes('data-density-readout'));
+  // The card menu still does not offer a group rename.
+  assert.ok(!script.includes("Rename group"));
+});
+
+test("a click inside the group menu is not a select-the-group gesture", () => {
+  const script = buildBoardHtml(parseAtoms(LOOSE_GROUP), "Board", [], null, "compact")
+    .script;
+  const handler = script.slice(script.indexOf('header.addEventListener("click"'));
+  const body = handler.slice(0, handler.indexOf("selectGroup("));
+  assert.ok(body.includes('e.target.closest(".board-card-menu")'));
+});
+
+// --- Compact: a thin group bar --------------------------------------------
+
+test("compact folds the GROUP label, the id and the two buttons away", () => {
+  const html = densityHtml(LOOSE_GROUP, "compact");
+  const hidden = compactRules(html)
+    .filter((r) => r.body.includes("display: none"))
+    .map((r) => r.sel).join(" ");
+  for (
+    const name of [
+      ".board-group-kind",
+      ".board-group-id",
+      ".board-group-actions",
+      ".board-group-count-word",
+    ]
+  ) {
+    assert.ok(hidden.includes('[data-density="compact"] ' + name), name);
+  }
+  // The menu takes the right-hand end of the bar the buttons vacated.
+  const menu = rulesFor(html, '[data-density="compact"] .board-group-menu')[0];
+  assert.equal(menu.body, "margin-left: auto;");
+});
+
+test("the card count is a bare number in compact and a phrase in comfortable", () => {
+  const html = densityHtml(LOOSE_GROUP, "comfortable");
+  assert.ok(html.includes(
+    '<span class="board-group-count"><span class="board-group-count-n">2</span><span class="board-group-count-word"> cards</span></span>',
+  ));
+  // One card reads "1 card", not "1 cards".
+  assert.ok(densityHtml(TIGHT_GROUP, "comfortable").includes(
+    '<span class="board-group-count-word"> cards</span>',
+  ));
+  const single = [
+    '<!-- <atom-group id="AAAAAAA1"> -->',
+    '<!-- <atom id="BBBBBBB1"/> -->',
+    "One.",
+    "<!-- </atom-group> -->",
+    "",
+  ].join("\n");
+  assert.ok(densityHtml(single, "comfortable").includes(
+    '<span class="board-group-count-word"> card</span>',
+  ));
+});
+
+test("the group outline is IDENTICAL at both densities", () => {
+  for (const density of ["comfortable", "compact"]) {
+    const style = styleOf(densityHtml(LOOSE_GROUP, density));
+    assert.ok(style.includes(
+      "border: var(--board-group-border-width) solid var(--board-accent-color)",
+    ), density);
+  }
+  // No compact rule touches the outline: not its width, not its colour, and
+  // not the container element at all. Density does not change the outline;
+  // only hover does.
+  for (const r of compactRules(densityHtml(LOOSE_GROUP, "compact"))) {
+    assert.notEqual(r.sel, '[data-density="compact"] .board-group');
+    assert.ok(!r.body.includes("border-color"), r.sel);
+    assert.ok(!r.body.includes("--board-group-border-width"), r.sel);
+  }
+});
+
+test("the collapse chevron is not shrunk and never hover-gated", () => {
+  const html = densityHtml(LOOSE_GROUP, "compact");
+  const block = rulesFor(html, '[data-density="compact"] .board-group-collapse')[0]
+    .body;
+  assert.match(block, /font-size: 12px/);
+  assert.match(block, /padding: 1px 5px/);
+  assert.match(block, /opacity: 1/);
+  // Nothing gates the chevron on hover, and nothing hides it: the two
+  // hover-only rules name the grip and the three-dot button only.
+  for (const r of cssRules(html)) {
+    if (!r.body.includes("opacity")) continue;
+    assert.ok(
+      !r.sel.includes(".board-group-collapse") || r.body.includes("opacity: 1"),
+      r.sel,
+    );
+  }
+  const gated = cssRules(html)
+    .filter((r) => r.body.includes("opacity: 0"))
+    .map((r) => r.sel).join(" ");
+  assert.ok(!gated.includes("board-group-collapse"));
+  assert.ok(gated.includes("board-drag-handle"));
+  assert.ok(gated.includes("board-menu-btn"));
+});
+
+// --- Comfortable: the header is present, but quiet ------------------------
+
+test("a resting card header uses the theme's muted token, not opacity", () => {
+  const html = densityHtml(RICH_PAGE, "comfortable");
+  const style = styleOf(html);
+  assert.ok(style.includes("--board-header-quiet-color: var(--subtle-color)"));
+  assert.ok(style.includes("--board-header-active-color: var(--root-color)"));
+  assert.ok(style.includes(
+    ".board-card-slug { color: var(--board-header-quiet-color); }",
+  ));
+  assert.ok(style.includes("color: var(--board-header-quiet-color)"));
+  // Deliberately not opacity: it multiplies against whatever is behind the
+  // element, so one value would read differently on the plain card surface,
+  // on a selected card, inside a group container, and again in dark theme.
+  const quiet = rulesFor(html, ".board-card-slug").map((r) => r.body).join("\n");
+  assert.ok(!quiet.includes("opacity"));
+});
+
+test("hover, focus and selection all promote the resting header text", () => {
+  const html = densityHtml(RICH_PAGE, "comfortable");
+  const promote = rulesFor(html, ".board-card:hover .board-card-slug")[0].sel +
+    " { " + rulesFor(html, ".board-card:hover .board-card-slug")[0].body + " }";
+  for (
+    const sel of [
+      ".board-card:hover .board-card-slug",
+      ".board-card:hover .board-card-id",
+      ".board-card:focus-within .board-card-slug",
+      ".board-card-selected .board-card-slug",
+      ".board-card-selected .board-card-id",
+    ]
+  ) {
+    assert.ok(promote.includes(sel), sel);
+  }
+  assert.match(promote, /color: var\(--board-header-active-color\)/);
+});
+
+test("promoting the header is colour only, so nothing reflows on hover", () => {
+  const html = densityHtml(RICH_PAGE, "comfortable");
+  const style = styleOf(html);
+  const promote = rulesFor(html, ".board-card:hover .board-card-slug")[0];
+  // One declaration, and it is a colour.
+  assert.equal(promote.body, "color: var(--board-header-active-color);");
+  for (
+    const prop of ["display", "padding", "margin", "font-size", "height", "border"]
+  ) {
+    assert.ok(!promote.body.includes(prop + ":"), prop);
+  }
+  // The grip and the three-dot button keep their boxes and only change
+  // opacity, which is the rule the two hover-only commits established.
+  assert.ok(style.includes(".board-card:hover .board-drag-handle"));
+  assert.ok(style.includes(".board-drag-handle:focus-visible"));
+  assert.ok(style.includes(".board-menu-btn:focus-visible"));
+});
+
+// --- A group's own chrome recedes too -------------------------------------
+
+test("a resting group softens its border and its header background only", () => {
+  const rest = ruleBodies(
+    rulesFor(densityHtml(LOOSE_GROUP, "comfortable"), ":not(:hover"),
+  );
+  assert.match(rest, /border-color: color-mix\(in srgb, var\(--board-accent-color\) var\(--board-group-quiet-border\), transparent\)/);
+  assert.match(rest, /background: color-mix\(in srgb, var\(--board-accent-color\) var\(--board-group-quiet-header\), var\(--ui-surface-background-color\)\)/);
+  // The header's text colour follows its background, or light-on-pale would
+  // be unreadable. Nothing else is declared.
+  assert.match(rest, /color: var\(--ui-surface-color\)/);
+  assert.ok(!rest.includes("opacity"));
+  // Not one property that would change a size.
+  for (const prop of ["border-width", "padding", "margin", "font-size", "height"]) {
+    assert.ok(!rest.includes(prop + ":"), prop);
+  }
+});
+
+test("NOT opacity on the container: that would fade every card inside it", () => {
+  // Opacity applies to an element AND ALL ITS DESCENDANTS, so an opacity on
+  // .board-group would fade every member card - the outcome Steve ruled out.
+  for (const r of cssRules(densityHtml(LOOSE_GROUP, "comfortable"))) {
+    const target = r.sel.split(",").map((s) => s.trim()).some((s) =>
+      /\.board-group(:|$)/.test(s) || s.endsWith(".board-group")
+    );
+    if (target) assert.ok(!r.body.includes("opacity"), r.sel);
+  }
+});
+
+test("the pointer anywhere inside a group, a member card included, wakes it", () => {
+  const style = styleOf(densityHtml(LOOSE_GROUP, "comfortable"));
+  const selector = style.slice(
+    style.indexOf(".board-group:not(:hover"),
+    style.indexOf("{", style.indexOf(".board-group:not(:hover")),
+  );
+  // :hover is tested on the CONTAINER, which a descendant's hover satisfies,
+  // so hovering a member card counts as hovering the group. It is not
+  // ".board-group-header:hover".
+  assert.ok(selector.includes(".board-group:not(:hover"));
+  assert.ok(!selector.includes(".board-group-header:hover"));
+});
+
+test("a resting group changes nothing about its member cards", () => {
+  const rest = rulesFor(densityHtml(LOOSE_GROUP, "comfortable"), ":not(:hover");
+  // Exactly two rules: the container itself, and its own header bar. Neither
+  // selects a card, so a member card's surface, border and content are
+  // identical resting and active.
+  assert.equal(rest.length, 2);
+  const subjects = rest.map((r) => r.sel.replace(/:not\(.*?\)(?=\s|$)/g, "").trim());
+  assert.deepEqual(subjects, [".board-group", ".board-group > .board-group-header"]);
+});
+
+test("a collapsed group, and a group holding a selection, stay at full strength", () => {
+  const style = styleOf(densityHtml(LOOSE_GROUP, "comfortable"));
+  const selector = style.slice(
+    style.indexOf(".board-group:not(:hover"),
+    style.indexOf("{", style.indexOf(".board-group:not(:hover")),
+  );
+  // Collapsed: the bar is then the only thing on screen representing the
+  // group's contents, so it must not recede.
+  assert.ok(selector.includes(".board-group-collapsed"));
+  // Selected: a group you picked reads as active, the same rule a selected
+  // card's header follows. Clicking the header selects every member, so this
+  // covers that gesture too.
+  assert.ok(selector.includes(":has(.board-card-selected)"));
+  assert.ok(selector.includes(":focus-within"));
+});
+
+test("a browser without color-mix or :has keeps the group at full strength", () => {
+  const style = styleOf(densityHtml(LOOSE_GROUP, "comfortable"));
+  // The resting override comes AFTER the full-strength rules, so an
+  // unsupported selector or value drops this block and the group simply
+  // never recedes - it is never left at an unreadable half state.
+  assert.ok(
+    style.indexOf(".board-group {") < style.indexOf(".board-group:not(:hover"),
+  );
+});
+
+// --- The CSS customization surface ---------------------------------------
+
+test("every tweakable value is a named custom property with a default", () => {
+  const style = styleOf(densityHtml(RICH_PAGE, "comfortable"));
+  const defaults = {
+    "--board-card-padding": "8px",
+    "--board-card-header-padding": "6px 8px",
+    "--board-card-header-height": "auto",
+    "--board-card-border-width": "1px",
+    "--board-card-radius": "6px",
+    "--board-accent-color": "var(--ui-accent-color)",
+    "--board-grip-size": "14px",
+    "--board-id-size": "11px",
+    "--board-header-quiet-color": "var(--subtle-color)",
+    "--board-header-active-color": "var(--root-color)",
+    "--board-card-gap": "14px",
+    "--board-card-chrome-space": "24px",
+    "--board-group-padding": "8px",
+    "--board-group-card-gap": "8px",
+    "--board-group-header-padding": "5px 8px",
+    "--board-group-border-width": "2px",
+    "--board-group-quiet-border": "40%",
+    "--board-group-quiet-header": "16%",
+  };
+  for (const name of Object.keys(defaults)) {
+    assert.ok(
+      style.includes(name + ": " + defaults[name] + ";"),
+      name + " default",
+    );
+  }
+});
+
+test("the board's properties are copied from the parent, so space-style reaches them", async () => {
+  const { script } = await openBoard(RICH_PAGE);
+  // A plug panel renders in an iframe and a parent stylesheet cannot select
+  // into it, so the ONLY route in is the property copy applyParentTheme
+  // already performs for the theme tokens. Every documented knob is on that
+  // list, or a user could not set it.
+  const list = script.slice(
+    script.indexOf("var THEME_VAR_NAMES = ["),
+    script.indexOf("];", script.indexOf("var THEME_VAR_NAMES = [")),
+  );
+  for (
+    const name of [
+      "--board-card-padding",
+      "--board-card-header-padding",
+      "--board-card-header-height",
+      "--board-card-border-width",
+      "--board-card-radius",
+      "--board-accent-color",
+      "--board-grip-size",
+      "--board-id-size",
+      "--board-header-quiet-color",
+      "--board-header-active-color",
+      "--board-card-gap",
+      "--board-card-chrome-space",
+      "--board-group-padding",
+      "--board-group-card-gap",
+      "--board-group-header-padding",
+      "--board-group-border-width",
+    ]
+  ) {
+    assert.ok(list.includes(name), name);
+  }
+  // The theme tokens are still on it: one mechanism, not two.
+  assert.ok(list.includes("--ui-accent-color"));
+  assert.ok(script.includes("document.documentElement.style.setProperty"));
+});
+
+test("the accent travels through ONE knob, which defaults to the theme's", () => {
+  const style = styleOf(densityHtml(LOOSE_GROUP, "comfortable"));
+  assert.ok(style.includes("--board-accent-color: var(--ui-accent-color)"));
+  // Retinting that one property retints the group outline, the drop
+  // indicator, the selection ring and the lasso, because none of them names
+  // the theme token directly any more.
+  const afterRoot = style.slice(style.indexOf("body {"));
+  assert.ok(!afterRoot.includes("var(--ui-accent-color)"));
+  for (
+    const rule of [
+      ".board-card-dropbefore",
+      ".board-card-dropafter",
+      ".board-card-selected",
+      ".board-lasso",
+    ]
+  ) {
+    const at = style.indexOf(rule);
+    assert.ok(at > 0, rule);
+    assert.ok(
+      style.slice(at, style.indexOf("}", at)).includes("var(--board-accent-color)"),
+      rule,
+    );
+  }
+});
+
+// --- A multi-line block reaches the renderer whole -------------------------
+//
+// From a report that an ordered list rendered as one run-on paragraph and that
+// links inside table cells stayed as raw markdown. Both were artifacts of a
+// test rig's markdown stub, not of this plug: the live board renders one <ol>
+// with six <li>, and nine real <a href> inside <td>. These tests pin the two
+// things that ARE this plug's job, using that exact content.
+
+// The two block SHAPES the report was about, with neutral content: a
+// three-item ordered list whose items carry bold and inline code, and a table
+// whose cells carry links. The shape is what the tests are about; the real
+// page's own text is work content and does not belong in this repo.
+const REAL_ORDERED_LIST = [
+  '1. **First decision.** Commit `2066012` "one line per directive" is still local, and later commits reverse it. Drop it or push the contradiction.',
+  '2. **Stale ticket.** `tracker-8og` - "enforce the rule" is closed with a title that now states the opposite of the rule.',
+  "3. **Rewritten policy.** An agent rewrote the README's exclusion of `emit` to fit the change. Defensible, but read that paragraph myself.",
+].join("\n");
+
+const REAL_TABLE = [
+  "| Ticket | State | Tonight |",
+  "|---|---|---|",
+  '| [TCK-72357 "Productionize the service"](https://example.invalid/browse/TCK-72357) | On Hold, me | Add cache expiry, single flight, rate limit |',
+  '| [TCK-62020 "Status endpoint integration"](https://example.invalid/browse/TCK-62020) | Triage | Add the dedupe key |',
+].join("\n");
+
+const REAL_BLOCKS_PAGE = [
+  '<!-- <atomdown version="1"/> -->',
+  '<!-- <atom id="DK3F1M7W"/> -->',
+  REAL_ORDERED_LIST,
+  "",
+  '<!-- <atom id="YFEH04BQ"/> -->',
+  REAL_TABLE,
+  "",
+].join("\n");
+
+test("an ordered list reaches the renderer with its line structure intact", async () => {
+  // An ordered list is only a list because of its newlines. Nothing in the
+  // parse path may join, trim or reflow a block's lines.
+  const atoms = parseAtoms(REAL_BLOCKS_PAGE);
+  const list = atoms.find((a) => a.id === "DK3F1M7W");
+  assert.equal(list.text, REAL_ORDERED_LIST);
+  assert.equal(list.text.split("\n").length, 3);
+
+  // And that exact text is what the plug hands the host's renderer.
+  const { calls } = await openBoard(REAL_BLOCKS_PAGE, { page: "Real" });
+  const asked = calls.filter((c) => c.name === "markdown.markdownToHtml")
+    .map((c) => c.args[0]);
+  assert.ok(asked.includes(REAL_ORDERED_LIST));
+  assert.ok(asked.includes(REAL_TABLE));
+});
+
+test("a rendered ordered list survives the sanitizer as ol and li", () => {
+  const html = sanitizeRenderedHtml(
+    "<ol><li><strong>Atomdown history.</strong> Commit <code>2066012</code> is still local.</li>" +
+      "<li><strong>Stale bead.</strong> closed with the wrong title.</li></ol>",
+  );
+  assert.equal((html.match(/<li>/g) || []).length, 2);
+  assert.ok(html.startsWith("<ol>"));
+  assert.ok(html.endsWith("</ol>"));
+  assert.ok(html.includes("<strong>"));
+  assert.ok(html.includes("<code>"));
+  // start and reversed are on the attribute allowlist, so a list that does
+  // not begin at 1 keeps its numbering.
+  assert.ok(sanitizeRenderedHtml('<ol start="4"><li>x</li></ol>').includes('start="4"'));
+});
+
+test("a link inside a table cell survives, exactly like one in a paragraph", () => {
+  const cell =
+    '<a href="https://example.invalid/browse/TCK-72357">TCK-72357 "Productionize the service"</a>';
+  const html = sanitizeRenderedHtml(
+    "<table><tbody><tr><th>Ticket</th></tr><tr><td>" + cell +
+      "</td></tr></tbody></table>",
+  );
+  // The sanitizer is context-free on purpose: a cell is not a special case,
+  // so an anchor in a td is treated exactly like one in a p.
+  assert.ok(html.includes('href="https://example.invalid/browse/TCK-72357"'));
+  assert.ok(html.includes("<td>"));
+  assert.ok(html.includes("Productionize the service"));
+  // Absolute, so the sanitizer adds target="_blank" - a click cannot replace
+  // the board with the target page.
+  assert.ok(html.includes('target="_blank"'));
+  const inParagraph = sanitizeRenderedHtml("<p>" + cell + "</p>");
+  assert.equal(
+    html.slice(html.indexOf("<a "), html.indexOf("</a>")),
+    inParagraph.slice(inParagraph.indexOf("<a "), inParagraph.indexOf("</a>")),
+  );
+});
+
+test("both blocks land in their cards at both densities", async () => {
+  for (const density of ["comfortable", "compact"]) {
+    const store = {};
+    store[densityKey("Real")] = density;
+    const { calls } = await closedStart(REAL_BLOCKS_PAGE, {
+      page: "Real",
+      store,
+    });
+    await plug.functionMapping.toggleBoard();
+    const html = lastPanel(calls).html;
+    assert.ok(html.includes("<ol>"), density);
+    assert.equal((html.match(/<li>/g) || []).length, 3, density);
+    assert.ok(html.includes("<table>"), density);
+    assert.ok(
+      html.includes('href="https://example.invalid/browse/TCK-72357"'),
+      density,
+    );
+    // The raw body still carries the block byte for byte beside it.
+    assert.ok(html.includes(escapeForTest(REAL_ORDERED_LIST)), density);
+  }
+});
+
+// The plug escapes a raw body with its own escapeHtml, which is not exported.
+// Only the characters that appear in these fixtures matter here.
+function escapeForTest(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
