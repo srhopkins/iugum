@@ -32,3 +32,6 @@ go-build/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Agent scratch harnesses, never source
+scratchpad/
