@@ -108,7 +108,16 @@ async function checkStable(
       { step: step.what, id },
       `after "${step.what}" the reference card ${id} is no longer in the ` +
         `document. An interaction that removes an unrelated card is a worse ` +
-        `bug than one that moves it.`,
+        `bug than one that moves it.` +
+        (step.what.includes("collapse")
+          ? ` A group left FOLDED does this: the folded lines leave the DOM, ` +
+            `so the card inside them cannot be measured. In the inline view ` +
+            `that is the caret's known fold/unfold drift — it alternates from ` +
+            `memory because the host offers editor.fold and editor.unfold but ` +
+            `no read of the fold state (see the inline plug's README, "Known ` +
+            `limits"). Check whether the group actually reopened before ` +
+            `looking for a layout bug.`
+          : ``),
     );
   }
   if (Math.abs(now! - baseline) > Y_TOLERANCE) {
@@ -279,7 +288,7 @@ for (const theme of THEMES) {
           reference: (await cardTop(view, id))!,
         };
 
-        await editTarget.locator(".board-card-body").dblclick();
+        await editTarget.locator("[data-card-rendered]").dblclick();
         await view.ev
           .locator(`.board-card[data-atom-id="${editId}"].board-card-editing`)
           .waitFor({ timeout: 10_000 });

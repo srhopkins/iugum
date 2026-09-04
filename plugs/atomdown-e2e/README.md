@@ -163,3 +163,35 @@ Stated rather than hidden.
   `/opt/homebrew/bin`, then the sibling checkout, and SKIPS those two checks
   with a loud reason if none is found. The byte comparisons still run. A gate
   that fails because a sibling repo is missing gets switched off.
+
+## First-run status, honestly
+
+The suite was written and landed in one session. This is where each part
+actually stands, measured, not assumed.
+
+**Green on the fast matrix, both views:** rule 1 (containment), rule 2
+(directive invisibility), rule 5 (rendering fidelity).
+
+**Green:** rule 3 for the BOARD, including the edit-mode exception - the
+edited card grows downward and content below moves by exactly its height
+delta. Rule 6's edit-then-undo byte comparison. Area 7's card selection, group
+box and collapse round trip, and the grip drag reorder.
+
+**Red for a real reason:** rule 3 for the INLINE view, at the "collapse and
+expand every group" step. The reference card is gone afterwards because a
+group is left FOLDED, which is the inline caret's documented fold/unfold drift
+- it alternates from memory because the host offers `editor.fold` and
+`editor.unfold` but no read of the fold state (that plug's README, "Known
+limits"). The board's caret round-trips correctly, which is what makes this a
+view difference rather than a suite bug. Fix the caret and this goes green; the
+assertion is correct as written.
+
+**Not yet triaged:** several area 7 tests fail on their first run - the card
+box, the card menu, the grip's side, the group header controls, the card
+editor and the stale-digest indicator. Each is either a real finding or a
+selector of mine that does not match this build, and telling those apart needs
+one pass per test against the artifacts the runner writes. Two known-good
+fixes already landed from that triage and are worth knowing before continuing
+it: `cardTop` has to scroll a virtualised card into view before it can measure
+it, and `.board-card-body` matches THREE elements per card (rendered, raw,
+editor) so every locator has to name `[data-card-rendered]` instead.
