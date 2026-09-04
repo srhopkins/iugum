@@ -1366,10 +1366,13 @@ test("the container reuses the accent token, and adds no second colour", () => {
   for (const hex of style.match(/#[0-9a-fA-F]{3,8}\b/g) || []) {
     assert.ok(rootBlock.includes(hex), hex);
   }
-  // The one functional colour is the popover's drop shadow, which predates
-  // this work and is a shadow, not a hue.
+  // The only functional colours are neutral black at some alpha: two drop
+  // shadows and the digest review's scrim. A shadow and a scrim are depth,
+  // not hue, so none of them is a second colour on the board.
   const rgbas = style.match(/rgba?\([^)]*\)/g) || [];
-  assert.deepEqual(rgbas, ["rgba(0,0,0,0.2)"]);
+  for (const rgba of rgbas) {
+    assert.match(rgba, /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0?\.\d+\s*\)$/, rgba);
+  }
 });
 
 test("the header carries the group-level actions, Rename and Ungroup", () => {
@@ -1425,20 +1428,44 @@ test("cards stay in document order whether or not they are in a container", () =
   assert.deepEqual(order.slice().sort((a, b) => a - b), order);
 });
 
-test("a selected card is a double ring, not the container's single edge", () => {
+test("selection is an offset outline, leaving the border free to mean stale", () => {
   const html = boardHtml(TIGHT_GROUP);
   const rule = html.slice(
     html.indexOf(".board-card-selected {"),
     html.indexOf("}", html.indexOf(".board-card-selected {")),
   );
-  // Same hue, different shape: a border plus a second ring set outside it,
-  // plus a lifted background. No second colour token.
-  assert.ok(rule.includes("border: 2px solid var(--board-accent-color)"));
+  // An offset ring plus a lifted background, in the one accent token. Still
+  // banded with a gap in it - the card's own border sits inside the outline -
+  // so a selected card cannot be read as a group container's single edge.
   assert.ok(rule.includes("outline: 2px solid var(--board-accent-color)"));
   assert.ok(rule.includes("outline-offset: 2px"));
   assert.ok(rule.includes("background: var(--ui-surface-hover-background-color)"));
+  // AND IT DOES NOT TOUCH THE BORDER any more. It used to paint the border
+  // blue as the ring's inner half, which made "selected" and "stale"
+  // mutually exclusive. The border now carries the digest state alone.
+  assert.ok(!rule.includes("border:"));
+  assert.ok(!rule.includes("border-color"));
   // The old "grouped card keeps a thicker left edge" special case is gone.
   assert.ok(!html.includes(".board-card-grouped.board-card-selected"));
+});
+
+test("a stale card's border is amber, and it can be selected at the same time", () => {
+  const html = boardHtml(TIGHT_GROUP);
+  // Colour only, never width: a thicker border would add height to the card
+  // and nudge the rectangle pickDropTarget decides from.
+  assert.ok(html.includes(
+    ".board-card-stale { border-color: var(--board-stale-border-color); }",
+  ));
+  // A knob of its own, so a space-style page can restyle it.
+  assert.ok(html.includes("--board-stale-border-color:"));
+  // Distinct from the accent blue that means group and selection.
+  const decl = html.slice(html.indexOf("--board-stale-border-color:"));
+  const value = decl.slice(decl.indexOf(":") + 1, decl.indexOf(";")).trim();
+  assert.notEqual(value, "var(--board-accent-color)");
+  assert.notEqual(value, "var(--ui-accent-color)");
+  // Nothing scopes the amber to a hover or focus state: it must read at rest.
+  assert.ok(!html.includes(".board-card:hover .board-card-stale"));
+  assert.ok(!html.includes(".board-card-stale:hover"));
 });
 
 test("a collapsed group's cards are hidden, and nothing else changes", () => {
@@ -2525,18 +2552,27 @@ test("the card menu shows the name and the id, at BOTH densities", () => {
         build.indexOf('el("div", "board-menu-group-row")'),
       density,
     );
-    assert.ok(script.includes('function identityLabel(kind, slug, id)'), density);
+    assert.ok(
+      script.includes("function identityLabel(kind, slug, id, digestState)"),
+      density,
+    );
     assert.ok(script.includes('board-menu-identity-name'), density);
     assert.ok(script.includes('board-menu-identity-id'), density);
+    // And the words that carry the stale signal for anyone who cannot
+    // distinguish the amber border, in the same label, at both densities.
+    assert.ok(script.includes('stale.textContent = "digest stale"'), density);
+    assert.ok(script.includes('board-menu-identity-stale'), density);
   }
 });
 
 test("the identity label is a label, not an action", () => {
   const script = buildBoardHtml(parseAtoms(THREE_ATOMS), "Board", [], null, "compact")
     .script;
+  // To the end of the function, not a fixed character count: the label grew
+  // when the stale wording was added to it.
   const fn = script.slice(
     script.indexOf("function identityLabel("),
-    script.indexOf("function identityLabel(") + 900,
+    script.indexOf("function addAttrRow("),
   );
   // Divs and spans only: no button, and no click listener.
   assert.ok(!fn.includes('el("button"'));
@@ -3484,4 +3520,251 @@ test("the review refreshes only the rows the user left checked", async () => {
   // The one they left unchecked is still stale, which is the point.
   const rows = await staleAtoms(parseAtoms(state.text));
   assert.deepEqual(rows.map((r) => r.id), ["9R3C7M5D"]);
+});
+
+// --- The stale indicator, the editor and the review, in the markup --------
+
+// A page whose first atom's digest no longer matches its block, and whose
+// second one's does. Built by annotateDigestState, the same call showBoard
+// makes, so these tests see exactly what the panel sees.
+async function staleBoard(density) {
+  const source = REAL_DIGEST_PAGE.replace("## Evidence", "## Evidence, revised");
+  const atoms = await plug.internals.annotateDigestState(parseAtoms(source));
+  return {
+    atoms,
+    ...buildBoardHtml(atoms, "Board", [], null, density || "comfortable"),
+  };
+}
+
+test("a stale card is marked in the markup, at both densities", async () => {
+  for (const density of ["comfortable", "compact"]) {
+    const { html, atoms } = await staleBoard(density);
+    assert.equal(atoms[0].digestState, "stale", density);
+    assert.equal(atoms[1].digestState, "fresh", density);
+    // The class draws the amber border; the attribute is what the review
+    // reads to find its rows. Both, so they cannot disagree.
+    assert.ok(html.includes('data-digest-state="stale"'), density);
+    assert.ok(html.includes("board-card board-card-stale"), density);
+    // Exactly one card is stale, and it is the one that was edited.
+    assert.equal(countOf(html, 'data-digest-state="stale"'), 1, density);
+    const staleAt = html.indexOf('data-digest-state="stale"');
+    const cardAt = html.lastIndexOf('data-atom-id="4P8W2H6K"', staleAt + 200);
+    assert.ok(cardAt > 0 && cardAt < staleAt, density);
+    // And the fresh ones say so rather than saying nothing.
+    assert.equal(countOf(html, 'data-digest-state="fresh"'), 2, density);
+  }
+});
+
+test("the toolbar says how many blocks drifted", async () => {
+  const { html } = await staleBoard();
+  assert.ok(html.includes('id="atomdown-board-digests"'));
+  assert.ok(html.includes('data-stale-count="1"'));
+  assert.ok(html.includes(">Digests (1)</button>"));
+  // A clean page offers the review without a count, and says it is clean.
+  const clean = buildBoardHtml(
+    await plug.internals.annotateDigestState(parseAtoms(REAL_DIGEST_PAGE)),
+    "Board",
+    [],
+  ).html;
+  assert.ok(clean.includes('data-stale-count="0"'));
+  assert.ok(clean.includes(">Digests</button>"));
+  assert.ok(clean.includes("No block's content digest has drifted"));
+});
+
+test("every card carries a textarea for its raw markdown, hidden until asked", async () => {
+  for (const density of ["comfortable", "compact"]) {
+    const { html } = await staleBoard(density);
+    assert.equal(countOf(html, "data-card-edit="), 3, density);
+    assert.ok(html.includes('data-card-edit="4P8W2H6K"'), density);
+    // Hidden, and empty: the text is taken from the raw <pre> on entry, so
+    // this panel holds exactly ONE copy of each block's source.
+    assert.ok(
+      html.includes('data-card-edit="4P8W2H6K" spellcheck="false" aria-label="Raw markdown for this block" hidden></textarea>'),
+      density,
+    );
+    assert.ok(html.includes("class=\"board-card-body board-card-edit\""), density);
+  }
+});
+
+test("card text is selectable again, and the chrome still is not", async () => {
+  const { html } = await staleBoard();
+  // The rule that made a card body unselectable is gone.
+  assert.ok(!html.includes(".board-card-rendered { user-select: none; }"));
+  assert.ok(html.includes(".board-card-body { user-select: text;"));
+  // The header, the grips and a group header keep user-select: none, so
+  // dragging out of a control does not smear a selection across the board.
+  const style = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const headerRule = style.slice(
+    style.indexOf(".board-group-header {"),
+    style.indexOf("}", style.indexOf(".board-group-header {")),
+  );
+  assert.ok(headerRule.includes("user-select: none"));
+});
+
+test("a text drag is told from a click by how far the pointer travelled", async () => {
+  const { script } = await staleBoard();
+  // The decision function exists and is consulted by the card click handler
+  // BEFORE it changes the selection.
+  assert.ok(script.includes("function wasTextDrag(e, cardEl)"));
+  const handler = script.slice(
+    script.indexOf("CARD_ELS.forEach(function (card, index) {"),
+  );
+  const guardAt = handler.indexOf("if (wasTextDrag(e, card)) return;");
+  const selectAt = handler.indexOf("clearSelection();");
+  assert.ok(guardAt > 0);
+  assert.ok(guardAt < selectAt);
+  // The same 3px threshold the lasso uses, so "moved" means one thing.
+  assert.ok(script.includes("var TEXT_DRAG_SLOP = 3;"));
+  // A card being edited is not re-selected by a click into its own text.
+  assert.ok(script.includes('if (card.classList.contains("board-card-editing")) return;'));
+});
+
+test("the lasso still starts only on empty board background", async () => {
+  const { script } = await staleBoard();
+  const lassoDown = script.slice(
+    script.indexOf("lasso = {"),
+    script.indexOf("document.body.appendChild(lasso.box);"),
+  );
+  assert.ok(lassoDown.length > 0);
+  // The guards above the lasso's own mousedown are unchanged.
+  const guard = script.slice(
+    script.indexOf('e.target.closest(".board-card") ||'),
+    script.indexOf("lasso = {"),
+  );
+  assert.ok(guard.includes('.board-toolbar'));
+  assert.ok(guard.includes('.board-group-header'));
+});
+
+test("double-click enters edit mode, and only from the body", async () => {
+  const { script } = await staleBoard();
+  assert.ok(script.includes('card.addEventListener("dblclick"'));
+  const dbl = script.slice(
+    script.indexOf('card.addEventListener("dblclick"'),
+    script.indexOf("textarea.addEventListener(\"input\""),
+  );
+  // The chrome is not the body.
+  assert.ok(dbl.includes('e.target.closest(".board-card-body")'));
+  assert.ok(dbl.includes('e.target.closest(".board-card-menu")'));
+  assert.ok(dbl.includes("beginEditing(card)"));
+});
+
+test("Cmd-Enter and blur save; Esc cancels", async () => {
+  const { script } = await staleBoard();
+  const keydown = script.slice(
+    script.indexOf('textarea.addEventListener("keydown"'),
+    script.indexOf('textarea.addEventListener("blur"'),
+  );
+  assert.ok(keydown.includes('if (e.key === "Escape")'));
+  assert.ok(keydown.includes("cancelEditing()"));
+  assert.ok(keydown.includes('e.key === "Enter" && (e.metaKey || e.ctrlKey)'));
+  assert.ok(keydown.includes("saveEditing()"));
+  const blur = script.slice(script.indexOf('textarea.addEventListener("blur"'));
+  assert.ok(blur.slice(0, 200).includes("saveEditing()"));
+  // Cancel restores the original text and never calls the worker.
+  const cancel = script.slice(
+    script.indexOf("function cancelEditing()"),
+    script.indexOf("CARD_ELS.forEach(function (card) {"),
+  );
+  assert.ok(cancel.includes("session.textarea.value = session.original"));
+  assert.ok(!cancel.includes("invokeFunction"));
+});
+
+test("one save is one worker call, so one Cmd-Z undoes the edit session", async () => {
+  const { script } = await staleBoard();
+  const save = script.slice(
+    script.indexOf("async function saveEditing()"),
+    script.indexOf("function cancelEditing()"),
+  );
+  assert.equal(countOf(save, "system.invokeFunction"), 1);
+  assert.ok(save.includes("atomdown-board.saveAtomBlock"));
+  // Re-entrancy guard: blur fires while the write is still in flight.
+  assert.ok(save.includes("session.saving = true"));
+  // An unchanged edit writes nothing at all.
+  assert.ok(save.includes("if (next === session.original)"));
+  // A refused edit keeps the user's text on screen.
+  assert.ok(save.includes("editing = session;"));
+});
+
+test("Update digest is offered only when there is something to record", async () => {
+  const { script } = await staleBoard();
+  const item = script.slice(
+    script.indexOf('digestItem.textContent = "Update digest";'),
+    script.indexOf("popoverEl.appendChild(digestRow);"),
+  );
+  // Refuses to guess for a shape it cannot hash the same way atomdown does,
+  // and says what to run instead.
+  assert.ok(item.includes('atom.digestState === "unchecked"'));
+  assert.ok(item.includes("atomdown materialize -digest -w"));
+  // A fresh atom's item is a visible no-op with the reason in the tooltip,
+  // not a hidden one.
+  assert.ok(item.includes('atom.digestState === "fresh"'));
+  assert.ok(item.includes("digestItem.disabled = true"));
+  assert.ok(item.includes("atomdown-board.refreshDigests"));
+});
+
+test("the review lists every stale atom, all checked, and honours unchecking", async () => {
+  const { script } = await staleBoard();
+  const open = script.slice(
+    script.indexOf("function openDigestReview()"),
+    script.indexOf('document.addEventListener("keydown"'),
+  );
+  // Rows come from the cards' own digest state, so the list and the borders
+  // cannot disagree about what is stale.
+  assert.ok(script.includes('c.getAttribute("data-digest-state") === "stale"'));
+  // Name and id per row - what Steve asked for, and no diff.
+  assert.ok(open.includes("board-review-name"));
+  assert.ok(open.includes("board-review-id"));
+  // Every row checked by default.
+  assert.ok(open.includes("check.checked = true;"));
+  // Confirm sends ONLY the checked ids, in one call.
+  assert.ok(open.includes("boxes.filter(function (b) { return b.checked; })"));
+  assert.equal(countOf(open, "system.invokeFunction"), 1);
+  assert.ok(open.includes("atomdown-board.refreshDigests"));
+  // Cancel and Esc close without refreshing anything.
+  assert.ok(open.includes("closeReview()"));
+  assert.ok(script.includes('if (e.key === "Escape" && review)'));
+});
+
+test("the review's row is a container, so a diff can be added inside it later", async () => {
+  const { script } = await staleBoard();
+  const open = script.slice(script.indexOf("function openDigestReview()"));
+  // The checkbox, name and id live in a label INSIDE the row, rather than
+  // being the row. Steve wants a git-style diff here eventually; that is a
+  // new child of .board-review-row, not a rewrite of the dialog.
+  assert.ok(open.includes('var rowEl = el("div", "board-review-row");'));
+  assert.ok(open.includes('var label = el("label", "board-review-label");'));
+  assert.ok(open.includes("rowEl.appendChild(label);"));
+  assert.ok(open.includes("list.appendChild(rowEl);"));
+});
+
+test("the review is reachable from the toolbar and from the group menu", async () => {
+  const { script } = await staleBoard();
+  assert.ok(script.includes('document.getElementById("atomdown-board-digests")'));
+  // The group menu is already where the board-wide density reads from, so
+  // the page-level review follows that idiom rather than a third place.
+  const groupMenu = script.slice(
+    script.indexOf('reviewItem.textContent = "Digest review"'),
+    script.indexOf("groupMenuPopover.appendChild(reviewRow);"),
+  );
+  assert.ok(groupMenu.includes("openDigestReview()"));
+});
+
+test("nothing in the board auto-refreshes a digest", async () => {
+  // The whole point of the feature. Only refreshDigests may write one, and
+  // it is reachable only from Update digest and the review's confirm.
+  const { script } = await staleBoard();
+  assert.equal(countOf(script, "atomdown-board.refreshDigests"), 2);
+  const editSave = script.slice(
+    script.indexOf("async function saveEditing()"),
+    script.indexOf("function cancelEditing()"),
+  );
+  assert.ok(!editSave.includes("refreshDigests"));
+});
+
+test("a card being edited cannot be dragged out from under the cursor", async () => {
+  const { html } = await staleBoard();
+  assert.ok(html.includes(".board-card-editing .board-card-header,"));
+  assert.ok(html.includes(".board-card-editing .board-drag-handle { pointer-events: none; }"));
+  // The menu stays reachable, so identity and Update digest are still there.
+  assert.ok(html.includes(".board-card-editing .board-card-menu { pointer-events: auto; }"));
 });

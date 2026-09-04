@@ -1892,6 +1892,7 @@ const BOARD_VAR_NAMES = [
   "--board-group-card-gap",
   "--board-group-header-padding",
   "--board-group-border-width",
+  "--board-stale-border-color",
 ];
 
 /**
@@ -2018,6 +2019,11 @@ function buildCardHtml(atom, viewState) {
   const showRaw = view === "raw" || !hasRendered;
   const classes = ["board-card"];
   if (atom.implicit) classes.push("board-card-implicit");
+  // A stale digest is carried as a class AND as an attribute: the class draws
+  // the amber border, and the attribute is what the digest review reads to
+  // find its rows, so the two cannot disagree about which cards are stale.
+  const stale = atom.digestState === "stale";
+  if (stale) classes.push("board-card-stale");
   const badges = [];
   if (atom.implicit) {
     badges.push('<span class="board-badge board-badge-implicit">implicit</span>');
@@ -2032,7 +2038,7 @@ function buildCardHtml(atom, viewState) {
     ? "This block has no directive yet, so it has no id of its own."
     : `Atom id ${atom.id} — this is the identity. A name (slug) is only an alias.`;
   return `
-      <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}" data-card-view="${showRaw ? "raw" : "rendered"}"${hasRendered ? "" : ' data-no-rendered="1"'}>
+      <div class="${classes.join(" ")}" data-atom-id="${escapeHtml(atom.id)}" data-card-view="${showRaw ? "raw" : "rendered"}" data-digest-state="${escapeHtml(atom.digestState || "unchecked")}"${hasRendered ? "" : ' data-no-rendered="1"'}>
         <div class="board-card-header" draggable="true" data-drag-atom="${escapeHtml(atom.id)}" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">
           <span class="board-drag-handle board-card-drag" draggable="true" data-drag-unit="${escapeHtml(unitKeyForCard(atom))}" role="button" tabindex="0" aria-label="Drag to move this card" title="Drag to move${atom.groupId ? " (moves the whole group)" : ""}">&#10303;</span>
           ${nameHtml}
@@ -2045,6 +2051,7 @@ function buildCardHtml(atom, viewState) {
         </div>
         <div class="board-card-body board-card-rendered" data-card-rendered="${escapeHtml(atom.id)}"${showRaw ? " hidden" : ""}>${hasRendered ? atom.renderedHtml : ""}</div>
         <pre class="board-card-body board-card-raw" data-card-raw="${escapeHtml(atom.id)}"${showRaw ? "" : " hidden"}>${escapeHtml(atom.text)}</pre>
+        <textarea class="board-card-body board-card-edit" data-card-edit="${escapeHtml(atom.id)}" spellcheck="false" aria-label="Raw markdown for this block" hidden></textarea>
       </div>`;
 }
 
@@ -2155,6 +2162,11 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
   };
   const dens = normalizeDensity(density);
   const cardsHtml = buildStripHtml(atoms, collapsed, view);
+  // The toolbar's Digests button carries the count, so a page with drift says
+  // so before you have looked at a single card. The digest states themselves
+  // were decided in the worker (see annotateDigestState) — this is only the
+  // tally, so the button and the borders cannot disagree.
+  const staleCount = atoms.filter((a) => a.digestState === "stale").length;
 
   const style = `
     :root {
@@ -2204,6 +2216,11 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
       --board-group-border-width: 2px;
       --board-group-quiet-border: 40%;
       --board-group-quiet-header: 16%;
+      /* A stale content digest. AMBER, not red: a changed block is
+         unreviewed, not an error, and nothing is broken. Deliberately not
+         --board-accent-color either, so it can never be confused with the
+         blue that means "group" or "selected". */
+      --board-stale-border-color: #b7791f;
     }
     /* COMPACT: chrome only.
        ------------------------------------------------------------------
@@ -2396,13 +2413,37 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
        the container's own border.
        An outline on purpose rather than a second box-shadow: box-shadow is
        already spoken for by the drop indicator, and outline takes no space,
-       so a selection never nudges the layout the drop geometry just read. */
+       so a selection never nudges the layout the drop geometry just read.
+       SELECTION DOES NOT TOUCH THE BORDER. It used to paint the card's own
+       border blue as the inner half of the double ring; it no longer does,
+       because the border now carries a different meaning — whether this
+       block's content digest is stale (see .board-card-stale below). The
+       ring is still banded with a gap in it, because the card's own 1px
+       border sits inside the 2px outline with the container's field showing
+       between them, so a selected card still cannot be read as a group
+       container. And a card can now be selected AND stale at the same time,
+       which was impossible while the two competed for the same edge. */
     .board-card-selected {
-      border: 2px solid var(--board-accent-color);
       outline: 2px solid var(--board-accent-color);
       outline-offset: 2px;
       background: var(--ui-surface-hover-background-color);
     }
+    /* A STALE CONTENT DIGEST: the card's border turns amber.
+       ------------------------------------------------------------------
+       Amber, not red: this block changed since someone recorded a digest for
+       it, so it is UNREVIEWED, not broken and not an error. And deliberately
+       not --board-accent-color, which already means "group" and "selected" —
+       a third meaning on the same hue would say nothing.
+       VISIBLE AT REST. This is not part of the quiet-header treatment and
+       does not wait for a hover: the whole point is to be able to scan a page
+       and see which blocks drifted. The quiet rules only touch header TEXT
+       colour, so nothing here needs to fight them.
+       Colour only, never width — a thicker border would add height to the
+       card and nudge the very rectangle cardGeometry() hands pickDropTarget().
+       BECAUSE COLOUR ALONE EXCLUDES ANYONE WHO CANNOT DISTINGUISH IT, the
+       three-dot popover's identity label also says "digest stale" in words.
+       That is not a nicety; it is the accessible copy of this signal. */
+    .board-card-stale { border-color: var(--board-stale-border-color); }
     .board-lasso {
       position: fixed;
       z-index: 40;
@@ -2566,17 +2607,60 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
       background: var(--ui-surface-hover-background-color);
       font-weight: 600;
     }
-    /* A rendered task-list checkbox is a picture of the document's state, not
-       a control: this board never writes a byte from a card body, so letting
-       it be clicked would promise an edit that cannot happen. */
+    /* A rendered task-list checkbox is a picture of the document's state.
+       Double-clicking the body is how you change it, in the block's own
+       markdown, so clicking the box itself would promise a different edit
+       than the one the board offers. */
     .board-card-rendered input[type="checkbox"] {
       pointer-events: none;
       margin-right: 4px;
     }
-    /* Selecting a card is a click gesture, so text selection inside a card
-       body would fight it. The RAW view keeps text selectable, because
-       copying the source is the reason to open it. */
-    .board-card-rendered { user-select: none; }
+    /* TEXT IN A CARD IS SELECTABLE.
+       ------------------------------------------------------------------
+       This used to be user-select: none, on the reasoning that a click
+       selects the card so a text selection would fight it. That is
+       indefensible next to an editor: you cannot copy a sentence out of your
+       own document. The two gestures are told apart by what the pointer DID,
+       not by disabling one of them — see the mousedown/click pair in the
+       Selection block of the panel script. A drag that begins inside card
+       text is a text selection; a plain click is a card selection.
+       The card's own chrome (the header, the grip, a group header) keeps
+       user-select: none, because dragging out of a control should not smear
+       a text selection across the board. */
+    .board-card-body { user-select: text; cursor: auto; }
+    /* The raw-markdown EDITOR: a plain textarea holding this block's exact
+       source. Not a rich editor on purpose — no cursor reimplementation, no
+       CommonMark serialisation, and no second editing model competing with
+       CodeMirror. It borrows the raw view's monospace and the card's own
+       padding, so entering edit mode does not make the card jump.
+       resize: none and a script-set height: it is sized to its content, so
+       the card grows with the text instead of showing a scrollbar inside a
+       box the user cannot see the end of. */
+    .board-card-edit {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.9em;
+      line-height: 1.45;
+      tab-size: 2;
+      width: 100%;
+      box-sizing: border-box;
+      margin: 0;
+      padding: var(--board-card-padding);
+      border: none;
+      border-radius: 0;
+      background: var(--ui-surface-background-color);
+      color: inherit;
+      resize: none;
+      overflow: hidden;
+      white-space: pre-wrap;
+      outline: 2px solid var(--board-accent-color);
+      outline-offset: -2px;
+    }
+    .board-card-edit[hidden] { display: none; }
+    /* A card being edited must not also be draggable: a drag would move the
+       block out from under the cursor mid-edit. */
+    .board-card-editing .board-card-header,
+    .board-card-editing .board-drag-handle { pointer-events: none; }
+    .board-card-editing .board-card-menu { pointer-events: auto; }
     .board-card-menu { position: relative; margin-left: auto; }
     .board-menu-btn {
       cursor: pointer;
@@ -2741,6 +2825,88 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
       color: var(--subtle-color);
       margin-bottom: 3px;
     }
+    /* "digest stale", in words, beside the name and the id. The card's amber
+       border says the same thing; this is the copy that does not depend on
+       distinguishing a colour. Same amber, so the two obviously refer to each
+       other, and bold so it is not read as a caption. */
+    .board-menu-identity-stale {
+      display: block;
+      margin-top: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--board-stale-border-color);
+    }
+    /* THE PAGE-LEVEL DIGEST REVIEW.
+       ------------------------------------------------------------------
+       A centred list over the board, not a popover: it is about the whole
+       page rather than one card, and it can hold many rows. Its own backdrop
+       inside this iframe, because the panel IS the modal as far as
+       SilverBullet is concerned and there is no second modal layer to use. */
+    .board-review-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
+    }
+    .board-review {
+      display: flex;
+      flex-direction: column;
+      max-height: 80vh;
+      width: min(520px, 90vw);
+      padding: 14px 16px;
+      border: 1px solid var(--ui-surface-border-color);
+      border-radius: 8px;
+      background: var(--ui-surface-background-color);
+      color: var(--ui-surface-color);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+    .board-review-title { font-size: 14px; font-weight: 600; }
+    .board-review-lede {
+      font-size: 12px;
+      color: var(--subtle-color);
+      margin: 6px 0 10px;
+    }
+    .board-review-list {
+      overflow-y: auto;
+      border: 1px solid var(--ui-surface-border-color);
+      border-radius: 4px;
+    }
+    /* A row is a container, and the label is inside it. That is on purpose:
+       Steve asked for a git-style diff here eventually, and a diff belongs
+       under the name inside the same row. Adding one is then a new child of
+       .board-review-row, not a rewrite of this dialog. */
+    .board-review-row { border-bottom: 1px solid var(--ui-surface-border-color); }
+    .board-review-row:last-child { border-bottom: none; }
+    .board-review-row:hover { background: var(--ui-surface-hover-background-color); }
+    .board-review-label {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 6px 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .board-review-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .board-review-id {
+      font-family: ui-monospace, monospace;
+      font-size: var(--board-id-size);
+      color: var(--subtle-color);
+    }
+    .board-review-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+    /* Hovering a review row lights up the card it names, so the list and the
+       board are visibly talking about the same blocks. */
+    .board-card-review-hover {
+      outline: 2px dashed var(--board-stale-border-color);
+      outline-offset: 2px;
+    }
     /* The group's own three-dot menu. Same class, so it gets the same
        popover box, the same hover-only button and the same "a click in here
        is not a selection gesture" treatment as a card's. */
@@ -2901,6 +3067,7 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
       <div class="board-toolbar-actions">
         <button class="board-close" id="atomdown-board-density" data-board-density="${dens}" title="${densityTitle(dens)}">${densityLabel(dens)}</button>
         <button class="board-close" id="atomdown-board-view" data-board-view="${view.boardView}" title="${view.boardView === "raw" ? "Show every card as rendered CommonMark" : "Show every card's raw markdown source"}">${view.boardView === "raw" ? "Rendered" : "Raw markdown"}</button>
+        <button class="board-close" id="atomdown-board-digests" data-stale-count="${staleCount}" title="${staleCount === 0 ? "No block's content digest has drifted on this page" : "Review the " + staleCount + " block" + (staleCount === 1 ? "" : "s") + " whose content changed since a digest was recorded"}">Digests${staleCount ? " (" + staleCount + ")" : ""}</button>
         <button class="board-close" id="atomdown-board-close">Close</button>
       </div>
     </div>
@@ -3060,7 +3227,7 @@ ${injectSharedFunctions()}
     // popover. In compact the card header is gone, so this is the only place
     // a card's identity is on screen; it is built in both densities so the
     // menu reads the same wherever it is opened.
-    function identityLabel(kind, slug, id) {
+    function identityLabel(kind, slug, id, digestState) {
       var box = el("div", "board-menu-identity");
       var name = el("span", "board-menu-identity-name");
       name.textContent = slug || ("unnamed " + kind);
@@ -3072,6 +3239,19 @@ ${injectSharedFunctions()}
         : "This " + kind + " has no name yet, so " + id + " is its label.";
       box.appendChild(name);
       box.appendChild(idEl);
+      // THE STALE SIGNAL IN WORDS, next to the name and the id.
+      // The amber border says this on the card, but colour alone excludes
+      // anyone who cannot distinguish it, so the menu says it in text. Same
+      // place, both densities — in compact this label is the only chrome a
+      // card has.
+      if (digestState === "stale") {
+        var stale = el("span", "board-menu-identity-stale");
+        stale.textContent = "digest stale";
+        stale.title = "This block changed since its content digest was " +
+          "recorded, so atomdown verify reports drift for it. Nothing is " +
+          "broken - it is unreviewed. Use Update digest when you have read it.";
+        box.appendChild(stale);
+      }
       return box;
     }
 
@@ -3153,11 +3333,58 @@ ${injectSharedFunctions()}
       CARD_ELS.forEach(function (c) { c.classList.remove("board-card-selected"); });
     }
 
+    // --- Text selection vs card selection -------------------------------
+    //
+    // Card text is selectable (the CSS no longer says user-select: none), so
+    // these two gestures share the same mouse button and have to be told
+    // apart by what the pointer DID:
+    //
+    //   a CLICK  — press and release in about the same place — selects the
+    //              card, exactly as before.
+    //   a DRAG   — press, move, release — is a text selection, and leaves the
+    //              card selection alone.
+    //
+    // Decided from the pointer's travel, recorded on mousedown, rather than
+    // from window.getSelection(): a plain click inside text also collapses a
+    // selection there, so asking "is there a selection" would answer yes for
+    // both gestures. Travel distinguishes them; a live non-collapsed
+    // selection inside this card is then a second, confirming signal.
+    //
+    // The threshold matches the lasso's own (3px), so "moved" means the same
+    // thing everywhere on the board.
+    var TEXT_DRAG_SLOP = 3;
+    var pressedAt = null;
+
+    document.addEventListener("mousedown", function (e) {
+      if (e.button !== 0) return;
+      pressedAt = { x: e.clientX, y: e.clientY };
+    }, true);
+
+    // Did the gesture that produced this click drag across text inside the
+    // card, rather than click it?
+    function wasTextDrag(e, cardEl) {
+      if (!pressedAt) return false;
+      var travelled = Math.abs(e.clientX - pressedAt.x) > TEXT_DRAG_SLOP ||
+        Math.abs(e.clientY - pressedAt.y) > TEXT_DRAG_SLOP;
+      if (!travelled) return false;
+      // Only a drag that started in the BODY is a text selection. A drag on
+      // the card's chrome is a card drag, and the browser produces no click
+      // for that anyway.
+      var body = e.target.closest && e.target.closest(".board-card-body");
+      if (!body || !cardEl.contains(body)) return false;
+      return true;
+    }
+
     CARD_ELS.forEach(function (card, index) {
       card.addEventListener("click", function (e) {
         // The three-dot button and its popover have their own handlers; a
         // click in there is not a selection gesture.
         if (e.target.closest && e.target.closest(".board-card-menu")) return;
+        // A card being edited is a textarea: clicking into your own text must
+        // place the cursor, not re-select the card underneath it.
+        if (card.classList.contains("board-card-editing")) return;
+        // A drag across the card's text selected text, not the card.
+        if (wasTextDrag(e, card)) return;
         // A real drag never produces a click, so this listener cannot fire
         // for a drag of the card header. Dragging still drags.
         e.stopPropagation();
@@ -3285,6 +3512,163 @@ ${injectSharedFunctions()}
       if (cardEl) applyCardView(cardEl);
       persistView();
     }
+
+    // --- Editing a block's raw markdown ---------------------------------
+    //
+    // DOUBLE-CLICK A CARD BODY to edit that block. The body becomes a plain
+    // textarea holding the block's EXACT markdown — the same text the raw
+    // view shows — sized to its content. You edit "## Heading" as literal
+    // text. That is the whole design: no rich editor, no cursor
+    // reimplementation, no CommonMark serialisation, and no second editing
+    // model competing with CodeMirror.
+    //
+    // The text comes from the raw <pre> already in the markup, so there is
+    // ONE copy of a block's source in this panel and the editor cannot start
+    // from something other than what the raw view shows.
+    //
+    // LIFECYCLE: Cmd-Enter or blur saves; Esc cancels. The save is ONE
+    // worker call, hence one editor.replaceRange, hence one Cmd-Z for the
+    // whole edit session rather than one per keystroke.
+    var editing = null;
+
+    function autosize(textarea) {
+      textarea.style.height = "auto";
+      textarea.style.height = textarea.scrollHeight + "px";
+    }
+
+    function endEditing() {
+      if (!editing) return;
+      var session = editing;
+      editing = null;
+      session.textarea.hidden = true;
+      session.card.classList.remove("board-card-editing");
+      applyCardView(session.card);
+      return session;
+    }
+
+    function beginEditing(cardEl) {
+      if (editing && editing.card === cardEl) return;
+      // Only one card is ever in edit mode: leaving the first one saves it,
+      // which is the same rule as clicking away from it.
+      if (editing) saveEditing();
+      var textarea = cardEl.querySelector("[data-card-edit]");
+      var raw = cardEl.querySelector("[data-card-raw]");
+      if (!textarea || !raw) return;
+      var original = raw.textContent;
+      textarea.value = original;
+      var rendered = cardEl.querySelector("[data-card-rendered]");
+      if (rendered) rendered.hidden = true;
+      raw.hidden = true;
+      textarea.hidden = false;
+      cardEl.classList.add("board-card-editing");
+      editing = {
+        card: cardEl,
+        atomId: cardEl.getAttribute("data-atom-id"),
+        textarea: textarea,
+        original: original,
+        saving: false,
+      };
+      autosize(textarea);
+      textarea.focus();
+      // Cursor at the end rather than selecting everything: the common edit
+      // is adding to a block, and a select-all means one keystroke wipes it.
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    }
+
+    async function saveEditing() {
+      if (!editing || editing.saving) return;
+      var session = editing;
+      // Set before the await: blur fires while the worker is still writing,
+      // and re-entering here would send the same edit twice.
+      session.saving = true;
+      var next = session.textarea.value;
+      if (next === session.original) {
+        endEditing();
+        return;
+      }
+      var result;
+      try {
+        result = await syscall(
+          "system.invokeFunction",
+          "atomdown-board.saveAtomBlock",
+          session.atomId,
+          next,
+        );
+      } catch (e) {
+        result = { ok: false, error: e && e.message ? e.message : String(e) };
+      }
+      if (result && result.ok === false) {
+        // A refused edit (a pasted directive, an emptied block) STAYS OPEN
+        // with the user's text in it. Closing the editor would throw away
+        // what they typed to punish them for typing it.
+        session.saving = false;
+        editing = session;
+        try {
+          await syscall("editor.flashNotification", result.error, "error");
+        } catch (e2) {
+          // No notification surface. The editor is still open with the text.
+        }
+        session.textarea.focus();
+        return;
+      }
+      // A successful save redraws the whole board from the new document text,
+      // so this card, its rendered body and its now-amber border are all
+      // rebuilt. There is nothing left here to tidy up.
+      editing = null;
+    }
+
+    function cancelEditing() {
+      if (!editing) return;
+      var session = editing;
+      // Cleared first, so the blur this causes cannot be read as "save me".
+      editing = null;
+      session.textarea.value = session.original;
+      session.textarea.hidden = true;
+      session.card.classList.remove("board-card-editing");
+      applyCardView(session.card);
+    }
+
+    CARD_ELS.forEach(function (card) {
+      var textarea = card.querySelector("[data-card-edit]");
+      if (!textarea) return;
+
+      card.addEventListener("dblclick", function (e) {
+        // The chrome is not the body: double-clicking the header, the grip or
+        // the menu is not a request to edit.
+        if (!e.target.closest || !e.target.closest(".board-card-body")) return;
+        if (e.target.closest(".board-card-menu")) return;
+        if (card.classList.contains("board-card-editing")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        beginEditing(card);
+      });
+
+      textarea.addEventListener("input", function () { autosize(textarea); });
+
+      textarea.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          cancelEditing();
+          return;
+        }
+        // Cmd-Enter (or Ctrl-Enter, for a keyboard without a Cmd key).
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          saveEditing();
+        }
+      });
+
+      // Blur saves. Clicking away from an edit you made means keeping it —
+      // the same thing every other field on this board does.
+      textarea.addEventListener("blur", function () {
+        if (editing && editing.card === card) saveEditing();
+      });
+
+      // A click inside the textarea is placing a cursor, not selecting cards.
+      textarea.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    });
 
     // A rendered link is a real <a> with a real href, so it looks and hovers
     // like the link in the document. It must not NAVIGATE, though: this panel
@@ -3569,6 +3953,28 @@ ${injectSharedFunctions()}
         densityRow.appendChild(densityItem);
         groupMenuPopover.appendChild(readout);
         groupMenuPopover.appendChild(densityRow);
+
+        // The page-level digest review, reachable from here as well as from
+        // the toolbar. The group menu is already where the board-wide things
+        // (the density) read from, so this follows that idiom rather than
+        // inventing a third place. It is page-level, not group-level: it
+        // lists every stale atom on the page, not only this group's.
+        var reviewRow = el("div", "board-menu-actions");
+        var reviewItem = el("button", "board-menu-item");
+        reviewItem.type = "button";
+        var staleNow = staleRows().length;
+        reviewItem.textContent = "Digest review" +
+          (staleNow ? " (" + staleNow + ")" : "");
+        reviewItem.title = staleNow === 0
+          ? "No block's content digest has drifted on this page."
+          : "Review every block on this page whose content changed since a " +
+            "digest was recorded for it.";
+        reviewItem.addEventListener("click", function (e) {
+          e.stopPropagation();
+          openDigestReview();
+        });
+        reviewRow.appendChild(reviewItem);
+        groupMenuPopover.appendChild(reviewRow);
       }
 
       if (groupMenuBtn && groupMenuPopover) {
@@ -3714,6 +4120,176 @@ ${injectSharedFunctions()}
       lassoJustSelected = true;
     });
 
+    // --- The page-level digest review -----------------------------------
+    //
+    // One list of EVERY atom whose digest no longer matches its content:
+    // name, id, and a checkbox per row, all checked. Confirm refreshes only
+    // the checked ones, in ONE transaction, so one Cmd-Z puts them all back.
+    //
+    // The checkboxes are the point, not decoration. "Refresh everything" is
+    // the wrong default for a review: some of these blocks changed in ways
+    // the user has read and accepts, and some they have not looked at yet.
+    // Unchecking a row leaves that atom reported by atomdown verify, which is
+    // exactly the signal they want to keep.
+    //
+    // NO DIFF HERE, deliberately: which atoms drifted is the useful answer,
+    // and git already shows what changed inside a block. The row is built as
+    // a container holding a label, though, precisely so a diff can later be
+    // appended INSIDE the row without changing this dialog's shape.
+    var review = null;
+
+    function staleRows() {
+      return CARD_ELS
+        .filter(function (c) {
+          return c.getAttribute("data-digest-state") === "stale";
+        })
+        .map(function (c) {
+          var atomId = c.getAttribute("data-atom-id");
+          var datum = cardDataFor[atomId] || {};
+          return { id: atomId, slug: datum.slug || "", card: c };
+        });
+    }
+
+    function closeReview() {
+      if (!review) return;
+      review.remove();
+      review = null;
+    }
+
+    function openDigestReview() {
+      closeReview();
+      closeAllPopovers(null);
+      var rows = staleRows();
+
+      var backdrop = el("div", "board-review-backdrop");
+      var box = el("div", "board-review");
+      var title = el("div", "board-review-title");
+      title.textContent = "Digest review";
+      box.appendChild(title);
+
+      var lede = el("div", "board-review-lede");
+      lede.textContent = rows.length === 0
+        ? "No block's content digest has drifted. atomdown verify is clean for this page."
+        : "These blocks changed since a digest was recorded for them. " +
+          "Refreshing one records its current content as reviewed. " +
+          "Uncheck any you do not want to refresh - those keep reporting drift.";
+      box.appendChild(lede);
+
+      var list = el("div", "board-review-list");
+      var boxes = [];
+      rows.forEach(function (row) {
+        // A row is a CONTAINER holding the label, so a diff can be added
+        // inside it later without restructuring the dialog.
+        var rowEl = el("div", "board-review-row");
+        var label = el("label", "board-review-label");
+        var check = el("input", "board-review-check");
+        check.type = "checkbox";
+        check.checked = true; // every row checked by default
+        check.value = row.id;
+        var name = el("span", "board-review-name");
+        name.textContent = row.slug || "unnamed atom";
+        var idEl = el("span", "board-review-id");
+        idEl.textContent = row.id;
+        label.appendChild(check);
+        label.appendChild(name);
+        label.appendChild(idEl);
+        rowEl.appendChild(label);
+        // Hovering a row lights up the card it names, so the list and the
+        // board are obviously talking about the same blocks.
+        rowEl.addEventListener("mouseenter", function () {
+          if (row.card) row.card.classList.add("board-card-review-hover");
+        });
+        rowEl.addEventListener("mouseleave", function () {
+          if (row.card) row.card.classList.remove("board-card-review-hover");
+        });
+        list.appendChild(rowEl);
+        boxes.push(check);
+      });
+      box.appendChild(list);
+
+      var status = el("div", "board-menu-status");
+      box.appendChild(status);
+
+      var actions = el("div", "board-review-actions");
+      var cancel = el("button", "board-menu-item");
+      cancel.type = "button";
+      cancel.textContent = rows.length === 0 ? "Close" : "Cancel";
+      cancel.addEventListener("click", function (e) {
+        e.stopPropagation();
+        closeReview();
+      });
+      actions.appendChild(cancel);
+
+      if (rows.length > 0) {
+        var confirm = el("button", "board-menu-item");
+        confirm.type = "button";
+        confirm.textContent = "Refresh checked";
+        confirm.title = "Rewrite the checked atoms' digest attributes to " +
+          "match their current content. One undo step for the whole set.";
+        confirm.addEventListener("click", async function (e) {
+          e.stopPropagation();
+          var ids = boxes.filter(function (b) { return b.checked; })
+            .map(function (b) { return b.value; });
+          if (ids.length === 0) {
+            status.textContent = "Nothing is checked, so there is nothing to refresh.";
+            return;
+          }
+          confirm.disabled = true;
+          cancel.disabled = true;
+          confirm.textContent = "Refreshing...";
+          try {
+            var result = await syscall(
+              "system.invokeFunction",
+              "atomdown-board.refreshDigests",
+              JSON.stringify(ids),
+            );
+            if (!result || !result.ok) {
+              status.textContent = "Failed: " +
+                ((result && result.error) || "unknown error");
+              confirm.disabled = false;
+              cancel.disabled = false;
+              confirm.textContent = "Refresh checked";
+              return;
+            }
+            // On success the worker redraws the whole board, so this dialog
+            // and every amber border it just cleared are already gone.
+          } catch (err) {
+            status.textContent = "Failed: " + err.message;
+            confirm.disabled = false;
+            cancel.disabled = false;
+            confirm.textContent = "Refresh checked";
+          }
+        });
+        actions.appendChild(confirm);
+      }
+      box.appendChild(actions);
+
+      // A click on the backdrop, or Esc, closes without refreshing anything.
+      backdrop.addEventListener("click", function (e) {
+        if (e.target === backdrop) closeReview();
+      });
+      backdrop.appendChild(box);
+      document.body.appendChild(backdrop);
+      review = backdrop;
+      if (rows.length > 0 && boxes.length) boxes[0].focus();
+      else cancel.focus();
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && review) {
+        e.preventDefault();
+        closeReview();
+      }
+    });
+
+    var digestsBtn = document.getElementById("atomdown-board-digests");
+    if (digestsBtn) {
+      digestsBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openDigestReview();
+      });
+    }
+
     // The document's unit order, and the group-item decision for one card.
     // Both come from the injected pure functions above, so the panel and the
     // worker apply the same contiguity and nesting rules.
@@ -3770,7 +4346,64 @@ ${injectSharedFunctions()}
         implicitId.appendChild(implicitNote);
         popoverEl.appendChild(implicitId);
       } else {
-        popoverEl.appendChild(identityLabel("atom", atom.slug, atom.id));
+        popoverEl.appendChild(
+          identityLabel("atom", atom.slug, atom.id, atom.digestState),
+        );
+      }
+
+      // UPDATE DIGEST: refresh this one atom's recorded digest to its current
+      // content. This is the explicit "I have reviewed this block now" action
+      // SPEC.md requires before a digest may be rewritten. It is offered only
+      // when there is something to do — a fresh atom's item would be a no-op,
+      // and an atom whose bytes this plug cannot reproduce says so instead of
+      // writing a digest that would make atomdown verify fail forever.
+      if (!atom.implicit && atom.digestState !== "none") {
+        var digestRow = el("div", "board-menu-group-row");
+        var digestItem = el("button", "board-menu-item");
+        digestItem.type = "button";
+        digestItem.textContent = "Update digest";
+        if (atom.digestState === "unchecked") {
+          digestItem.disabled = true;
+          digestItem.title = "This block's shape (a code fence, a loose " +
+            "list, or a stray whitespace-only line) is one the board cannot " +
+            "hash the same way atomdown does, so it will not guess. Run: " +
+            "atomdown materialize -digest -w";
+        } else if (atom.digestState === "fresh") {
+          digestItem.disabled = true;
+          digestItem.title =
+            "This block's digest already matches its content. Nothing to do.";
+        } else {
+          digestItem.title = "Record this block's current content as " +
+            "reviewed. Only this atom's directive line changes.";
+          digestItem.addEventListener("click", async function (e) {
+            e.stopPropagation();
+            digestItem.disabled = true;
+            digestItem.textContent = "Updating...";
+            try {
+              var result = await syscall(
+                "system.invokeFunction",
+                "atomdown-board.refreshDigests",
+                JSON.stringify([atom.id]),
+              );
+              if (!result || !result.ok) {
+                window.alert(
+                  "Update digest failed: " +
+                    ((result && result.error) || "unknown error"),
+                );
+                digestItem.disabled = false;
+                digestItem.textContent = "Update digest";
+              }
+              // On success the worker redraws the board, so this popover and
+              // the amber border are both already gone.
+            } catch (err) {
+              window.alert("Update digest failed: " + err.message);
+              digestItem.disabled = false;
+              digestItem.textContent = "Update digest";
+            }
+          });
+        }
+        digestRow.appendChild(digestItem);
+        popoverEl.appendChild(digestRow);
       }
 
       // Group / Ungroup. Built once, but its label, its enabled state and its
@@ -4338,6 +4971,10 @@ ${injectSharedFunctions()}
     groupId: atom.groupId || null,
     groupSlug: atom.groupSlug || null,
     attrs: atom.attrs || [],
+    // Decided in the worker (annotateDigestState), shipped as an answer. The
+    // panel has no hash implementation of its own, so the card's border, the
+    // menu's wording and the review list cannot disagree.
+    digestState: atom.digestState || "unchecked",
   }));
 
   // The page name only scopes this panel's presentation state (which groups

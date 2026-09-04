@@ -720,6 +720,215 @@ has no `localStorage` at all, and `clientStore` is reachable from both the
 worker and the panel iframe through the one syscall bridge. There is one
 persistence mechanism in this file, not two.
 
+## Editing a block
+
+**Double-click a card body.** The body becomes a plain `<textarea>` holding
+that block's exact markdown — the same text the raw view shows — sized to its
+content. You edit `## Heading` as literal text.
+
+That is deliberately **not** a rich editor. No cursor reimplementation, no
+CommonMark serialisation, and no second editing model competing with
+CodeMirror. SilverBullet already has an editor; this is the same block's bytes,
+reachable from the card you were already looking at.
+
+| gesture | what happens |
+|---|---|
+| double-click a card body | enter edit mode, cursor at the end |
+| **Cmd-Enter** (or Ctrl-Enter) | save |
+| **blur** — click anywhere else | save |
+| **Esc** | cancel, restoring the original text |
+
+A save is **one** `editor.replaceRange`, so **one Cmd-Z undoes the whole edit
+session** rather than one keystroke of it. That is why the panel holds the text
+until the session ends instead of writing as you type. Nothing here calls
+`space.writePage` or `editor.reloadPage`; the write goes through the editor
+buffer like every other board write.
+
+Cursor at the end, not select-all: the common edit is adding to a block, and a
+select-all means one keystroke wipes it.
+
+A card being edited cannot be dragged — a drag would move the block out from
+under your cursor mid-edit — but its three-dot menu stays reachable.
+
+### The edit touches the block only, never the directive line
+
+`replaceAtomBlockInSource()` rewrites an atom's content lines and **cannot
+reach the directive line above them**. So no edit can rewrite an `id`, a
+`slug`, or any other attribute. Attributes are the attribute editor's job, and
+that is the one place that owns them.
+
+**A pasted directive is REJECTED, not escaped.** Typing
+`<!-- <atom id="..."/> -->` into a card body refuses the save, says why, and
+leaves the editor open with your text still in it. Escaping it was the
+alternative and was rejected: it would store something other than what you
+typed, so the card would then disagree with the file about its own content. A
+refusal you can read and act on beats a rewrite you did not ask for and cannot
+see. The guard tests the same four patterns `parseAtoms()` dispatches on, so a
+shape it missed would be a directive a card body could write.
+
+**An emptied block is rejected too.** Deleting every content line would leave
+the directive with no block, which is `atomdown lint`'s `orphan-atom` error.
+The board must not be able to produce a document the tool calls invalid. To
+delete an atom, delete its directive.
+
+Trailing and leading blank lines in the textarea are dropped as an editing
+artefact: a block's own bytes never include them (SPEC.md, "Content digest").
+
+## Content digests: the board agrees with `atomdown verify`, or says nothing
+
+A `digest` attribute answers *"did this block's text change since something
+recorded this value?"*. The board shows that answer, which means the board has
+to agree with `atomdown verify` exactly. A staleness light that disagrees with
+the tool is worse than no light: it either cries wolf or hides real drift.
+
+### After an edit the digest goes stale, and STAYS stale
+
+**Nothing in this plug refreshes a digest as a side effect.** Editing a block
+leaves its `digest` attribute untouched, so the document intentionally fails
+`atomdown verify` for that atom until you refresh it.
+
+That is not an oversight, it is the whole feature. A digest is a claim that
+someone reviewed this exact content. A tool that silently refreshes it when the
+content changes produces a digest that always matches, which carries no
+information at all (SPEC.md, "Nothing refreshes a digest automatically"). Only
+two things write a digest, and both are you asking for it by name: **Update
+digest** in a card's menu, and the page-level **Digest review**.
+
+### How staleness is computed
+
+Per SPEC.md "Content digest" and `digest.go`: `sha256:` followed by the
+lowercase hex SHA-256 of the block's own source bytes, with CRLF and lone CR
+normalized to LF and **nothing else** normalized. No trimming, no whitespace
+collapsing, no Unicode normalization. Directive bytes are never hashed.
+
+SHA-256 comes from `crypto.subtle`, not from a hash function hand-written in
+here: this value has to match a Go program byte for byte, which is not a place
+to keep a second implementation of a primitive.
+
+The state is decided in the **worker** and shipped into the markup as an
+answer. The panel never gets a hash implementation of its own, so the card's
+border, the menu's wording and the review list cannot disagree.
+
+| state | meaning |
+|---|---|
+| `fresh` | the recorded digest matches the block's current content |
+| `stale` | it does not — `atomdown verify` reports drift for this atom |
+| `none` | no digest recorded. Digests are opt-in, so this is *unmonitored*, not drift — exactly how `drift.go` treats it |
+| `unchecked` | a block shape this plug cannot reproduce byte for byte. See below |
+
+A **malformed** recorded value counts as stale, which is what the binary
+reports too: it cannot match any real digest, so the content it claims to have
+reviewed is not the content that is there.
+
+### Where the board abstains, and why
+
+`atomdown` takes a block's extent from goldmark: the block runs from the start
+of its first line to the start of the *next* top-level block, trimmed of
+trailing newlines. This plug chunks on blank lines instead, because a browser
+worker cannot run the binary and a second CommonMark block parser in here would
+just be a new place for the two to disagree.
+
+Measured against the real binary over atomdown's whole conformance corpus, the
+two agree everywhere except three shapes — all found by comparison, none
+predicted:
+
+- **A fenced code block.** goldmark's `FencedCodeBlock` starts at the first
+  *content* line, so the opening ```` ``` ````-line is excluded from the fence
+  block and lands at the end of the **preceding** block instead. Both blocks
+  are bytes this chunker does not produce.
+- **A loose list**, or an indented code block with a blank line in it. That is
+  one CommonMark block spanning the blank line; this chunker splits it.
+- **A whitespace-only (not empty) line.** This chunker drops it as a separator;
+  `trimBlockEnd` only trims `\r` and `\n`, so the binary keeps it.
+
+Such an atom reads **`unchecked`** — never fresh, never stale — and **neither
+Update digest nor the review will write a digest for it**. Writing a digest
+computed from the wrong bytes would make `atomdown verify` fail forever with
+nothing on screen to explain why. The menu item says so and names the fix:
+`atomdown materialize -digest -w`.
+
+Abstaining is the conservative direction. Over-abstaining makes the board quiet
+about one atom; under-abstaining makes it lie about one.
+
+### The stale indicator
+
+A stale card's **border turns amber**, at rest. It works because selection uses
+an offset *outline* while the border is free to carry meaning — so a card can
+be selected and stale at once, which was impossible while the two competed for
+the same edge. Selection no longer paints the border at all; the ring is still
+banded with a gap in it (the card's own border inside the outline), so a
+selected card still cannot be read as a group container's single edge.
+
+Colour and its knob are documented under
+[Customizing the board's CSS](#customizing-the-boards-css).
+
+**Because colour alone excludes anyone who cannot distinguish it**, the
+three-dot popover's identity label also says **"digest stale"** in words, in
+the same amber, next to the name and the id. That is not a nicety; it is the
+accessible copy of this signal — and in compact, where a card has no header,
+that label is the only chrome a card has.
+
+### Update digest, for one atom
+
+In a card's three-dot menu. It rewrites that atom's `digest` attribute in place
+to match the block's current content, and changes nothing else on the line —
+attribute order does not churn. It is offered only when there is something to
+do: a `fresh` atom's item is visible and grayed with the reason in its tooltip,
+and an `unchecked` atom's item says what to run instead.
+
+### Digest review, for the page
+
+The toolbar's **Digests** button carries the count, so a page with drift says
+so before you have looked at a single card. It is also in a group's three-dot
+menu, which is already where the board-wide density reads from — so this
+follows that idiom rather than inventing a third place. It is page-level, not
+group-level: it lists every stale atom on the page.
+
+The dialog lists **every** atom whose digest no longer matches, in document
+order, with its name, its id, and a checkbox per row — **all checked**.
+Confirm refreshes only the checked ones, in **one** transaction, so one Cmd-Z
+puts every digest back.
+
+The checkboxes are the point, not decoration. "Refresh everything" is the wrong
+default for a review: some of these blocks changed in ways you have read and
+accept, and some you have not looked at yet. Unchecking a row leaves that atom
+reported by `atomdown verify`, which is exactly the signal you want to keep.
+
+Hovering a row lights up the card it names, so the list and the board are
+visibly talking about the same blocks.
+
+**There is no diff here, deliberately.** Which atoms drifted is the useful
+answer, and git already shows what changed inside a block (SPEC.md, "Detecting
+drift"). A diff is wanted eventually, so a row is built as a *container*
+holding a label rather than being the label: adding a diff is then a new child
+of `.board-review-row`, not a rewrite of this dialog.
+
+## Text selection
+
+Card text is selectable. This used to be `user-select: none` on the reasoning
+that a click selects the card, so a text selection would fight it — which is
+indefensible next to an editor. You could not copy a sentence out of your own
+document.
+
+The two gestures are told apart by what the pointer **did**, not by disabling
+one of them:
+
+- a **click** — press and release in about the same place — selects the card
+- a **drag** — press, move, release — is a text selection and leaves the card
+  selection alone
+
+Decided from the pointer's travel, recorded on mousedown, rather than from
+`window.getSelection()`: a plain click inside text also collapses a selection
+there, so asking "is there a selection" would answer yes for both gestures. The
+threshold is the lasso's own 3px, so "moved" means one thing everywhere on the
+board.
+
+The **lasso still starts only on empty board background**, unchanged. The
+card's own chrome — the header, the grips, a group header — keeps
+`user-select: none`, because dragging out of a control should not smear a
+selection across the board. A click inside an open textarea places a cursor and
+does not re-select the card underneath it.
+
 ## Two densities: comfortable and compact
 
 The board has two display densities and no third. **Comfortable** is the
@@ -906,6 +1115,24 @@ renamed.
 | `--board-group-border-width` | `2px` | the group outline. **The same at both densities** — it is structure, not chrome |
 | `--board-group-quiet-border` | `40%` | how much accent a resting group's outline keeps |
 | `--board-group-quiet-header` | `16%` | how much accent a resting group's header bar keeps |
+| `--board-stale-border-color` | `#b7791f` | the border of a card whose content digest is stale. **Amber, not red, and never the accent** — see below |
+
+`--board-stale-border-color` is the nineteenth knob and the only one that is a
+hue rather than a size. Three constraints shaped its default:
+
+- **Amber, not red.** A block whose digest no longer matches has changed since
+  someone recorded it. It is *unreviewed*. Nothing is broken, no rule is
+  violated, and red would say otherwise every time you edited anything.
+- **Not `--board-accent-color`.** That blue already means two things — "these
+  atoms are one group" and "this card is selected". A third meaning on the same
+  hue says nothing.
+- **Colour only, never width.** A thicker border would add height to the card,
+  and a card's rectangle is what `cardGeometry()` hands `pickDropTarget()`. The
+  stale signal must not move the drop geometry.
+
+It reads **at rest**. It is deliberately outside the quiet-chrome treatment
+(which only touches header *text* colour), because the whole point is to scan a
+page and see which blocks drifted without hovering each one.
 
 ## Theme
 
@@ -1093,6 +1320,70 @@ ever adds a `"github:.../atomdown-board.plug.js"` entry to `CONFIG.md`
 for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
+
+## What was verified — editing, digests and text selection
+
+**Against the real `atomdown` binary**, on a copy of the real 291-line
+`Todo/running` (82 cards, 11 named groups, a 10-row markdown table). The copy
+was never written back.
+
+Digest agreement, which is the load-bearing claim:
+
+- Over atomdown's **whole conformance corpus plus that page** — 59 files, every
+  atom given a real digest by `atomdown materialize -digest -w` — the plug
+  classified **243 atoms as checkable and disagreed with `atomdown drift` on
+  zero of them**, abstaining on 24.
+- On Steve's page specifically, **all 82 atoms read `fresh`** before any edit,
+  with **no abstentions**: none of the three divergent shapes occurs there.
+- The one corpus atom the plug called stale where the file claimed otherwise is
+  `testdata/malformed/invalid-digest.md`, whose recorded value is
+  `not-a-real-digest` — and `atomdown drift` reports that atom too. Agreement,
+  not a miss.
+- The unit-test fixture's digest values come from the binary, not from this
+  plug, so a change to the hashing rules on **either** side fails the test.
+
+The full flow, driving the real worker functions:
+
+- Edit one atom → `atomdown lint` **ok**, `atomdown verify` reports drift for
+  **exactly that atom and no others**, and the plug's own stale list names the
+  same one.
+- Edit a second → verify reports exactly those two.
+- Refresh **one** of the two → verify still reports the other. Unchecking a row
+  keeps its drift, which is what the checkbox is for.
+- Refresh the second → `verify` back to **ok - no drift**, `lint` ok, the same
+  82 atoms, every id and slug intact.
+- One `editor.replaceRange` per action throughout. The harness threw on
+  `space.writePage` and `editor.reloadPage`; neither was called.
+
+**In a real browser**, driving the real panel markup and the real panel script
+with real DOM events, **at both densities**:
+
+- Double-click a card body enters edit mode: the textarea holds the block's
+  exact markdown (byte-identical to the raw `<pre>`), is focused, sized to its
+  content, and grows as lines are added (58px → 204px on eight added lines).
+- **Cmd-Enter** saves with exactly one worker call. **Esc** cancels with zero
+  worker calls and puts the rendered body back. **Blur** saves — verified by
+  dispatching the blur event, because the harness tab has no OS focus and
+  `.blur()` therefore fires nothing there.
+- A pasted `<!-- <atom .../> -->` is **refused**: the editor stays open, the
+  typed text is preserved, the textarea keeps focus, and the flash says
+  attributes are edited in the three-dot menu.
+- The stale card's border computes to `rgb(183, 121, 31)` **at rest** while
+  fresh cards stay `rgb(233, 233, 231)`. Selecting it shows the amber border
+  **and** the blue outline at once.
+- The popover says **"digest stale"** in words on the stale card, in the same
+  amber, and not on a fresh one. **Update digest** is enabled there and
+  disabled on a fresh card.
+- The toolbar reads **`Digests (3)`** on a page with three edited atoms; the
+  review lists exactly those three ids in document order, all checked;
+  unchecking the middle row sends the other two and only those, in one call;
+  unchecking everything refuses with a message instead of sending an empty set.
+- Card text computes `user-select: text` and a real range selection reads back
+  real words. A **click** still selects the card; a **drag** across the text
+  does not. Modifier-click (2 cards) and shift-range (4 cards) unchanged. The
+  lasso still starts on empty background and **not** on a card.
+- A card in edit mode has `pointer-events: none` on its header, so it cannot be
+  dragged out from under the cursor, while its menu stays reachable.
 
 ## What was verified — the two densities and the CSS knobs
 
