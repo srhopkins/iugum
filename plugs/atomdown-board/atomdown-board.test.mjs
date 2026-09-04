@@ -64,6 +64,14 @@ const {
   sanitizeRenderedHtml,
   isSafeUrl,
   decodeUrlEntities,
+  digestOfBlock,
+  recordedDigest,
+  digestStateOf,
+  staleAtoms,
+  looksLikeDirectiveLine,
+  findAtomBlockLines,
+  replaceAtomBlockInSource,
+  setAtomDigestsInSource,
 } = plug.internals;
 
 // --- Fixtures --------------------------------------------------------------
@@ -2997,3 +3005,190 @@ function escapeForTest(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+
+// --- Content digest --------------------------------------------------------
+//
+// These are the tests that keep the board honest against `atomdown verify`.
+// REAL_DIGEST_PAGE's digest values were produced by the atomdown binary
+// (`atomdown materialize -digest -w`), not by this plug, so a change to the
+// hashing rules on either side fails here instead of shipping a staleness
+// light that disagrees with the tool.
+
+const REAL_DIGEST_PAGE = [
+  '<!-- <atomdown version="1"/> -->',
+  '<!-- <atom id="4P8W2H6K" slug="claim" digest="sha256:7886129112aee29e7dfd69c7fbdb1dac248582ddeba93fea21d08472519e5f8e"/> -->',
+  "## Evidence",
+  "",
+  '<!-- <atom id="9R3C7M5D" slug="findings" digest="sha256:ff974710b96a205bdb50e66d1c1ba6b4cbf72dfcdff8c79f704d7ef118ef0af8"/> -->',
+  "- First item with **strong text**.",
+  "- Second item with [a link](https://example.com).",
+  "",
+  '<!-- <atom id="2F6J8Q4T" digest="sha256:bd1d26d5b1aa05f0be76faa0b46a5c54d03b0f99322bcabb1ef8e20b740528f6"/> -->',
+  "A paragraph with  two trailing spaces above and    interior runs.",
+].join("\n");
+
+test("digestOfBlock reproduces the binary's own digests, byte for byte", async () => {
+  const atoms = parseAtoms(REAL_DIGEST_PAGE);
+  assert.equal(atoms.length, 3);
+  for (const atom of atoms) {
+    assert.equal(
+      await digestOfBlock(atom.text),
+      recordedDigest(atom),
+      atom.id,
+    );
+  }
+});
+
+test("a digest has the shape SPEC.md defines", async () => {
+  const value = await digestOfBlock("## Evidence");
+  assert.match(value, /^sha256:[0-9a-f]{64}$/);
+});
+
+test("CRLF and a lone CR are the one normalization, and they agree with LF", async () => {
+  const lf = await digestOfBlock("- one\n- two");
+  assert.equal(await digestOfBlock("- one\r\n- two"), lf);
+  assert.equal(await digestOfBlock("- one\r- two"), lf);
+});
+
+test("nothing else is normalized: whitespace inside a block is content", async () => {
+  const plain = await digestOfBlock("a b");
+  // Interior runs, indentation and trailing spaces all change the digest,
+  // because each of them changes what CommonMark renders.
+  assert.notEqual(await digestOfBlock("a  b"), plain);
+  assert.notEqual(await digestOfBlock("  a b"), plain);
+  assert.notEqual(await digestOfBlock("a b  "), plain);
+  // And no Unicode normalization: the composed and decomposed forms differ.
+  assert.notEqual(await digestOfBlock("é"), await digestOfBlock("é"));
+});
+
+test("a matching digest reads fresh, and a changed block reads stale", async () => {
+  const atoms = parseAtoms(REAL_DIGEST_PAGE);
+  for (const atom of atoms) {
+    assert.equal(await digestStateOf(atom), "fresh", atom.id);
+  }
+  const edited = parseAtoms(
+    REAL_DIGEST_PAGE.replace("## Evidence", "## Evidence, revised"),
+  );
+  assert.equal(await digestStateOf(edited[0]), "stale");
+  // And only that one: an edit to one block cannot make another look stale.
+  assert.equal(await digestStateOf(edited[1]), "fresh");
+  assert.equal(await digestStateOf(edited[2]), "fresh");
+});
+
+test("an atom with no digest is unmonitored, not stale", async () => {
+  const atoms = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K"/> -->', "Some text."].join("\n"),
+  );
+  assert.equal(await digestStateOf(atoms[0]), "none");
+});
+
+test("a malformed digest reads stale, which is what the binary reports", async () => {
+  const atoms = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K" digest="not-a-real-digest"/> -->', "Some text."]
+      .join("\n"),
+  );
+  assert.equal(await digestStateOf(atoms[0]), "stale");
+});
+
+test("an implicit atom has no directive to carry a digest, so it is unchecked", async () => {
+  const atoms = parseAtoms(["A block with no marker at all."].join("\n"));
+  assert.equal(atoms[0].implicit, true);
+  assert.equal(await digestStateOf(atoms[0]), "unchecked");
+});
+
+// --- Where the board abstains ---------------------------------------------
+//
+// atomdown takes a block's extent from goldmark. Three shapes make this
+// plug's blank-line chunking produce different bytes, so it declines to
+// answer rather than guess. Each of these was found by comparing against the
+// real binary, not predicted.
+
+test("a fenced code block is unchecked, and so is the block before it", async () => {
+  const page = [
+    '<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+    "Run this:",
+    "",
+    '<!-- <atom id="9R3C7M5D" digest="sha256:' + "0".repeat(64) + '"/> -->',
+    "```bash",
+    "atomdown lint page.md",
+    "```",
+  ].join("\n");
+  const atoms = parseAtoms(page);
+  // goldmark's FencedCodeBlock starts at its first CONTENT line, so the
+  // opening ```-line is excluded from the fence block and attributed to
+  // whatever precedes it. Neither block's bytes are reproducible here.
+  const fence = atoms.find((a) => a.text.indexOf("```") !== -1);
+  assert.equal(fence.digestCheckable, false);
+  assert.equal(await digestStateOf(fence), "unchecked");
+});
+
+test("a paragraph directly above a fence, with no directive between, is unchecked", async () => {
+  const atoms = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+      "Run this:",
+      "",
+      "```bash",
+      "atomdown lint page.md",
+      "```"].join("\n"),
+  );
+  assert.equal(atoms[0].digestCheckable, false);
+  assert.equal(await digestStateOf(atoms[0]), "unchecked");
+});
+
+test("a loose list is one CommonMark block, so its pieces are unchecked", async () => {
+  const atoms = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+      "- one",
+      "",
+      "- two"].join("\n"),
+  );
+  atoms.forEach((a) => assert.equal(a.digestCheckable, false));
+});
+
+test("an indented code block with a blank line in it is unchecked", async () => {
+  const atoms = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+      "    first",
+      "",
+      "    second"].join("\n"),
+  );
+  atoms.forEach((a) => assert.equal(a.digestCheckable, false));
+});
+
+test("a whitespace-only line is bytes the binary keeps, so that run is unchecked", async () => {
+  // trimBlockEnd trims \r and \n only, so those two spaces stay inside the
+  // preceding block for the binary while this chunker drops the line.
+  const atoms = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+      "A paragraph.",
+      "  ",
+      "Another paragraph."].join("\n"),
+  );
+  atoms.forEach((a) => assert.equal(a.digestCheckable, false));
+});
+
+test("the ordinary shapes on a real page stay checkable", async () => {
+  // Headings, tight lists, paragraphs and tables: everything Steve's own
+  // pages are made of. If any of these started abstaining the board would go
+  // quiet about real drift.
+  const atoms = parseAtoms(REAL_DIGEST_PAGE);
+  atoms.forEach((a) => assert.equal(a.digestCheckable, true, a.id));
+  const table = parseAtoms(
+    ['<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+      "| a | b |",
+      "|---|---|",
+      "| 1 | 2 |"].join("\n"),
+  );
+  assert.equal(table[0].digestCheckable, true);
+});
+
+test("staleAtoms lists exactly the drifted atoms, in document order", async () => {
+  const edited = REAL_DIGEST_PAGE
+    .replace("## Evidence", "## Evidence, revised")
+    .replace("- First item", "- First item, revised");
+  const rows = await staleAtoms(parseAtoms(edited));
+  assert.deepEqual(rows.map((r) => r.id), ["4P8W2H6K", "9R3C7M5D"]);
+  // Name and id, which is what the review dialog shows on each row.
+  assert.deepEqual(rows.map((r) => r.slug), ["claim", "findings"]);
+  assert.equal(await staleAtoms(parseAtoms(REAL_DIGEST_PAGE)).then((r) => r.length), 0);
+});

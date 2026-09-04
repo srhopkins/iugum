@@ -144,6 +144,14 @@ const DOC_MARKER_RE = /^\s*<!--\s*<atomdown\b[^>]*\/>\s*-->\s*$/;
 // pairs, in source order. Does not know or care what any name means.
 const ATTR_PAIR_RE = /([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
+// Line shapes the digest check has to recognise, because each one marks a
+// place where this plug's blank-line chunking and atomdown's goldmark-derived
+// block extents disagree. Used only for the fidelity decision in parseAtoms;
+// nothing here changes how a block is rendered.
+const FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})/;
+const LIST_LINE_RE = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+const INDENT_CODE_LINE_RE = /^(?: {4}|\t)/;
+
 function parseAttrs(attrText) {
   const attrs = [];
   let m;
@@ -167,6 +175,13 @@ function parseAttrs(attrText) {
  * blank-line-separated blocks before the next marker are implicit atoms
  * (per SPEC.md: "A tool must not discard the block or attach it to the
  * previous atom").
+ *
+ * Each atom also carries `digestCheckable`: whether THIS chunker reproduces
+ * the exact bytes the atomdown binary hashes for that block. See the CONTENT
+ * DIGEST block below for why that is not always true and what the board does
+ * about it. It is decided here, and only here, because this is the function
+ * that draws the block boundaries — a second copy of the chunking rules
+ * living somewhere else is exactly how the two would drift apart.
  */
 function parseAtoms(sourceText) {
   const lines = sourceText.split("\n");
@@ -182,8 +197,14 @@ function parseAtoms(sourceText) {
   function flush() {
     const blocks = [];
     let block = [];
+    // A blank line that is not EMPTY (it holds spaces or tabs) is dropped as a
+    // separator here, but atomdown's trimBlockEnd only trims \r and \n, so the
+    // binary would keep those bytes inside the preceding block. One such line
+    // anywhere in this run makes every block in it unverifiable.
+    let sawWhitespaceOnlyLine = false;
     for (const line of bufferLines) {
       if (line.trim() === "") {
+        if (line !== "") sawWhitespaceOnlyLine = true;
         if (block.length > 0) {
           blocks.push(block);
           block = [];
@@ -193,6 +214,32 @@ function parseAtoms(sourceText) {
       }
     }
     if (block.length > 0) blocks.push(block);
+
+    // Fidelity, per block, for the digest check. See the CONTENT DIGEST block.
+    const checkable = blocks.map(() => !sawWhitespaceOnlyLine);
+    blocks.forEach((blockLines, i) => {
+      if (blockLines.some((line) => FENCE_LINE_RE.test(line))) {
+        // A fenced code block: atomdown's block extents come from goldmark,
+        // whose FencedCodeBlock starts at the first CONTENT line, so the
+        // opening fence line lands in the PRECEDING block instead. Both blocks
+        // are therefore bytes this chunker cannot reproduce.
+        checkable[i] = false;
+        if (FENCE_LINE_RE.test(blockLines[0]) && i > 0) checkable[i - 1] = false;
+      }
+      if (i > 0) {
+        const prev = blocks[i - 1];
+        // A loose list, or an indented code block with a blank line in it, is
+        // ONE CommonMark block spanning the blank line. This chunker splits it.
+        const bothLists = LIST_LINE_RE.test(blockLines[0]) &&
+          LIST_LINE_RE.test(prev[0]);
+        const bothIndented = INDENT_CODE_LINE_RE.test(blockLines[0]) &&
+          INDENT_CODE_LINE_RE.test(prev[0]);
+        if (bothLists || bothIndented) {
+          checkable[i] = false;
+          checkable[i - 1] = false;
+        }
+      }
+    });
 
     blocks.forEach((blockLines, i) => {
       const isFirst = i === 0;
@@ -219,6 +266,7 @@ function parseAtoms(sourceText) {
         groupSlug: currentGroupSlug,
         text: blockLines.join("\n"),
         attrs,
+        digestCheckable: checkable[i],
       });
     });
 
@@ -299,6 +347,292 @@ function serializeAtomLine(prefix, attrs, suffix) {
     .map((a) => `${a.name}="${escapeAttrValue(a.value)}"`)
     .join(" ");
   return `${prefix}${attrText} ${suffix}`;
+}
+
+// ---------------------------------------------------------------------------
+// CONTENT DIGEST: the same bytes atomdown hashes, or nothing at all.
+//
+// A digest answers "did this block's text change since something recorded
+// this value?" (atomdown/SPEC.md, "Content digest"). The board shows that
+// answer, so the board must agree with `atomdown verify` exactly. A staleness
+// light that disagrees with the tool is worse than no light: it either cries
+// wolf or hides real drift.
+//
+// THE RULE, from SPEC.md and digest.go: `sha256:` followed by the lowercase
+// hex SHA-256 of the block's own source bytes, with CRLF and lone CR
+// normalized to LF and NOTHING else normalized. No trimming, no whitespace
+// collapsing, no Unicode normalization. Directive bytes are never hashed.
+//
+// NOTHING HERE EVER REFRESHES A DIGEST ON ITS OWN. Editing a block leaves its
+// digest alone, so the document intentionally fails `atomdown verify` for
+// that atom until the user asks for a refresh. That is the whole point: a
+// digest that always matches carries no information (SPEC.md, "Nothing
+// refreshes a digest automatically").
+//
+// WHERE THIS PLUG CANNOT REPRODUCE THE BYTES, IT ABSTAINS.
+// atomdown derives a block's extent from goldmark: the block runs from the
+// start of its first line to the start of the NEXT top-level block, trimmed
+// of trailing newlines. This plug chunks on blank lines instead, because a
+// browser worker cannot run the binary and a second CommonMark block parser
+// in here would be a new place for the two to disagree. Measured against the
+// binary over atomdown's whole corpus, the two agree everywhere except three
+// shapes, all detected in parseAtoms():
+//
+//   - A FENCED CODE BLOCK. goldmark's FencedCodeBlock starts at the first
+//     CONTENT line, so the opening ```-line is excluded from the fence block
+//     and lands at the end of the PRECEDING block instead. Both blocks are
+//     bytes this chunker does not produce.
+//   - A LOOSE LIST, or an indented code block with a blank line in it. That
+//     is one CommonMark block spanning the blank line; this chunker splits it.
+//   - A WHITESPACE-ONLY (not empty) line. This chunker drops it as a
+//     separator; trimBlockEnd only trims \r and \n, so the binary keeps it.
+//
+// Such an atom reads "not checked" — never fresh, never stale — and neither
+// "Update digest" nor the page review will write a digest for it, because
+// writing a digest computed from the wrong bytes would make `verify` fail
+// forever with no way for the user to see why.
+// ---------------------------------------------------------------------------
+
+// A well-formed Core content digest, exactly as digest.go's digestPattern.
+const DIGEST_VALUE_RE = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * SPEC.md's one normalization: CRLF and lone CR to LF, and nothing else.
+ */
+function normalizeBlockBytes(text) {
+  return String(text == null ? "" : text)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+/**
+ * The Core content digest of one block's text. Async because SHA-256 comes
+ * from the platform (crypto.subtle) rather than from a hash function
+ * hand-written in here — this value has to match a Go program byte for byte,
+ * which is not a place to keep a second implementation of a primitive.
+ */
+async function digestOfBlock(blockText) {
+  const bytes = new TextEncoder().encode(normalizeBlockBytes(blockText));
+  const sum = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.prototype.map
+    .call(new Uint8Array(sum), (b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `sha256:${hex}`;
+}
+
+/**
+ * One atom's recorded digest, or "" when it carries none.
+ */
+function recordedDigest(atom) {
+  const attr = ((atom && atom.attrs) || []).find((a) => a.name === "digest");
+  return attr ? attr.value : "";
+}
+
+/**
+ * Classifies one atom's digest into the four states the board can draw:
+ *
+ *   "none"      no digest recorded. Digests are opt-in, so this is not drift,
+ *               it is unmonitored — exactly how drift.go treats it.
+ *   "unchecked" a block shape this plug cannot reproduce (see the block
+ *               comment above), or an implicit atom with no directive to
+ *               carry a digest.
+ *   "fresh"     the recorded digest matches the block's current content.
+ *   "stale"     it does not. `atomdown verify` reports drift for this atom.
+ *
+ * A malformed recorded value counts as "stale", which is what the binary
+ * reports too: it cannot match any real digest, so the content it claims to
+ * have reviewed is not the content that is there.
+ */
+async function digestStateOf(atom) {
+  if (!atom || atom.implicit) return "unchecked";
+  const recorded = recordedDigest(atom);
+  if (!recorded) return "none";
+  if (atom.digestCheckable === false) return "unchecked";
+  if (!DIGEST_VALUE_RE.test(recorded)) return "stale";
+  return (await digestOfBlock(atom.text)) === recorded ? "fresh" : "stale";
+}
+
+/**
+ * Returns a NEW atom list carrying `digestState`, the same
+ * copy-don't-mutate shape renderAtomBodies uses. Called from showBoard so
+ * the panel is handed an answer rather than a hash implementation.
+ */
+async function annotateDigestState(atoms) {
+  const out = [];
+  for (const atom of atoms || []) {
+    out.push(Object.assign({}, atom, { digestState: await digestStateOf(atom) }));
+  }
+  return out;
+}
+
+/**
+ * Every atom whose digest no longer matches its content, in document order,
+ * as { id, slug, digest } — the rows the page-level digest review lists.
+ *
+ * Only atoms this plug can check appear. An "unchecked" atom is reported
+ * separately by the caller rather than silently folded in either direction.
+ */
+async function staleAtoms(atoms) {
+  const rows = [];
+  for (const atom of atoms || []) {
+    if ((await digestStateOf(atom)) !== "stale") continue;
+    rows.push({ id: atom.id, slug: atom.slug || "", digest: recordedDigest(atom) });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// EDITING A BLOCK'S RAW MARKDOWN.
+//
+// The card body becomes a plain <textarea> holding that block's exact
+// markdown — the same text the raw view shows. Deliberately NOT a rich
+// editor: no cursor reimplementation, no CommonMark serialisation, no second
+// editing model competing with CodeMirror. You edit `## Heading` as literal
+// text, and the one write goes back through editor.replaceRange like every
+// other board write, so one Cmd-Z undoes the whole edit session.
+//
+// THE EDIT TOUCHES THE BLOCK ONLY, NEVER THE DIRECTIVE LINE. That is enforced
+// here rather than trusted to the panel: replaceAtomBlockInSource rewrites the
+// content lines and cannot reach the directive line above them, so no edit can
+// rewrite an `id`, a `slug`, or any other attribute. Attributes stay in the
+// attribute editor, which is the one place that owns them.
+// ---------------------------------------------------------------------------
+
+/**
+ * Any line that this plug's own parser would read as an Atomdown directive.
+ * The block-edit guard, and deliberately the SAME four patterns parseAtoms
+ * dispatches on — a shape that guard missed would be a directive the user
+ * could write from a card body.
+ */
+function looksLikeDirectiveLine(line) {
+  return ATOM_TAG_RE.test(line) ||
+    GROUP_OPEN_RE.test(line) ||
+    GROUP_CLOSE_RE.test(line) ||
+    DOC_MARKER_RE.test(line);
+}
+
+/**
+ * Locates one atom's CONTENT lines: the block below its directive, not the
+ * directive itself. Works for a grouped atom as well as a standalone one,
+ * which is why it is not computeUnits() — a group member's unit is the whole
+ * group span, and editing one member must not be able to reach the others.
+ *
+ * Returns { lines, startLine, endLine } with inclusive 0-based indices, or
+ * null when there is no explicit directive with that id (an implicit atom, or
+ * the document changed since the board was drawn).
+ */
+function findAtomBlockLines(sourceText, atomId) {
+  const found = findAtomDirectiveLine(sourceText, atomId);
+  if (!found) return null;
+  const lines = found.lines;
+  const n = lines.length;
+  let i = found.lineIndex + 1;
+  const startLine = i;
+  let endLine = found.lineIndex; // no content at all: an orphan directive
+  while (
+    i < n && lines[i].trim() !== "" && !looksLikeDirectiveLine(lines[i])
+  ) {
+    endLine = i;
+    i++;
+  }
+  if (endLine < startLine) return { lines, startLine, endLine: startLine - 1 };
+  return { lines, startLine, endLine };
+}
+
+/**
+ * Replaces one atom's block text, and nothing else, returning the rewritten
+ * document.
+ *
+ * A PASTED DIRECTIVE IS REJECTED, not escaped. Escaping would silently store
+ * something other than what the user typed, so the card would then disagree
+ * with the file about its own content; and a refusal the user can read and act
+ * on is better than a rewrite they did not ask for and cannot see. Attributes
+ * are the attribute editor's job, and this says so.
+ *
+ * AN EMPTY BLOCK IS ALSO REJECTED: deleting every content line would leave the
+ * directive with no block, which is `atomdown lint`'s orphan-atom error. The
+ * board must not be able to produce a document the tool calls invalid.
+ */
+function replaceAtomBlockInSource(sourceText, atomId, newBlockText) {
+  const found = findAtomBlockLines(sourceText, atomId);
+  if (!found) {
+    return {
+      ok: false,
+      error:
+        "Could not find this block's directive (implicit atom, or the document changed)",
+    };
+  }
+  const newLines = normalizeBlockBytes(newBlockText).split("\n");
+  // Trailing blank lines are the editing artefact of a textarea, not content:
+  // a block's own bytes never include them (SPEC.md, "Content digest").
+  while (newLines.length && newLines[newLines.length - 1].trim() === "") {
+    newLines.pop();
+  }
+  while (newLines.length && newLines[0].trim() === "") newLines.shift();
+  if (newLines.length === 0) {
+    return {
+      ok: false,
+      error:
+        "A block cannot be empty: an atom with no block is an orphan. Delete the atom's directive instead.",
+    };
+  }
+  const offending = newLines.find(looksLikeDirectiveLine);
+  if (offending) {
+    return {
+      ok: false,
+      error:
+        "An Atomdown directive cannot be typed into a card body. Attributes, ids and names are edited in the three-dot menu.",
+    };
+  }
+
+  const lines = found.lines;
+  const before = lines.slice(0, found.startLine);
+  const after = lines.slice(found.endLine + 1);
+  const text = before.concat(newLines, after).join("\n");
+  if (text === sourceText) return { ok: true, unchanged: true, text };
+  return { ok: true, text };
+}
+
+/**
+ * Writes a fresh `digest` attribute onto each of the named atoms, in ONE pass
+ * over the document, and returns the rewritten text.
+ *
+ * entries is [{ id, digest }]. An atom already carrying a digest has that
+ * attribute REPLACED IN PLACE, so attribute order does not churn; one without
+ * gets it appended after the attributes it already has. Nothing else on the
+ * line moves, and no block's bytes are touched.
+ *
+ * One pass, so the whole review refreshes as a single editor transaction and
+ * one Cmd-Z puts every digest back.
+ */
+function setAtomDigestsInSource(sourceText, entries) {
+  const wanted = new Map();
+  (entries || []).forEach((e) => {
+    if (e && e.id && DIGEST_VALUE_RE.test(String(e.digest || ""))) {
+      wanted.set(e.id, e.digest);
+    }
+  });
+  if (wanted.size === 0) return { ok: false, error: "Nothing to refresh" };
+
+  const lines = String(sourceText || "").split("\n");
+  const written = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(ATOM_TAG_RE);
+    if (!m) continue;
+    const attrs = parseAttrs(m[2]);
+    const idAttr = attrs.find((a) => a.name === "id");
+    if (!idAttr || !wanted.has(idAttr.value)) continue;
+    const digest = wanted.get(idAttr.value);
+    const existing = attrs.find((a) => a.name === "digest");
+    if (existing) existing.value = digest;
+    else attrs.push({ name: "digest", value: digest });
+    lines[i] = serializeAtomLine(m[1], attrs, m[3]);
+    written.push(idAttr.value);
+  }
+  if (written.length === 0) {
+    return { ok: false, error: "Could not find those atoms' directives" };
+  }
+  return { ok: true, text: lines.join("\n"), written };
 }
 
 // ---------------------------------------------------------------------------
@@ -4148,7 +4482,13 @@ async function loadCollapsedGroups(pageName) {
 async function showBoard(sourceText, pageName) {
   // Rendering happens HERE rather than inside buildBoardHtml, because
   // buildBoardHtml is pure markup assembly and rendering needs a syscall.
-  const atoms = await renderAtomBodies(parseAtoms(sourceText));
+  // Digest state is decided HERE, in the worker, and shipped into the markup
+  // as an answer. The panel never gets a hash implementation of its own, so
+  // the border, the menu wording and the review list cannot disagree about
+  // whether one atom is stale.
+  const atoms = await annotateDigestState(
+    await renderAtomBodies(parseAtoms(sourceText)),
+  );
   const collapsed = await loadCollapsedGroups(pageName);
   const viewState = await loadViewState(pageName);
   const density = await loadDensity(pageName);
@@ -4505,11 +4845,98 @@ async function ungroupAtoms(groupId) {
   return { ok: true };
 }
 
+/**
+ * Saves one card's edited raw markdown, called from the panel when a textarea
+ * blurs or takes Cmd-Enter.
+ *
+ * ONE editor.replaceRange, so one Cmd-Z undoes the whole edit session rather
+ * than one keystroke of it — that is why the panel holds the text until the
+ * session ends instead of writing as the user types.
+ *
+ * THE DIGEST IS DELIBERATELY LEFT ALONE. After this the document fails
+ * `atomdown verify` for this atom until the user refreshes it, which is the
+ * signal working correctly: a digest that silently follows its content answers
+ * nothing (SPEC.md, "Nothing refreshes a digest automatically").
+ */
+async function saveAtomBlock(atomId, newBlockText) {
+  if (!atomId) return { ok: false, error: "No atom id" };
+
+  const pageName = await syscall("editor.getCurrentPage").catch(() => undefined);
+  const currentText = await syscall("editor.getText");
+
+  const result = replaceAtomBlockInSource(currentText, atomId, newBlockText);
+  if (!result.ok) return result;
+  if (result.unchanged) return { ok: true, unchanged: true };
+
+  await applyBufferEdit(currentText, result.text);
+  // The card's rendered body, its raw body and its stale border all come from
+  // the markup, so an edited card has to be redrawn to show what it now says.
+  await rerenderBoard(result.text, pageName);
+
+  return { ok: true };
+}
+
+/**
+ * Refreshes the recorded digest of one atom, or of the set the page-level
+ * review left checked, to match those blocks' current content. This is the
+ * explicit "I have reviewed this content now" action SPEC.md requires before
+ * a digest may be rewritten; nothing else in this plug ever writes one.
+ *
+ * atomIdsJson: JSON-encoded array of atom ids.
+ *
+ * An atom whose bytes this plug cannot reproduce is REFUSED, not guessed at:
+ * writing a digest computed from the wrong bytes would make `atomdown verify`
+ * fail permanently, with nothing on screen to explain why.
+ */
+async function refreshDigests(atomIdsJson) {
+  let atomIds;
+  try {
+    atomIds = JSON.parse(atomIdsJson);
+  } catch (e) {
+    return { ok: false, error: "Invalid selection payload" };
+  }
+  if (!Array.isArray(atomIds) || atomIds.length === 0) {
+    return { ok: false, error: "Nothing selected to refresh" };
+  }
+
+  const pageName = await syscall("editor.getCurrentPage").catch(() => undefined);
+  const currentText = await syscall("editor.getText");
+  const atoms = parseAtoms(currentText);
+  const byId = {};
+  atoms.forEach((a) => { byId[a.id] = a; });
+
+  const entries = [];
+  const refused = [];
+  for (const id of atomIds) {
+    const atom = byId[id];
+    if (!atom || atom.implicit) { refused.push(id); continue; }
+    if (atom.digestCheckable === false) { refused.push(id); continue; }
+    entries.push({ id, digest: await digestOfBlock(atom.text) });
+  }
+  if (entries.length === 0) {
+    return {
+      ok: false,
+      error: "Cannot compute a digest for these blocks. Run: atomdown materialize -digest -w",
+      refused,
+    };
+  }
+
+  const result = setAtomDigestsInSource(currentText, entries);
+  if (!result.ok) return result;
+
+  await applyBufferEdit(currentText, result.text);
+  await rerenderBoard(result.text, pageName);
+
+  return { ok: true, written: result.written, refused };
+}
+
 const functionMapping = {
   toggleBoard,
   restoreBoard,
   notifyClosed,
   saveAttrs,
+  saveAtomBlock,
+  refreshDigests,
   reorderAtom,
   groupAtoms,
   ungroupAtoms,
@@ -4537,6 +4964,12 @@ const manifest = {
     },
     saveAttrs: {
       path: "./atomdown-board.js:saveAttrs",
+    },
+    saveAtomBlock: {
+      path: "./atomdown-board.js:saveAtomBlock",
+    },
+    refreshDigests: {
+      path: "./atomdown-board.js:refreshDigests",
     },
     reorderAtom: {
       path: "./atomdown-board.js:reorderAtom",
@@ -4596,6 +5029,16 @@ const internals = {
   isSafeUrl,
   decodeUrlEntities,
   renderAtomBodies,
+  normalizeBlockBytes,
+  digestOfBlock,
+  recordedDigest,
+  digestStateOf,
+  annotateDigestState,
+  staleAtoms,
+  looksLikeDirectiveLine,
+  findAtomBlockLines,
+  replaceAtomBlockInSource,
+  setAtomDigestsInSource,
 };
 
 const plugExport = { manifest, functionMapping, internals };
