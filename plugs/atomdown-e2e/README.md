@@ -185,11 +185,13 @@ limits"). The board's caret round-trips correctly, which is what makes this a
 view difference rather than a suite bug. Fix the caret and this goes green; the
 assertion is correct as written.
 
-**Not yet triaged:** several area 7 tests fail on their first run - the card
-box, the card menu, the grip's side, the group header controls, the card
-editor and the stale-digest indicator. Each is either a real finding or a
-selector of mine that does not match this build, and telling those apart needs
-one pass per test against the artifacts the runner writes. Two known-good
+**Pending triage:** six area 7 tests are marked `test.fixme` with a reason
+each - the card box, the card menu, the grip's resting state, the group header
+controls, the card editor and the stale-digest indicator. Each is either a real
+finding or a selector of mine that does not match this build, and telling those
+apart needs one pass per test against the artifacts the runner writes. They are
+marked rather than deleted so they show up as named pending tests in every run,
+and tracked as `iugum-w6y.15`. Two known-good
 fixes already landed from that triage and are worth knowing before continuing
 it: `cardTop` has to scroll a virtualised card into view before it can measure
 it, and `.board-card-body` matches THREE elements per card (rendered, raw,
