@@ -1980,3 +1980,22 @@ one Chromium-based browser this was exercised in.
   move might land somewhere unexpected, or `reorderUnit` might report "no
   longer found" if the specific unit disappeared. Fine for a single-user
   spike; not safe for two people editing the same page at once.
+
+## Not done until the front-end suite passes
+
+The unit tests in this directory cover pure functions. They cannot see a
+geometry or a visibility defect, and a whole evening of those got past them.
+
+**A change to this plug is not done until this passes:**
+
+```sh
+scripts/atomdown-fe-check.sh
+```
+
+It measures the rendered document in a real browser: containment, directive
+invisibility, layout stability, state round trips, rendering fidelity,
+document immutability, and each primary component's existence, position and
+behaviour - across both densities, all four editor widths and both themes.
+
+A pre-push hook runs it automatically when a push touches this directory. Full
+detail, the matrix split and the escape hatch: `plugs/atomdown-e2e/README.md`.

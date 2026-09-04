@@ -81,6 +81,13 @@ export default defineConfig({
       testMatch: /\d-.*\.test\.ts$/,
     },
     {
+      // The negative control: these tests reintroduce real defects and assert
+      // that the rules REPORT them. Its own project because it is supposed to
+      // see violations, and mixing it into the gate would read as failures.
+      name: "defects",
+      testMatch: /defects\.test\.ts$/,
+    },
+    {
       // A scaffolding check, not a rule: it prints what the two views actually
       // render so the six rules can be written against reality. Run it with
       // `--project=probe`; the gate never does.

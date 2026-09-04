@@ -1085,6 +1085,591 @@ export function containmentViolations(boxes: Box[]): Violation[] {
   return out;
 }
 
+/**
+ * Do something to EVERY element matching `selector` in the whole document, not
+ * just the ones on screen.
+ *
+ * The interaction counterpart of `sweepBoxes`, and needed for the same reason.
+ * `page.locator(".atomdown-group-header").count()` returns 2 on a fresh
+ * 1440x900 viewport because CodeMirror has only realised the top of the page,
+ * so a loop over `nth(i)` visits two of eleven group headers and its indices
+ * shift under it as scrolling realises more. This scrolls stop by stop and
+ * calls `fn` once per distinct element, keyed by the element's own id chip or
+ * its text.
+ *
+ * Returns the keys visited, so a caller can assert it reached all of them.
+ */
+export async function sweepEach(
+  view: View,
+  selector: string,
+  fn: (locator: Locator, key: string, index: number) => Promise<void>,
+): Promise<string[]> {
+  const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
+  const metrics = await view.ev.evaluate((sel) => {
+    const el = document.querySelector(sel) ?? document.scrollingElement!;
+    return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  }, scroller);
+  const step = Math.max(200, Math.floor(metrics.clientHeight * 0.6));
+  const seen: string[] = [];
+
+  for (let y = 0; ; y += step) {
+    await view.ev.evaluate(
+      ({ sel, top }) => {
+        const el = document.querySelector(sel) ?? document.scrollingElement!;
+        el.scrollTop = top;
+      },
+      { sel: scroller, top: y },
+    );
+    await settle(view.page, 4);
+
+    const readKeys = (): Promise<string[]> =>
+      view.ev.evaluate((sel) =>
+        Array.from(document.querySelectorAll(sel)).map((el) => {
+          // Look at the element AND the unit it belongs to.
+          //
+          // A control keyed only on itself collides with every other copy of
+          // itself: every collapse caret reads "caret" and nothing else, so a
+          // sweep over `.atomdown-group-collapse` visited 1 of 11 groups and
+          // reported it. The caret's identity is its GROUP's identity, which
+          // lives on the header the caret sits in.
+          const unit =
+            el.closest(
+              "[data-atom-id],[data-group-id],.atomdown-card-header,.atomdown-group-header,.board-card,.board-group",
+            ) ?? el;
+          const chip = unit.querySelector(
+            ".board-card-id,.board-group-id,.atomdown-card-id,.atomdown-group-id",
+          );
+          const own =
+            el.getAttribute("data-atom-id") ??
+            el.getAttribute("data-group-id") ??
+            el.getAttribute("data-group-collapse") ??
+            unit.getAttribute("data-atom-id") ??
+            unit.getAttribute("data-group-id");
+          if (own) return own;
+          const id = chip?.textContent?.trim();
+          if (id) return id;
+          // A card with no Atomdown id — the implicit card a fenced code
+          // block produces — has a header that reads only "no id", the same
+          // for every one of them. Two following siblings make it unique,
+          // because the line below the header is that card's own content.
+          // Without this the sweep visited 83 of 84 cards and said so.
+          const near: Element[] = [unit];
+          let next = unit.nextElementSibling;
+          for (let i = 0; next && i < 2; i++) {
+            near.push(next);
+            next = next.nextElementSibling;
+          }
+          return `text:${near
+            .map((n) => n.textContent ?? "")
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80)}`;
+        }),
+        selector,
+      );
+
+    // Re-read the key list after EVERY interaction, and act on the first
+    // unseen index rather than iterating a snapshot.
+    //
+    // The snapshot version deadlocked. Hovering a card puts `hoverClasses` on
+    // its group's lines, which is a CodeMirror transaction, which rebuilds
+    // line elements — so `nth(i)` for the next card pointed at a detached
+    // node and `boundingBox()` sat there until the 180-second test timeout.
+    for (;;) {
+      const keys: string[] = await readKeys();
+      const i = keys.findIndex((k) => !seen.includes(k));
+      if (i < 0) break;
+      seen.push(keys[i]);
+      await fn(view.ev.locator(selector).nth(i), keys[i], seen.length - 1);
+    }
+
+    if (y + metrics.clientHeight >= metrics.scrollHeight) break;
+    if (y > metrics.scrollHeight + metrics.clientHeight) break;
+  }
+  return seen;
+}
+
+// ---------------------------------------------------------------------------
+// Directive visibility (rule 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The height a hidden directive line is allowed to contribute.
+ *
+ * The inline plug collapses a directive to a sliver rather than
+ * `display: none`, so the line element stays in the layout and CodeMirror's
+ * cursor and coordinate maths are untouched. On this build the sliver measures
+ * 0px; 4px is the budget, which leaves room for a border or a rounding without
+ * letting a 64-character sha256 digest back onto the page.
+ */
+export const DIRECTIVE_MAX_HEIGHT = 4;
+
+export type DirectiveState = {
+  index: number;
+  height: number;
+  /** The height this line is allowed to be, and whether it exceeds it. */
+  budget: number;
+  overBudget: boolean;
+  /** Any legible text at all: non-zero font, non-transparent, laid out. */
+  showsText: boolean;
+  text: string;
+  rect: Rect;
+};
+
+/** Measure every directive line currently realised in the inline view. */
+export async function directiveStates(page: Page): Promise<DirectiveState[]> {
+  await settle(page);
+  return page.evaluate(() => {
+    const alpha = (c: string) => {
+      const m = c.match(/rgba?\(([^)]+)\)/);
+      if (!m) return 1;
+      const parts = m[1].split(",").map((s) => Number.parseFloat(s));
+      return parts.length > 3 ? parts[3] : 1;
+    };
+    return Array.from(document.querySelectorAll(".atomdown-directive")).map(
+      (el, index) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        const font = Number.parseFloat(cs.fontSize) || 0;
+        const px = (v: string) => Number.parseFloat(v) || 0;
+        // A directive line's height budget.
+        //
+        // Normally 4px. A line that is ALSO a group box edge gets the group's
+        // padding on top, and that allowance is not a loosening — it is the
+        // difference between the directive and the box drawn on the same
+        // element. A group's opening marker measures 8px on a correct build,
+        // and every pixel of it is the group's own top inset: the group's top
+        // edge is drawn on that line because the marker is the group's first
+        // source line. Charging that to the directive reported a visible
+        // directive on a build where a reader could see nothing, which is a
+        // test that gets switched off rather than a defect that gets fixed.
+        // `showsText` is what actually guards the text, and it stays absolute.
+        const isGroupEdge =
+          el.classList.contains("atomdown-group-first") ||
+          el.classList.contains("atomdown-group-last");
+        const chrome =
+          px(cs.paddingTop) +
+          px(cs.paddingBottom) +
+          px(cs.borderTopWidth) +
+          px(cs.borderBottomWidth);
+        const groupPad = isGroupEdge
+          ? px(cs.getPropertyValue("--board-group-padding")) +
+            px(cs.getPropertyValue("--board-group-border-width"))
+          : 0;
+        const budget = 4 + chrome + groupPad;
+        return {
+          index,
+          height: r.height,
+          budget,
+          overBudget: r.height > budget,
+          showsText:
+            r.height > 0.5 &&
+            font > 0.5 &&
+            alpha(cs.color) > 0.01 &&
+            cs.visibility !== "hidden" &&
+            Number.parseFloat(cs.opacity || "1") > 0.01,
+          text: (el.textContent ?? "").slice(0, 60),
+          rect: {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+            top: r.top,
+            right: r.right,
+            bottom: r.bottom,
+            left: r.left,
+          },
+        };
+      },
+    );
+  });
+}
+
+/**
+ * How many directive reveals are showing.
+ *
+ * Two things can reveal one: the directive line itself un-collapsing, or the
+ * `atomdown-directive-peek` span the plug puts in the card header. Both count.
+ */
+export async function revealedDirectives(page: Page): Promise<{
+  lines: DirectiveState[];
+  peeks: { text: string; rect: Rect }[];
+}> {
+  const lines = (await directiveStates(page)).filter(
+    (d) => d.overBudget || d.showsText,
+  );
+  const peeks = await page.evaluate(() =>
+    Array.from(document.querySelectorAll(".atomdown-directive-peek"))
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return (
+          r.width > 0.5 &&
+          r.height > 0.5 &&
+          getComputedStyle(el).display !== "none"
+        );
+      })
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        return {
+          text: (el.textContent ?? "").slice(0, 80),
+          rect: {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+            top: r.top,
+            right: r.right,
+            bottom: r.bottom,
+            left: r.left,
+          },
+        };
+      }),
+  );
+  return { lines, peeks };
+}
+
+/**
+ * Is anything revealed right now? One evaluate, no settle, no rect payload.
+ *
+ * Rule 2 asks this once per card, and the detailed version costs two
+ * round trips plus three animation frames each — 84 cards took long enough
+ * that the test hit its own timeout. This is the hot-path form: it returns a
+ * count, and the caller reaches for `revealedDirectives` only to build the
+ * failure message. The interaction that precedes it has already settled.
+ */
+/**
+ * Is the text cursor sitting on a directive line, with the editor focused?
+ *
+ * This is the ONE condition under which a reveal is correct, so it is also
+ * the one exemption rule 2's hover sweep has to grant. Clicking a collapse
+ * caret focuses the editor and moves the cursor onto the group's own opening
+ * marker, which reveals that marker legitimately — the first version of rule 2
+ * reported it as a leak, which would have been a false alarm on every run.
+ */
+export async function cursorIsOnDirective(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const view = (globalThis as any).client?.editorView;
+    if (!view) return false;
+    const focused =
+      view.hasFocus ||
+      document.activeElement === view.contentDOM ||
+      view.contentDOM.contains(document.activeElement);
+    if (!focused) return false;
+    const line = view.state.doc.lineAt(view.state.selection.main.head);
+    return /^\s*<!--\s*<\/?atom/.test(line.text);
+  });
+}
+
+export async function revealedCount(page: Page): Promise<number> {
+  return page.evaluate(
+    ({ maxHeight }) => {
+      const alpha = (c: string) => {
+        const m = c.match(/rgba?\(([^)]+)\)/);
+        if (!m) return 1;
+        const p = m[1].split(",").map((s) => Number.parseFloat(s));
+        return p.length > 3 ? p[3] : 1;
+      };
+      let n = 0;
+      for (const el of document.querySelectorAll(".atomdown-directive")) {
+        const r = el.getBoundingClientRect();
+        const px = (v: string) => Number.parseFloat(v) || 0;
+        const cs0 = getComputedStyle(el);
+        const isGroupEdge =
+          el.classList.contains("atomdown-group-first") ||
+          el.classList.contains("atomdown-group-last");
+        const budget =
+          maxHeight +
+          px(cs0.paddingTop) +
+          px(cs0.paddingBottom) +
+          px(cs0.borderTopWidth) +
+          px(cs0.borderBottomWidth) +
+          (isGroupEdge
+            ? px(cs0.getPropertyValue("--board-group-padding")) +
+              px(cs0.getPropertyValue("--board-group-border-width"))
+            : 0);
+        if (r.height > budget) {
+          n++;
+          continue;
+        }
+        const cs = getComputedStyle(el);
+        if (
+          r.height > 0.5 &&
+          (Number.parseFloat(cs.fontSize) || 0) > 0.5 &&
+          alpha(cs.color) > 0.01 &&
+          cs.visibility !== "hidden" &&
+          Number.parseFloat(cs.opacity || "1") > 0.01
+        ) {
+          n++;
+        }
+      }
+      for (const el of document.querySelectorAll(".atomdown-directive-peek")) {
+        const r = el.getBoundingClientRect();
+        if (
+          r.width > 0.5 &&
+          r.height > 0.5 &&
+          getComputedStyle(el).display !== "none"
+        ) {
+          n++;
+        }
+      }
+      return n;
+    },
+    { maxHeight: DIRECTIVE_MAX_HEIGHT },
+  );
+}
+
+/**
+ * Put the text cursor on the first line matching `needle`, with the editor
+ * focused, and return that line's own card rect.
+ *
+ * The focus half matters. The plug reveals a directive only when the cursor is
+ * on its line AND the editor has focus, because SilverBullet parks the cursor
+ * at offset 0 on a page load — which is the document marker's own line — and
+ * without the focus condition that one directive would always be revealed on
+ * arrival and read as a bug.
+ *
+ * `client.editorView` is the same handle `silverbullet/e2e/cursor-reset.test.ts`
+ * drives, so this is the real selection path and not a plug internal.
+ */
+export async function putCursorOnLine(
+  page: Page,
+  needle: string,
+): Promise<{ lineNumber: number; cardRect: Rect | null }> {
+  const result = await page.evaluate((n) => {
+    const view = (globalThis as any).client.editorView;
+    const doc = view.state.doc;
+    for (let i = 1; i <= doc.lines; i++) {
+      const line = doc.line(i);
+      if (line.text.includes(n)) {
+        // `scrollIntoView` is not optional. CodeMirror only puts
+        // `cm-activeLine` on a line it has realised, and the reveal is keyed
+        // on that class, so setting the selection on an off-screen line left
+        // the directive hidden and rule 2 reported its own reveal as broken.
+        view.dispatch({
+          selection: { anchor: line.from },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return i;
+      }
+    }
+    return -1;
+  }, needle);
+  if (result < 0) throw new Error(`no line contains ${JSON.stringify(needle)}`);
+  await settle(page, 5);
+
+  // The card that line belongs to, as the reader sees it: the header widget
+  // that draws its top edge, plus its body lines.
+  const cardRect = await page.evaluate(() => {
+    const active = document.querySelector(".cm-line.cm-activeLine");
+    if (!active) return null;
+    const parts: Element[] = [];
+    // Walk back to the card header, then forward to the `-last` line.
+    let el: Element | null = active;
+    while (el && !el.classList.contains("atomdown-card-header")) {
+      el = el.previousElementSibling;
+    }
+    if (!el) return null;
+    parts.push(el);
+    let cur = el.nextElementSibling;
+    while (cur) {
+      parts.push(cur);
+      if (cur.classList.contains("atomdown-card-last")) break;
+      cur = cur.nextElementSibling;
+    }
+    const rs = parts.map((p) => p.getBoundingClientRect());
+    const left = Math.min(...rs.map((r) => r.left));
+    const right = Math.max(...rs.map((r) => r.right));
+    const top = Math.min(...rs.map((r) => r.top));
+    const bottom = Math.max(...rs.map((r) => r.bottom));
+    return {
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+      top,
+      right,
+      bottom,
+      left,
+    };
+  });
+  return { lineNumber: result, cardRect };
+}
+
+// ---------------------------------------------------------------------------
+// Visible text (rule 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The text a reader can actually see under `rootSelector`.
+ *
+ * NOT `textContent`, and the difference is the whole point. Both views keep
+ * text in the DOM that nobody can see:
+ *
+ *   - The inline view hides a directive by collapsing its line to 0px with
+ *     `font-size: 0` and a transparent colour, deliberately, so the line
+ *     stays in the layout and CodeMirror's coordinate maths is untouched. Its
+ *     characters are still in `textContent`.
+ *   - The board builds BOTH a rendered body and a raw body for every card and
+ *     shows one of them. The hidden one's markdown is still in `textContent`.
+ *
+ * So a rule 5 written against `textContent` reported 13 atom directives and 14
+ * unrendered links on a page where a reader could see none of them. Walking
+ * the tree and skipping invisible subtrees is what makes the assertion mean
+ * "the reader sees no raw markdown" — and it stays strict in the direction
+ * that matters, because the moment a directive becomes visible its text enters
+ * this collection and the rule fails.
+ *
+ * `dropSelector` removes matching subtrees before the walk. Rule 5 uses it for
+ * code constructs, which may legitimately contain `##` or `**`.
+ */
+export async function visibleText(
+  ev: Page | Frame,
+  rootSelector: string,
+  dropSelector = "",
+): Promise<string> {
+  return ev.evaluate(
+    ({ root, drop }) => {
+      const start = document.querySelector(root);
+      if (!start) return "";
+      const dropped = new Set<Element>();
+      if (drop) {
+        for (const el of start.querySelectorAll(drop)) dropped.add(el);
+      }
+      const out: string[] = [];
+      const walk = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          out.push(node.textContent ?? "");
+          return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const el = node as Element;
+        if (dropped.has(el)) return;
+        const cs = getComputedStyle(el);
+        if (
+          cs.display === "none" ||
+          cs.visibility === "hidden" ||
+          Number.parseFloat(cs.opacity || "1") < 0.01 ||
+          (Number.parseFloat(cs.fontSize) || 0) < 0.5
+        ) {
+          return;
+        }
+        const r = el.getBoundingClientRect();
+        // A zero-height box shows nothing. This is what excludes a collapsed
+        // directive line without needing to know its class name.
+        if (r.height < 0.5 || r.width < 0.5) return;
+        for (const child of Array.from(el.childNodes)) walk(child);
+      };
+      for (const child of Array.from(start.childNodes)) walk(child);
+      return out.join("");
+    },
+    { root: rootSelector, drop: dropSelector },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DOM signatures (rules 3 and 4)
+// ---------------------------------------------------------------------------
+
+export type Signature = {
+  /** One entry per box: its classes, its rect rounded to a pixel, its text. */
+  entries: string[];
+  count: number;
+};
+
+/**
+ * A comparable fingerprint of one view's rendered state.
+ *
+ * Class lists, box rects and visible text, exactly as rule 4 specifies. Rects
+ * are rounded to whole pixels: a sub-pixel difference after a toggle is
+ * browser rounding, not a state-machine bug, and a signature that reported it
+ * would be a test nobody trusts.
+ *
+ * Rects are recorded RELATIVE to the scroll container, so a signature taken
+ * before a toggle and one taken after are comparable even if the toggle
+ * changed the scroll position.
+ */
+export async function signature(view: View): Promise<Signature> {
+  const selector =
+    view.kind === "inline"
+      ? ".atomdown-card-header,.atomdown-group-header,.atomdown-card-line,.atomdown-group-line"
+      : ".board-card,.board-group,.board-card-header,.board-group-header";
+  const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
+  await settle(view.page);
+  const entries = await view.ev.evaluate(
+    ({ sel, scr }) => {
+      const base = document.querySelector(scr);
+      const origin = base?.getBoundingClientRect() ?? { left: 0, top: 0 };
+      const offset = base?.scrollTop ?? 0;
+      return Array.from(document.querySelectorAll(sel)).map((el) => {
+        const r = el.getBoundingClientRect();
+        const classes = String(el.className).trim().split(/\s+/).sort().join(".");
+        const text = (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+        const round = (v: number) => Math.round(v);
+        return [
+          classes,
+          round(r.left - origin.left),
+          round(r.top - origin.top + offset),
+          round(r.width),
+          round(r.height),
+          text,
+        ].join("|");
+      });
+    },
+    { sel: selector, scr: scroller },
+  );
+  return { entries, count: entries.length };
+}
+
+/** The first difference between two signatures, for a failure message. */
+export function signatureDiff(a: Signature, b: Signature): string[] {
+  const out: string[] = [];
+  if (a.count !== b.count) {
+    out.push(`element count ${a.count} -> ${b.count}`);
+  }
+  const max = Math.min(a.entries.length, b.entries.length);
+  for (let i = 0; i < max && out.length < 10; i++) {
+    if (a.entries[i] !== b.entries[i]) {
+      out.push(`[${i}] before: ${a.entries[i]}`);
+      out.push(`[${i}] after:  ${b.entries[i]}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * The top of one named card, relative to the document rather than the
+ * viewport, so it survives a scroll.
+ *
+ * Rule 3's whole question is "did this card move", and a viewport-relative
+ * measurement answers a different question whenever an interaction also
+ * scrolls.
+ */
+export async function cardTop(view: View, id: string): Promise<number | null> {
+  const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
+  await settle(view.page);
+  return view.ev.evaluate(
+    ({ id, scr, kind }) => {
+      const base = document.querySelector(scr);
+      const origin = base?.getBoundingClientRect().top ?? 0;
+      const offset = base?.scrollTop ?? 0;
+      let el: Element | null = null;
+      if (kind === "board") {
+        el = document.querySelector(`.board-card[data-atom-id="${id}"]`);
+      } else {
+        const chip = Array.from(
+          document.querySelectorAll(".atomdown-card-id"),
+        ).find((c) => c.textContent?.trim() === id);
+        el = chip?.closest(".atomdown-card-header") ?? null;
+      }
+      if (!el) return null;
+      return el.getBoundingClientRect().top - origin + offset;
+    },
+    { id, scr: scroller, kind: view.kind },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Failure artifacts
 // ---------------------------------------------------------------------------
