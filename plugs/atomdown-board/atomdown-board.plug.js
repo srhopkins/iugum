@@ -1940,13 +1940,20 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState) {
       cursor: grab;
     }
     .board-card-header:active { cursor: grabbing; }
+    /* The grip follows the same rule as the three-dot button: hidden until the
+       pointer is on the card or the group header, with its box still laid out
+       so nothing reflows. The group grip is focusable because it is draggable,
+       so focus reveals it too. */
     .board-drag-handle {
-      opacity: 0.5;
+      opacity: 0;
       font-size: 14px;
       line-height: 1;
       letter-spacing: -0.15em;
       user-select: none;
     }
+    .board-card:hover .board-drag-handle,
+    .board-group-header:hover .board-drag-handle,
+    .board-drag-handle:focus-visible { opacity: 0.5; }
     /* The readable name (slug) is the primary label: normal body font, full
        contrast, first on the line. The id keeps the small subtle monospace
        treatment it always had, so name-then-identity reads in that order at a
