@@ -3192,3 +3192,296 @@ test("staleAtoms lists exactly the drifted atoms, in document order", async () =
   assert.deepEqual(rows.map((r) => r.slug), ["claim", "findings"]);
   assert.equal(await staleAtoms(parseAtoms(REAL_DIGEST_PAGE)).then((r) => r.length), 0);
 });
+
+// --- Editing a block's raw markdown ---------------------------------------
+
+const GROUPED_DIGEST_PAGE = [
+  '<!-- <atomdown version="1"/> -->',
+  '<!-- <atom-group id="7K3M9X2D" slug="findings"> -->',
+  '<!-- <atom id="4P8W2H6K" slug="claim" digest="sha256:' + "1".repeat(64) + '"/> -->',
+  "First member.",
+  "",
+  '<!-- <atom id="9R3C7M5D" digest="sha256:' + "2".repeat(64) + '"/> -->',
+  "Second member.",
+  "<!-- </atom-group> -->",
+].join("\n");
+
+test("findAtomBlockLines points at the block, never at the directive", () => {
+  const found = findAtomBlockLines(REAL_DIGEST_PAGE, "9R3C7M5D");
+  assert.deepEqual(
+    found.lines.slice(found.startLine, found.endLine + 1),
+    [
+      "- First item with **strong text**.",
+      "- Second item with [a link](https://example.com).",
+    ],
+  );
+  // The directive line is above startLine and therefore out of reach.
+  assert.ok(found.lines[found.startLine - 1].includes("<atom "));
+});
+
+test("an edit rewrites the block and leaves the directive line byte-identical", () => {
+  const result = replaceAtomBlockInSource(
+    REAL_DIGEST_PAGE,
+    "4P8W2H6K",
+    "## Evidence, revised",
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.text.includes("## Evidence, revised"));
+  assert.equal(result.text.includes("## Evidence\n"), false);
+  // Every directive line, with its id, slug and digest, survives untouched.
+  for (const line of REAL_DIGEST_PAGE.split("\n")) {
+    if (line.includes("<atom ")) assert.ok(result.text.includes(line), line);
+  }
+  // The other blocks are untouched too.
+  assert.ok(result.text.includes("- First item with **strong text**."));
+  assert.ok(result.text.includes("A paragraph with  two trailing spaces"));
+});
+
+test("AN EDIT DOES NOT REFRESH THE DIGEST: the atom goes stale on purpose", async () => {
+  const result = replaceAtomBlockInSource(
+    REAL_DIGEST_PAGE,
+    "4P8W2H6K",
+    "## Evidence, revised",
+  );
+  const before = parseAtoms(REAL_DIGEST_PAGE)[0];
+  const after = parseAtoms(result.text)[0];
+  // The recorded value is the SAME bytes as before the edit.
+  assert.equal(recordedDigest(after), recordedDigest(before));
+  // Which is exactly why the atom now reads stale. A digest that followed its
+  // content would answer nothing (SPEC.md, "Nothing refreshes a digest
+  // automatically").
+  assert.equal(await digestStateOf(before), "fresh");
+  assert.equal(await digestStateOf(after), "stale");
+});
+
+test("an edit can add and remove lines inside the block", () => {
+  const result = replaceAtomBlockInSource(
+    REAL_DIGEST_PAGE,
+    "9R3C7M5D",
+    "- only one item left\n- and a new second\n- and a third",
+  );
+  assert.equal(result.ok, true);
+  const atoms = parseAtoms(result.text);
+  const edited = atoms.find((a) => a.id === "9R3C7M5D");
+  assert.equal(edited.text, "- only one item left\n- and a new second\n- and a third");
+  // The neighbours kept their own blocks.
+  assert.equal(atoms.find((a) => a.id === "4P8W2H6K").text, "## Evidence");
+});
+
+test("a pasted directive is REJECTED, not escaped, and nothing is written", () => {
+  const pastes = [
+    '<!-- <atom id="ZZZZZZZZ"/> -->',
+    '<!-- <atom-group id="ZZZZZZZZ"> -->',
+    "<!-- </atom-group> -->",
+    '<!-- <atomdown version="1"/> -->',
+  ];
+  for (const paste of pastes) {
+    const result = replaceAtomBlockInSource(REAL_DIGEST_PAGE, "4P8W2H6K", paste);
+    assert.equal(result.ok, false, paste);
+    assert.match(result.error, /directive cannot be typed into a card body/);
+    assert.equal(result.text, undefined);
+  }
+  // Also when it is hidden on a later line of an otherwise ordinary edit.
+  const buried = replaceAtomBlockInSource(
+    REAL_DIGEST_PAGE,
+    "4P8W2H6K",
+    '## Evidence\nsome prose\n<!-- <atom id="ZZZZZZZZ" slug="sneaky"/> -->',
+  );
+  assert.equal(buried.ok, false);
+  assert.equal(looksLikeDirectiveLine('<!-- <atom id="ZZZZZZZZ"/> -->'), true);
+  assert.equal(looksLikeDirectiveLine("## An ordinary heading"), false);
+});
+
+test("an edit cannot empty a block, which would orphan the atom", () => {
+  for (const empty of ["", "   ", "\n\n", "  \n \n"]) {
+    const result = replaceAtomBlockInSource(REAL_DIGEST_PAGE, "4P8W2H6K", empty);
+    assert.equal(result.ok, false, JSON.stringify(empty));
+    assert.match(result.error, /cannot be empty/);
+  }
+});
+
+test("a textarea's trailing blank lines are an artefact, not content", async () => {
+  const result = replaceAtomBlockInSource(
+    REAL_DIGEST_PAGE,
+    "4P8W2H6K",
+    "## Evidence\n\n\n",
+  );
+  assert.equal(result.ok, true);
+  const edited = parseAtoms(result.text)[0];
+  assert.equal(edited.text, "## Evidence");
+  // So retyping the same text is a no-op and stays fresh.
+  assert.equal(await digestStateOf(edited), "fresh");
+});
+
+test("editing one group member touches neither its siblings nor the markers", () => {
+  const result = replaceAtomBlockInSource(
+    GROUPED_DIGEST_PAGE,
+    "4P8W2H6K",
+    "First member, revised.",
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.text.includes('<atom-group id="7K3M9X2D" slug="findings">'));
+  assert.ok(result.text.includes("<!-- </atom-group> -->"));
+  assert.ok(result.text.includes("Second member."));
+  const atoms = parseAtoms(result.text);
+  assert.equal(atoms.find((a) => a.id === "4P8W2H6K").text, "First member, revised.");
+  assert.equal(atoms.find((a) => a.id === "9R3C7M5D").text, "Second member.");
+  // Both are still in the group.
+  atoms.forEach((a) => assert.equal(a.groupId, "7K3M9X2D"));
+});
+
+test("an unchanged edit reports unchanged and rewrites nothing", () => {
+  const result = replaceAtomBlockInSource(REAL_DIGEST_PAGE, "4P8W2H6K", "## Evidence");
+  assert.equal(result.unchanged, true);
+  assert.equal(result.text, REAL_DIGEST_PAGE);
+});
+
+test("an implicit atom has no directive, so there is no block edit to make", () => {
+  const result = replaceAtomBlockInSource(REAL_DIGEST_PAGE, "implicit-1", "nope");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Could not find/);
+});
+
+test("saveAtomBlock applies ONE editor.replaceRange and never writes the space", async () => {
+  const { calls, state } = recordingSyscall(REAL_DIGEST_PAGE);
+  const result = await plug.functionMapping.saveAtomBlock(
+    "4P8W2H6K",
+    "## Evidence, revised",
+  );
+  assert.equal(result.ok, true);
+  const names = calls.map((c) => c.name);
+  // One transaction for the whole edit session, so one Cmd-Z undoes it all.
+  assert.equal(names.filter((n) => n === "editor.replaceRange").length, 1);
+  assert.equal(names.includes("space.writePage"), false);
+  assert.equal(names.includes("space.readPage"), false);
+  assert.equal(names.includes("editor.reloadPage"), false);
+  assert.ok(state.text.includes("## Evidence, revised"));
+});
+
+test("saveAtomBlock refuses a pasted directive without touching the buffer", async () => {
+  const { calls, state } = recordingSyscall(REAL_DIGEST_PAGE);
+  const result = await plug.functionMapping.saveAtomBlock(
+    "4P8W2H6K",
+    '<!-- <atom id="ZZZZZZZZ"/> -->',
+  );
+  assert.equal(result.ok, false);
+  assert.equal(calls.some((c) => c.name === "editor.replaceRange"), false);
+  assert.equal(state.text, REAL_DIGEST_PAGE);
+});
+
+// --- Refreshing a digest --------------------------------------------------
+
+test("a refresh replaces the digest in place and moves no other attribute", () => {
+  const result = setAtomDigestsInSource(REAL_DIGEST_PAGE, [
+    { id: "4P8W2H6K", digest: "sha256:" + "a".repeat(64) },
+  ]);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.written, ["4P8W2H6K"]);
+  // slug still before digest, id still first: attribute order does not churn.
+  // The trailing space before /> is serializeAtomLine's existing shape, the
+  // same one an attribute save already writes.
+  assert.ok(result.text.includes(
+    '<atom id="4P8W2H6K" slug="claim" digest="sha256:' + "a".repeat(64) + '" />',
+  ));
+  // And the other two directives are untouched.
+  assert.ok(result.text.includes('digest="sha256:ff974710b96a205bdb50e66d1c1ba6b4cbf72dfcdff8c79f704d7ef118ef0af8"'));
+});
+
+test("an atom with no digest gets one appended after what it already has", () => {
+  const page = ['<!-- <atom id="4P8W2H6K" slug="claim"/> -->', "Text."].join("\n");
+  const result = setAtomDigestsInSource(page, [
+    { id: "4P8W2H6K", digest: "sha256:" + "b".repeat(64) },
+  ]);
+  assert.ok(result.text.includes(
+    '<atom id="4P8W2H6K" slug="claim" digest="sha256:' + "b".repeat(64) + '" />',
+  ));
+});
+
+test("a refresh never writes a malformed digest", () => {
+  const result = setAtomDigestsInSource(REAL_DIGEST_PAGE, [
+    { id: "4P8W2H6K", digest: "not-a-digest" },
+  ]);
+  assert.equal(result.ok, false);
+});
+
+test("refreshDigests clears the staleness an edit created, in ONE transaction", async () => {
+  const edited = REAL_DIGEST_PAGE
+    .replace("## Evidence", "## Evidence, revised")
+    .replace("- First item", "- First item, revised");
+  const { calls, state } = recordingSyscall(edited);
+  assert.equal((await staleAtoms(parseAtoms(edited))).length, 2);
+
+  const result = await plug.functionMapping.refreshDigests(
+    JSON.stringify(["4P8W2H6K", "9R3C7M5D"]),
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.written, ["4P8W2H6K", "9R3C7M5D"]);
+  // One transaction for the whole review, so one Cmd-Z puts every digest back.
+  assert.equal(
+    calls.map((c) => c.name).filter((n) => n === "editor.replaceRange").length,
+    1,
+  );
+  assert.equal(calls.some((c) => c.name === "space.writePage"), false);
+  assert.equal((await staleAtoms(parseAtoms(state.text))).length, 0);
+  // No block's bytes moved: only the two digest attributes changed.
+  const after = parseAtoms(state.text);
+  assert.equal(after.find((a) => a.id === "4P8W2H6K").text, "## Evidence, revised");
+});
+
+test("an unchecked row is REFUSED, never given a guessed digest", async () => {
+  // A fenced code block, whose bytes this plug cannot reproduce. Writing a
+  // digest here would make atomdown verify fail forever with nothing on
+  // screen to explain why.
+  const page = [
+    '<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+    "```bash",
+    "atomdown lint page.md",
+    "```",
+  ].join("\n");
+  const { calls, state } = recordingSyscall(page);
+  const result = await plug.functionMapping.refreshDigests(
+    JSON.stringify(["4P8W2H6K"]),
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.refused, ["4P8W2H6K"]);
+  assert.match(result.error, /atomdown materialize -digest/);
+  assert.equal(calls.some((c) => c.name === "editor.replaceRange"), false);
+  assert.equal(state.text, page);
+});
+
+test("an unchecked row does not block the checkable ones beside it", async () => {
+  const page = [
+    '<!-- <atom id="4P8W2H6K" digest="sha256:' + "0".repeat(64) + '"/> -->',
+    "## A heading",
+    "",
+    '<!-- <atom id="9R3C7M5D" digest="sha256:' + "0".repeat(64) + '"/> -->',
+    "```bash",
+    "atomdown lint page.md",
+    "```",
+  ].join("\n");
+  const { state } = recordingSyscall(page);
+  const result = await plug.functionMapping.refreshDigests(
+    JSON.stringify(["4P8W2H6K", "9R3C7M5D"]),
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.written, ["4P8W2H6K"]);
+  assert.deepEqual(result.refused, ["9R3C7M5D"]);
+  // The fence atom's directive is byte-identical to what it was.
+  assert.ok(state.text.includes('<atom id="9R3C7M5D" digest="sha256:' + "0".repeat(64) + '"/>'));
+});
+
+test("the review refreshes only the rows the user left checked", async () => {
+  const edited = REAL_DIGEST_PAGE
+    .replace("## Evidence", "## Evidence, revised")
+    .replace("- First item", "- First item, revised");
+  const { state } = recordingSyscall(edited);
+  // The user unchecked the second row.
+  const result = await plug.functionMapping.refreshDigests(
+    JSON.stringify(["4P8W2H6K"]),
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.written, ["4P8W2H6K"]);
+  // The one they left unchecked is still stale, which is the point.
+  const rows = await staleAtoms(parseAtoms(state.text));
+  assert.deepEqual(rows.map((r) => r.id), ["9R3C7M5D"]);
+});
