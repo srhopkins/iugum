@@ -39,6 +39,9 @@ const {
   isContiguousUnitSelection,
   lineStarts,
   gripLine,
+  contentFirstLine,
+  hasNoContent,
+  cardHeaderHtml,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,
@@ -143,6 +146,7 @@ test("a grip sits on the first content line, not the directive line", () => {
 
 test("the payload turns the view on: marks, widgets, folds, events, gestures", () => {
   const payload = buildDecorations(PAGE, []);
+  assert.equal(payload.activeLine, true);
   assert.equal(payload.events.click, true);
   assert.equal(payload.events.selection, true);
   assert.deepEqual(payload.gestures.drag, { handleClass: "atomdown-grip" });
@@ -154,7 +158,7 @@ test("the payload turns the view on: marks, widgets, folds, events, gestures", (
   payload.lines.forEach((l) => assert.equal(l.class, "atomdown-directive"));
 });
 
-test("every unit gets one mark, named by its unit key", () => {
+test("every unit gets one identity mark that draws nothing", () => {
   const payload = buildDecorations(PAGE, []);
   const unitMarks = payload.marks.filter((m) => m.id.startsWith("unit:"));
   assert.deepEqual(unitMarks.map((m) => m.id), [
@@ -162,88 +166,192 @@ test("every unit gets one mark, named by its unit key", () => {
     "unit:group:7K3M9X2D",
     "unit:atom:implicit-1",
   ]);
-  unitMarks.forEach((m) => assert.equal(m.lineClasses, true));
+  // No line classes, so no border, no background, nothing.
+  unitMarks.forEach((m) => {
+    assert.equal(m.class, "atomdown-unit");
+    assert.equal(m.lineClasses, undefined);
+  });
 });
 
-test("a group mark is atomdown-group, an atom mark is atomdown-card", () => {
-  const payload = buildDecorations(PAGE, []);
-  const byId = Object.fromEntries(payload.marks.map((m) => [m.id, m]));
-  assert.equal(byId["unit:group:7K3M9X2D"].class, "atomdown-group");
-  assert.equal(byId["unit:atom:4P8W2H6K"].class, "atomdown-card");
-  assert.equal(byId["card:7K3M9X2D:0"].class, "atomdown-card");
-});
-
-test("a mark covers exactly its own source range", () => {
+test("an identity mark covers the unit's directive lines too", () => {
   const payload = buildDecorations(PAGE, []);
   const mark = payload.marks.find((m) => m.id === "unit:atom:4P8W2H6K");
   assert.equal(mark.from, offsetOf(PAGE, '<!-- <atom id="4P8W2H6K"'));
-  assert.equal(PAGE.slice(mark.from, mark.to).split("\n").length, 2);
-  assert.equal(PAGE.slice(mark.from, mark.to).endsWith("# Claim"), true);
 });
 
-test("a group mark wraps both of its markers", () => {
+test("a card box starts BELOW the directive line, so its top edge is visible", () => {
   const payload = buildDecorations(PAGE, []);
-  const mark = payload.marks.find((m) => m.id === "unit:group:7K3M9X2D");
-  const covered = PAGE.slice(mark.from, mark.to);
+  const box = payload.marks.find((m) => m.id === "box:atom:4P8W2H6K");
+  assert.equal(box.class, "atomdown-card");
+  assert.equal(box.lineClasses, true);
+  assert.equal(box.from, offsetOf(PAGE, "# Claim"));
+  assert.equal(PAGE.slice(box.from, box.to), "# Claim");
+});
+
+test("no box mark covers a blank line, which is what makes the gap", () => {
+  const payload = buildDecorations(PAGE, []);
+  payload.marks
+    .filter((m) => m.lineClasses && m.class === "atomdown-card")
+    .forEach((m) => {
+      const covered = PAGE.slice(m.from, m.to).split("\n");
+      covered.forEach((line) =>
+        assert.notEqual(line.trim(), "", "card box covers a blank line: " + m.id)
+      );
+    });
+});
+
+test("a card box never covers a directive line", () => {
+  const payload = buildDecorations(PAGE, []);
+  payload.marks
+    .filter((m) => m.class === "atomdown-card")
+    .forEach((m) => {
+      PAGE.slice(m.from, m.to).split("\n").forEach((line) =>
+        assert.equal(
+          line.includes("<!--"),
+          false,
+          "card box covers a directive: " + m.id,
+        )
+      );
+    });
+});
+
+test("a one-line block's box is first and last on the same line", () => {
+  // "# Claim" is one line, so its box mark starts and ends on that line and
+  // the stylesheet's first+last rule has to close the whole box there.
+  const payload = buildDecorations(PAGE, []);
+  const box = payload.marks.find((m) => m.id === "box:atom:4P8W2H6K");
+  assert.equal(PAGE.slice(box.from, box.to).includes("\n"), false);
+});
+
+test("a multi-line block's box spans every one of its lines", () => {
+  const page = [
+    '<!-- <atom id="AAAAAAAA"/> -->',
+    "line one",
+    "line two",
+    "line three",
+    "",
+  ].join("\n");
+  const box = buildDecorations(page, []).marks.find(
+    (m) => m.id === "box:atom:AAAAAAAA",
+  );
+  assert.equal(page.slice(box.from, box.to), "line one\nline two\nline three");
+});
+
+test("an atom with a directive but no content gets no box and no header", () => {
+  const page = '<!-- <atom id="AAAAAAAA"/> -->\n\n';
+  const payload = buildDecorations(page, []);
+  assert.equal(payload.marks.some((m) => m.id.startsWith("box:")), false);
+  assert.deepEqual(payload.widgets, []);
+});
+
+test("a group box runs marker to marker, so both markers are inside it", () => {
+  const payload = buildDecorations(PAGE, []);
+  const box = payload.marks.find((m) => m.id === "box:group:7K3M9X2D");
+  assert.equal(box.class, "atomdown-group");
+  assert.equal(box.lineClasses, true);
+  const covered = PAGE.slice(box.from, box.to);
   assert.equal(covered.startsWith('<!-- <atom-group id="7K3M9X2D"'), true);
   assert.equal(covered.endsWith("<!-- </atom-group> -->"), true);
 });
 
-test("a member card's mark stays inside its group's mark", () => {
+test("each atom inside a group gets its own card box, inside the group's", () => {
   const payload = buildDecorations(PAGE, []);
-  const group = payload.marks.find((m) => m.id === "unit:group:7K3M9X2D");
-  payload.marks
-    .filter((m) => m.id.startsWith("card:7K3M9X2D:"))
-    .forEach((m) => {
-      assert.equal(m.from > group.from, true);
-      assert.equal(m.to < group.to, true);
-    });
+  const group = payload.marks.find((m) => m.id === "box:group:7K3M9X2D");
+  const members = payload.marks.filter((m) => m.id.startsWith("card:"));
+  assert.deepEqual(members.map((m) => m.id), [
+    "card:7K3M9X2D:0",
+    "card:7K3M9X2D:1",
+  ]);
+  members.forEach((m) => {
+    assert.equal(m.class, "atomdown-card");
+    assert.equal(m.lineClasses, true);
+    assert.equal(m.from > group.from, true);
+    assert.equal(m.to < group.to, true);
+  });
+});
+
+test("every card gets a header widget carrying its name and its id", () => {
+  const payload = buildDecorations(PAGE, []);
+  const heads = payload.widgets.filter((w) =>
+    w.class.startsWith("atomdown-card-header")
+  );
+  assert.deepEqual(heads.map((w) => w.id), [
+    "box:atom:4P8W2H6K",
+    "card:7K3M9X2D:0",
+    "card:7K3M9X2D:1",
+    "box:atom:implicit-1",
+  ]);
+  const named = heads[0];
+  assert.match(named.html, /atomdown-card-slug/);
+  assert.match(named.html, /claim/);
+  assert.match(named.html, /atomdown-card-id/);
+  assert.match(named.html, /4P8W2H6K/);
+  assert.match(named.html, /atomdown-grip/);
+});
+
+test("a card header sits at the top of the box it belongs to", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
+  const box = payload.marks.find((m) => m.id === "box:atom:4P8W2H6K");
+  assert.equal(head.side, "before");
+  assert.equal(head.at, box.from);
+});
+
+test("a member card's header is marked nested, a top-level card's is not", () => {
+  const payload = buildDecorations(PAGE, []);
+  const nested = payload.widgets.find((w) => w.id === "card:7K3M9X2D:0");
+  const top = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
+  assert.match(nested.class, /atomdown-nested/);
+  assert.equal(/atomdown-nested/.test(top.class), false);
+  assert.match(nested.html, /atomdown-nested/);
+});
+
+test("an implicit block says so instead of inventing an id", () => {
+  const payload = buildDecorations(PAGE, []);
+  const head = payload.widgets.find((w) => w.id === "box:atom:implicit-1");
+  assert.match(head.html, /no id/);
+  assert.equal(/implicit-1/.test(head.html), false);
 });
 
 test("a group gets a header widget on its opening marker line", () => {
   const payload = buildDecorations(PAGE, []);
-  const widget = payload.widgets.find((w) => w.class === "atomdown-group-header");
+  const widget = payload.widgets.find((w) =>
+    w.class === "atomdown-group-header"
+  );
   assert.equal(widget.id, "unit:group:7K3M9X2D");
   assert.equal(widget.side, "before");
   assert.equal(widget.at, offsetOf(PAGE, '<!-- <atom-group id="7K3M9X2D"'));
   assert.match(widget.html, /findings/);
-  assert.match(widget.html, /2 atoms/);
+  assert.match(widget.html, /7K3M9X2D/);
+  assert.match(widget.html, /2 cards/);
   assert.match(widget.html, /atomdown-grip/);
   assert.match(widget.html, /atomdown-group-collapse/);
-  assert.match(widget.html, /atomdown-group-menu/);
+  assert.match(widget.html, /atomdown-group-kind/);
+  assert.match(widget.html, /atomdown-group-rename/);
+  assert.match(widget.html, /atomdown-group-ungroup/);
 });
 
-test("a group with one atom says atom, not atoms", () => {
+test("a group with one card says card, not cards", () => {
   const html = groupHeaderHtml({ groupId: "AAAAAAAA", groupSlug: "x" }, 1);
-  assert.match(html, /1 atom</);
+  assert.match(html, /1 card</);
+  assert.match(groupHeaderHtml({ groupId: "AAAAAAAA", groupSlug: "x" }, 3), /3 cards</);
 });
 
-test("a group with no slug shows its id", () => {
+test("a group with no slug shows its id as the name", () => {
   const html = groupHeaderHtml({ groupId: "7K3M9X2D", groupSlug: null }, 0);
   assert.match(html, /7K3M9X2D/);
 });
 
-test("every atom unit gets one inline grip widget, groups do not", () => {
+test("no inline grip widget: the grip lives in the card header row", () => {
   const payload = buildDecorations(PAGE, []);
-  const grips = payload.widgets.filter((w) => w.class === "atomdown-grip");
-  assert.deepEqual(grips.map((w) => w.id), [
-    "unit:atom:4P8W2H6K",
-    "unit:atom:implicit-1",
-  ]);
-  grips.forEach((w) => assert.equal(w.inline, true));
-});
-
-test("a grip is placed at the start of the block's first content line", () => {
-  const payload = buildDecorations(PAGE, []);
-  const grip = payload.widgets.find((w) => w.id === "unit:atom:4P8W2H6K");
-  assert.equal(grip.at, offsetOf(PAGE, "# Claim"));
+  assert.equal(payload.widgets.some((w) => w.inline), false);
 });
 
 test("a group is one foldable region: everything after its opening marker", () => {
   const payload = buildDecorations(PAGE, []);
   assert.equal(payload.folds.length, 1);
   const fold = payload.folds[0];
-  const group = payload.marks.find((m) => m.id === "unit:group:7K3M9X2D");
+  const group = payload.marks.find((m) => m.id === "box:group:7K3M9X2D");
   assert.equal(PAGE[fold.from], "\n");
   assert.equal(fold.to, group.to);
 });
@@ -253,16 +361,16 @@ test("a page with no group has nothing to fold", () => {
   assert.deepEqual(payload.folds, []);
 });
 
-test("a selected unit gets one extra mark and the document is untouched", () => {
+test("a selected unit gets one extra mark over the box it draws", () => {
   const plain = buildDecorations(PAGE, []);
   const picked = buildDecorations(PAGE, ["atom:4P8W2H6K", "atom:4P8W2H6K"]);
   assert.equal(picked.marks.length, plain.marks.length + 1);
   const sel = picked.marks.find((m) => m.id === "sel:atom:4P8W2H6K");
+  const box = picked.marks.find((m) => m.id === "box:atom:4P8W2H6K");
   assert.equal(sel.class, "atomdown-selected");
   assert.equal(sel.lineClasses, true);
-  const unit = picked.marks.find((m) => m.id === "unit:atom:4P8W2H6K");
-  assert.equal(sel.from, unit.from);
-  assert.equal(sel.to, unit.to);
+  assert.equal(sel.from, box.from);
+  assert.equal(sel.to, box.to);
 });
 
 test("a selection key that names nothing adds no mark", () => {
@@ -282,8 +390,32 @@ test("no mark or widget offset can fall outside the page", () => {
   });
 });
 
+test("content starts below a directive, and at the block for an implicit one", () => {
+  const { units } = computeUnits(PAGE);
+  assert.equal(contentFirstLine(units[0]), units[0].startLine + 1);
+  assert.equal(contentFirstLine(units[2]), units[2].startLine);
+  assert.equal(gripLine(units[0]), contentFirstLine(units[0]));
+});
+
+test("hasNoContent spots a directive with nothing after it", () => {
+  const page = '<!-- <atom id="AAAAAAAA"/> -->\n\nreal block\n';
+  const scan = computeUnits(page);
+  assert.equal(hasNoContent(scan.units[0], scan.lines), true);
+  assert.equal(hasNoContent(scan.units[1], scan.lines), false);
+});
+
+test("a card header for a slugless explicit atom still shows the id", () => {
+  const html = cardHeaderHtml(
+    { atomIds: ["AAAAAAAA"], atomSlug: null, implicit: false },
+    false,
+  );
+  assert.match(html, /AAAAAAAA/);
+  assert.equal(/atomdown-card-slug/.test(html), false);
+});
+
 test("turning the view off writes an empty payload, not a missing key", () => {
   const off = emptyDecorations();
+  assert.equal(off.activeLine, false);
   assert.deepEqual(off.marks, []);
   assert.deepEqual(off.widgets, []);
   assert.deepEqual(off.lines, []);

@@ -661,6 +661,7 @@ function computeCards(sourceText) {
         startLine: unit.startLine,
         endLine: unit.endLine,
         atomIds: unit.atomIds,
+        atomSlug: unit.atomSlug ?? null,
         implicit: unit.implicit === true,
       });
       return;
@@ -677,6 +678,7 @@ function computeCards(sourceText) {
         startLine: member.startLine + innerFirst,
         endLine: member.endLine + innerFirst,
         atomIds: member.atomIds,
+        atomSlug: member.atomSlug ?? null,
         implicit: member.implicit === true,
       });
     });
@@ -684,20 +686,77 @@ function computeCards(sourceText) {
   return { lines: scan.lines, units: scan.units, cards };
 }
 
-/** The line a unit's drag handle sits on: its first content line. */
-function gripLine(unit) {
+/**
+ * The first line of a unit's VISIBLE content.
+ *
+ * An explicit atom's `startLine` is its directive line, and a directive is
+ * hidden at rest, so the card box must start below it or the box's top edge
+ * lands on a collapsed line. An implicit atom has no directive, so its content
+ * starts where the unit starts.
+ */
+function contentFirstLine(unit) {
   return unit.endLine > unit.startLine ? unit.startLine + 1 : unit.startLine;
 }
 
-/** The drag handle. Quiet until the block is hovered; styled in space-style. */
+/** True when this unit has no visible content line at all. */
+function hasNoContent(unit, lines) {
+  const first = contentFirstLine(unit);
+  if (lines[first] === undefined) return true;
+  // An explicit atom's directive is alone on its line, so a unit that is one
+  // line long is a directive with nothing under it.
+  if (!unit.implicit) return unit.endLine <= unit.startLine;
+  return lines[first].trim() === "";
+}
+
+/** Kept for the tests and for callers that still speak of a grip line. */
+function gripLine(unit) {
+  return contentFirstLine(unit);
+}
+
+/** The drag handle, the same six-dot glyph and hover rule the board uses. */
 function gripHtml(title) {
-  return '<span class="atomdown-grip-dots" title="' + escapeHtml(title) +
-    '">⠿</span>';
+  return '<span class="atomdown-grip" title="' + escapeHtml(title) +
+    '">&#10303;</span>';
 }
 
 /**
- * The group header bar: a grip, a collapse control, the group's readable name,
- * how many atoms it holds, and a menu.
+ * A card's header row: the grip, the readable name, and the id.
+ *
+ * This is the board's card header, and it exists inline for a second reason:
+ * the directive is hidden at rest, so with no header row the atom's id would
+ * have nowhere at all to appear. Name in body text, id in small grey
+ * monospace, in that order - identity stays visible, the name reads first.
+ */
+function cardHeaderHtml(unit, nested) {
+  const id = unit.atomIds[0];
+  const slug = unit.implicit ? null : unit.atomSlug;
+  const name = slug
+    ? '<span class="atomdown-card-slug" title="' +
+      escapeHtml('Name (slug) "' + slug + '" - the atom\'s id is ' + id) +
+      '">' + escapeHtml(slug) + "</span>"
+    : "";
+  const idLabel = unit.implicit
+    ? '<span class="atomdown-card-badge" title="This block has no atom directive of its own.">no id</span>'
+    : '<span class="atomdown-card-id" title="' +
+      escapeHtml("Atomdown id " + id) + '">' + escapeHtml(id) + "</span>";
+  return '<span class="atomdown-card-head' + (nested ? " atomdown-nested" : "") +
+    '">' +
+    gripHtml(
+      unit.implicit
+        ? "Drag to move this block"
+        : "Drag to move " + slugOrId(slug, id),
+    ) +
+    name + idLabel + "</span>";
+}
+
+/**
+ * The group header bar: collapse, grip, the kind, the group's readable name,
+ * its id, how many atoms it holds, and a menu.
+ *
+ * The bar is also the group box's TOP EDGE. The group's opening marker line is
+ * a directive and therefore collapsed, so it can carry no visible border, and
+ * this widget sits directly above it. That is why the accent border-top and
+ * the top corner radii are on this element in the stylesheet.
  *
  * Every control carries its own class. The seam reports the classes of the
  * element that was clicked, so one widget can carry several controls without
@@ -705,29 +764,54 @@ function gripHtml(title) {
  */
 function groupHeaderHtml(unit, memberCount) {
   const name = slugOrId(unit.groupSlug, unit.groupId);
-  const label = memberCount === 1 ? "1 atom" : memberCount + " atoms";
+  const word = memberCount === 1 ? "card" : "cards";
   return [
-    '<span class="atomdown-grip atomdown-group-grip" title="Drag to move this group">⠿</span>',
-    '<span class="atomdown-group-collapse" title="Collapse or expand this group">▾</span>',
+    '<span class="atomdown-group-collapse" title="Collapse or expand this group">&#9662;</span>',
+    '<span class="atomdown-grip atomdown-group-grip" title="Drag to move the whole group">&#10303;</span>',
+    '<span class="atomdown-group-kind">group</span>',
     '<span class="atomdown-group-name" title="' +
-    escapeHtml("group " + unit.groupId) + '">' + escapeHtml(name) + "</span>",
-    '<span class="atomdown-group-count">' + escapeHtml(label) + "</span>",
-    '<span class="atomdown-group-menu" title="Group actions">⋯</span>',
+    escapeHtml(
+      'Name (slug) "' + name + '" - the group\'s id is ' + unit.groupId,
+    ) + '">' + escapeHtml(name) + "</span>",
+    '<span class="atomdown-group-id" title="' +
+    escapeHtml("Atomdown id " + unit.groupId) + '">' +
+    escapeHtml(String(unit.groupId)) + "</span>",
+    '<span class="atomdown-group-count">' + memberCount + " " + word +
+    "</span>",
+    '<span class="atomdown-group-actions">' +
+    '<span class="atomdown-group-btn atomdown-group-rename" title="' +
+    escapeHtml(
+      "Give this group a readable name. Its id (" + unit.groupId +
+      ") does not change - a name is an alias, not the identity.",
+    ) + '">Rename</span>' +
+    '<span class="atomdown-group-btn atomdown-group-ungroup" title="Remove this group\'s markers. Every atom inside it stays.">Ungroup</span>' +
+    "</span>",
   ].join("");
 }
 
 /**
  * The whole `editorDecorations` value for one page text.
  *
- * `selectedKeys` are the unit keys the reader lassoed. They only add one more
- * mark per selected unit, so a selection is a purely visual state that never
- * reaches the document.
+ * TWO KINDS OF MARK, and the split is the whole design.
  *
- * Every mark carries an id, and the id is what the seam reports back on a
- * click, a drag or a lasso. Ids are namespaced: `unit:` for a movable unit,
- * `card:` for an atom inside a group, `sel:` for the selection outline. The
- * event handlers below read only `unit:` names, which is how a drag on a group
- * member moves the whole group rather than the member.
+ *  - an IDENTITY mark per movable unit, `unit:<key>`, over the unit's entire
+ *    source span including its directive lines. It has no line classes and no
+ *    CSS. Its only job is to answer "what did the pointer land on" for a
+ *    click, a drag and a lasso.
+ *  - a BOX mark, `box:<key>`, over just the unit's VISIBLE lines, with
+ *    `lineClasses`. That is what draws a card or a group as one closed
+ *    rounded box: `-first` takes the top edge, `-mid` the sides, `-last` the
+ *    bottom edge, and a one-line block takes `-first` and `-last` together and
+ *    so draws the whole box on its own line.
+ *
+ * They have to be separate ranges. A directive line is hidden at rest, so a
+ * box whose first line is the directive would put its top edge on a collapsed
+ * line; and a blank source line between two blocks belongs to no box at all,
+ * which is exactly what makes the gap between two cards.
+ *
+ * `selectedKeys` are the unit keys the reader lassoed. They add one more mark
+ * per selected unit, so a selection is purely visual and never reaches the
+ * document.
  */
 function buildDecorations(sourceText, selectedKeys) {
   const scan = computeCards(sourceText);
@@ -745,82 +829,105 @@ function buildDecorations(sourceText, selectedKeys) {
     };
   }
 
+  /** One atom's card: the box mark and the header row above it. */
+  function addCard(unit, boxKey, nested) {
+    if (hasNoContent(unit, lines)) return null;
+    const box = span(contentFirstLine(unit), unit.endLine);
+    marks.push({
+      id: boxKey,
+      from: box.from,
+      to: box.to,
+      class: "atomdown-card",
+      lineClasses: true,
+    });
+    widgets.push({
+      id: boxKey,
+      at: box.from,
+      side: "before",
+      class: "atomdown-card-header" + (nested ? " atomdown-nested" : ""),
+      html: cardHeaderHtml(unit, nested),
+    });
+    return box;
+  }
+
   scan.units.forEach(function (unit) {
-    const range = span(unit.startLine, unit.endLine);
+    const unitSpan = span(unit.startLine, unit.endLine);
+    // The identity mark. No line classes: it draws nothing.
+    marks.push({
+      id: "unit:" + unit.unitKey,
+      from: unitSpan.from,
+      to: unitSpan.to,
+      class: "atomdown-unit",
+    });
+
+    let visible = null;
+
     if (unit.kind === "group") {
       const members = scan.cards.filter(function (card) {
         return card.groupUnitKey === unit.unitKey;
       });
+      // The group box runs marker to marker. Both markers are directives and
+      // so are collapsed, which is what turns them into the box's interior
+      // padding: the header widget above the opening one carries the top edge,
+      // and the closing one carries the bottom edge.
       marks.push({
-        id: "unit:" + unit.unitKey,
-        from: range.from,
-        to: range.to,
+        id: "box:" + unit.unitKey,
+        from: unitSpan.from,
+        to: unitSpan.to,
         class: "atomdown-group",
         lineClasses: true,
       });
       widgets.push({
         id: "unit:" + unit.unitKey,
-        at: range.from,
+        at: unitSpan.from,
         side: "before",
         class: "atomdown-group-header",
         html: groupHeaderHtml(unit, members.length),
       });
-      // One collapsible region: everything after the opening marker line. The
-      // editor's own folding does the collapsing.
       const openLineEnd = starts[unit.startLine] + lines[unit.startLine].length;
-      if (range.to > openLineEnd) {
-        folds.push({ from: openLineEnd, to: range.to });
+      if (unitSpan.to > openLineEnd) {
+        folds.push({ from: openLineEnd, to: unitSpan.to });
       }
+      // Each atom inside the group gets its own card, inset by the group's
+      // interior padding.
+      members.forEach(function (card) {
+        addCard(
+          {
+            startLine: card.startLine,
+            endLine: card.endLine,
+            atomIds: card.atomIds,
+            atomSlug: card.atomSlug,
+            implicit: card.implicit,
+          },
+          card.cardKey,
+          true,
+        );
+      });
+      visible = unitSpan;
     } else {
-      marks.push({
-        id: "unit:" + unit.unitKey,
-        from: range.from,
-        to: range.to,
-        class: "atomdown-card",
-        lineClasses: true,
-      });
-      widgets.push({
-        id: "unit:" + unit.unitKey,
-        at: starts[gripLine(unit)],
-        side: "before",
-        inline: true,
-        class: "atomdown-grip",
-        html: gripHtml(
-          unit.implicit
-            ? "Drag to move this block"
-            : "Drag to move " + slugOrId(unit.atomSlug, unit.atomIds[0]),
-        ),
-      });
+      visible = addCard(unit, "box:" + unit.unitKey, false) ?? unitSpan;
     }
+
     if (selected.indexOf(unit.unitKey) !== -1) {
       marks.push({
         id: "sel:" + unit.unitKey,
-        from: range.from,
-        to: range.to,
+        from: visible.from,
+        to: visible.to,
         class: "atomdown-selected",
         lineClasses: true,
       });
     }
   });
 
-  scan.cards.forEach(function (card) {
-    if (!card.groupUnitKey) return;
-    const range = span(card.startLine, card.endLine);
-    marks.push({
-      id: card.cardKey,
-      from: range.from,
-      to: range.to,
-      class: "atomdown-card",
-      lineClasses: true,
-    });
-  });
-
   return {
+    // The cursor's own line is the one condition that reveals a hidden
+    // directive, so a cursor can never land in a line nobody can see.
+    activeLine: true,
     // The directive comments are the format's plumbing, not the reader's
-    // content. They are dimmed and shrunk rather than hidden: the page is the
-    // editor, so text you can still put a cursor in must stay visible, or an
-    // edit lands somewhere the reader cannot see. `CommentBlock` is the Lezer
-    // node for a block-level HTML comment; `Comment` catches the inline form.
+    // content, and on a real page every atom carries a 64-character digest
+    // that wraps over three or four rows. Hidden at rest, revealed on the
+    // cursor's line. `CommentBlock` is the Lezer node for a block-level HTML
+    // comment; `Comment` catches the inline form.
     lines: [
       { selector: "CommentBlock", class: "atomdown-directive" },
       { selector: "Comment", class: "atomdown-directive" },
@@ -841,6 +948,7 @@ function buildDecorations(sourceText, selectedKeys) {
 /** The `editorDecorations` value that means "the view is off on this page". */
 function emptyDecorations() {
   return {
+    activeLine: false,
     lines: [],
     marks: [],
     widgets: [],
@@ -1169,6 +1277,20 @@ async function onDecorationClick(event) {
     return await collapseGroup(firstUnitKey(event.marks));
   }
 
+  if (classes.indexOf("atomdown-group-rename") !== -1) {
+    const key = firstUnitKey(event.marks);
+    return key && key.indexOf("group:") === 0
+      ? await renameGroupHere(key.slice("group:".length))
+      : { ok: false, error: "No group under that button" };
+  }
+
+  if (classes.indexOf("atomdown-group-ungroup") !== -1) {
+    const key = firstUnitKey(event.marks);
+    return key && key.indexOf("group:") === 0
+      ? await ungroupHere(key.slice("group:".length))
+      : { ok: false, error: "No group under that button" };
+  }
+
   if (classes.indexOf("atomdown-group-menu") !== -1) {
     return await openGroupMenu(firstUnitKey(event.marks));
   }
@@ -1488,6 +1610,9 @@ const internals = {
   isContiguousUnitSelection,
   lineStarts,
   gripLine,
+  contentFirstLine,
+  hasNoContent,
+  cardHeaderHtml,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,
