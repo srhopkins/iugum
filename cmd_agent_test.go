@@ -173,6 +173,7 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 		"--cap-add SYS_PTRACE",
 		"example:v1",
 	} {
+		// ExtraHosts is empty on this raw struct; host-gateway is added only after applyDefaults.
 		if !strings.Contains(argv, want) {
 			t.Errorf("argv %q lacks %q", argv, want)
 		}
@@ -182,6 +183,12 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 	}
 	if strings.Contains(argv, "--env-file") {
 		t.Fatalf("argv leaked --env-file without home/.env: %s", argv)
+	}
+
+	cfg.ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	withHosts := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	if !strings.Contains(withHosts, "--add-host host.docker.internal:host-gateway") {
+		t.Fatalf("argv %q lacks extra_hosts add-host", withHosts)
 	}
 
 	if err := os.MkdirAll(filepath.Join(root, "home"), 0o755); err != nil {

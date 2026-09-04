@@ -245,6 +245,11 @@ func agentRunArgv(engine, root string, cfg AgentFile) []string {
 	if cfg.ShmSize != "" {
 		argv = append(argv, "--shm-size", cfg.ShmSize)
 	}
+	for _, host := range cfg.ExtraHosts {
+		if host != "" {
+			argv = append(argv, "--add-host", host)
+		}
+	}
 	if cfg.Jobs != "" {
 		source := cfg.Jobs
 		if !filepath.IsAbs(source) {

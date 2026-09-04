@@ -24,6 +24,7 @@ type AgentFile struct {
 	Startup    AgentStartup    `yaml:"startup,omitempty"`
 	Jobs       string          `yaml:"jobs,omitempty"`
 	ShmSize    string          `yaml:"shm_size,omitempty"` // docker --shm-size, e.g. 1g for Chromium
+	ExtraHosts []string        `yaml:"extra_hosts,omitempty"`
 }
 
 // AgentMount describes a bind mount or a tmpfs mask.
@@ -75,5 +76,8 @@ func (a *AgentFile) applyDefaults() {
 	}
 	if a.Startup.Restart == "" {
 		a.Startup.Restart = defaultRestart
+	}
+	if len(a.ExtraHosts) == 0 {
+		a.ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	}
 }
