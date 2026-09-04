@@ -182,6 +182,21 @@ test("normalize: an inline widget keeps the flag, a block widget has none", () =
   ]);
 });
 
+test("normalize: hover classes are opt-in per mark", () => {
+  const cfg = normalizeDecorationConfig({
+    marks: [
+      { from: 0, to: 4, class: "a", hoverClasses: true },
+      { from: 0, to: 4, class: "b", hoverClasses: "yes" },
+      { from: 0, to: 4, class: "c" },
+    ],
+  });
+  expect(cfg.marks.map((m) => m.hoverClasses)).toEqual([
+    true,
+    undefined,
+    undefined,
+  ]);
+});
+
 test("normalize: the active-line class is opt-in", () => {
   expect(normalizeDecorationConfig({}).activeLine).toBe(false);
   expect(normalizeDecorationConfig({ activeLine: "yes" }).activeLine).toBe(

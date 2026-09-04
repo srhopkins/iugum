@@ -98,6 +98,18 @@ export type DecorationMarkRule = {
    * A single-line range gets both `-first` and `-last`.
    */
   lineClasses?: boolean;
+  /**
+   * Add `<class>-hover` to every line of this mark while the pointer is
+   * anywhere inside its range.
+   *
+   * CSS `:hover` cannot express this. A range that spans several blocks is
+   * several sibling line elements with no element wrapping them, and CSS has
+   * no previous-sibling combinator, so a line cannot react to a pointer on the
+   * line above it. Only the client knows which decorated range the pointer is
+   * in, so the client says so, as a class. A caller then writes an ordinary
+   * quiet-at-rest rule and a `-hover` rule that overrides it.
+   */
+  hoverClasses?: boolean;
 };
 
 /** A widget: a rendered element before or after the block at `at`, or inline. */
@@ -355,6 +367,7 @@ export function normalizeDecorationConfig(value: unknown): DecorationConfig {
       class: cls,
       ...(nonEmptyString(entry.id) ? { id: entry.id as string } : {}),
       ...(entry.lineClasses === true ? { lineClasses: true } : {}),
+      ...(entry.hoverClasses === true ? { hoverClasses: true } : {}),
     });
   }
 
@@ -761,6 +774,94 @@ function selectionWatcher(
 }
 
 // ---------------------------------------------------------------------------
+// Hover classes.
+//
+// One class on the lines of whichever decorated range the pointer is in. The
+// client is the only place that can answer that question: a range spanning
+// several blocks is several sibling line elements with nothing wrapping them,
+// and CSS has no previous-sibling combinator.
+// ---------------------------------------------------------------------------
+
+/** The mark ranges the pointer is currently inside, as line decorations. */
+const setHoverRanges = StateEffect.define<DecorationRangeRef[]>();
+
+function hoverClassField(config: DecorationConfig) {
+  const stems = new Set(
+    config.marks.filter((mark) => mark.hoverClasses).map(ruleName),
+  );
+  const build = (
+    state: EditorState,
+    ranges: DecorationRangeRef[],
+  ): DecorationSet => {
+    const decorations: Range<Decoration>[] = [];
+    const seen = new Set<string>();
+    for (const range of ranges) {
+      const stem = config.marks.find((mark) => ruleName(mark) === range.name);
+      if (!stem || !stem.hoverClasses) continue;
+      const first = state.doc.lineAt(Math.min(range.from, state.doc.length));
+      const last = state.doc.lineAt(Math.min(range.to, state.doc.length));
+      for (let n = first.number; n <= last.number; n++) {
+        const key = `${stem.class}|${n}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        decorations.push(
+          Decoration.line({ class: `${stem.class}-hover` }).range(
+            state.doc.line(n).from,
+          ),
+        );
+      }
+    }
+    return Decoration.set(decorations, true);
+  };
+  return StateField.define<DecorationSet>({
+    create: () => Decoration.none,
+    update(value: DecorationSet, tr: Transaction) {
+      let next = tr.docChanged ? value.map(tr.changes) : value;
+      for (const effect of tr.effects) {
+        if (effect.is(setHoverRanges)) {
+          next = stems.size === 0
+            ? Decoration.none
+            : build(tr.state, effect.value);
+        }
+      }
+      return next;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
+function hoverWatcher(config: DecorationConfig, field: StateField<SeamState>) {
+  /** The names last reported, so an unchanged hover costs no transaction. */
+  let last = "";
+  const report = (view: EditorView, ranges: DecorationRangeRef[]) => {
+    const key = ranges.map((r) => `${r.name}:${r.from}`).join(",");
+    if (key === last) return;
+    last = key;
+    view.dispatch({ effects: setHoverRanges.of(ranges) });
+  };
+  // The facet form, the same one the click handler uses. A ViewPlugin's
+  // eventHandlers were tried first and never fired for mousemove.
+  return EditorView.domEventHandlers({
+    mousemove: (event: MouseEvent, view: EditorView) => {
+      const pos = view.posAtCoords(
+        { x: event.clientX, y: event.clientY },
+        false,
+      );
+      const clamped = Math.max(0, Math.min(pos, view.state.doc.length));
+      report(
+        view,
+        marksIn(liveMarks(view.state, field, config), clamped, clamped),
+      );
+      return false;
+    },
+    mouseleave: (_event: MouseEvent, view: EditorView) => {
+      report(view, []);
+      return false;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Gestures.
 //
 // Two pointer gestures the browser has no primitive for: dragging one
@@ -1138,6 +1239,9 @@ export function decorationSeam(client: Client, pageName: string): Extension[] {
   const field = seamStateField(client);
   if (wantsField) {
     extensions.push(field);
+  }
+  if (config.marks.some((mark) => mark.hoverClasses)) {
+    extensions.push(hoverClassField(config), hoverWatcher(config, field));
   }
   if (config.folds.length > 0) {
     // The editor's own folding does the collapsing. This only tells it that a
