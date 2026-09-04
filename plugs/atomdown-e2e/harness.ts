@@ -62,6 +62,35 @@ export const ARTIFACT_DIR = process.env.ATOMDOWN_FE_ARTIFACTS
 /** The page name the fixture is served as. */
 export const FIXTURE_PAGE = "Todo/running";
 
+/**
+ * What is in the fixture, as numbers the tests assert against.
+ *
+ * These are not decoration. A containment sweep that measured 6 of 84 cards
+ * would report zero violations and pass, so the counts are what prove the
+ * sweep reached the end of the document.
+ *
+ * The fixture holds two fenced code blocks, because Steve named fenced code as
+ * a containment case, and that is why `cards` is 84 rather than 82.
+ */
+export const FIXTURE = {
+  atoms: 82,
+  groups: 11,
+  /**
+   * Cards drawn, in BOTH views: the 82 atoms plus one per fenced code block.
+   * `atomdown materialize` leaves a fence's opening line outside the atom it
+   * creates, so each fence is an uncovered block that both views draw as a
+   * card marked implicit. `atomdown` counts 82 atoms for the same file. Both
+   * numbers are right; they count different things.
+   */
+  cards: 84,
+  implicitCards: 2,
+  /** The 10-row table's group, and the six-item ordered list's group. */
+  tableGroupId: "NS67J8K5",
+  decisionsGroupId: "KATZ94NM",
+  /** The one row whose link markdown is genuinely raw. See rule 5. */
+  rawLinkTicket: "FFAI-62019",
+} as const;
+
 // ---------------------------------------------------------------------------
 // The matrix
 // ---------------------------------------------------------------------------
@@ -546,6 +575,17 @@ export type Box = {
   children: MeasuredChild[];
   /** Set by a `sidesOnly` spec: skip the top and bottom checks. */
   sidesOnly?: boolean;
+  /**
+   * The box's own Atomdown id, read from the DOM.
+   *
+   * This is the dedupe key for a scroll sweep, and it has to come from the
+   * document rather than from the label. Deriving it from the label loses the
+   * two implicit cards — neither has an Atomdown id, both hold the same fenced
+   * code, so their labels are byte-identical and the sweep counted 83 cards
+   * instead of 84. An id that is missing here falls back to the DOM position,
+   * which is unique by construction.
+   */
+  id: string;
 };
 
 /**
@@ -698,6 +738,58 @@ export async function measureBoxes(
           left: px(cs.borderLeftWidth),
         };
       };
+      /**
+       * The Atomdown id of one box, from the DOM.
+       *
+       * Four places carry it, in falling order of directness: the board's own
+       * `data-atom-id` / `data-group-id`, and the id chip both views print in
+       * the header. An implicit card has `implicit-1` there, which is still
+       * unique. When nothing carries one — a bare group line — fall back to
+       * the element's index among its siblings, which cannot collide.
+       */
+      const idOf = (els: Element[]): string => {
+        for (const el of els) {
+          const own =
+            el.getAttribute?.("data-atom-id") ??
+            el.getAttribute?.("data-group-id");
+          if (own) return own;
+          const chip = el.querySelector?.(
+            ".board-card-id,.board-group-id,.atomdown-card-id,.atomdown-group-id",
+          );
+          const text = chip?.textContent?.trim();
+          if (text) return text;
+        }
+        // A card with no Atomdown id is real, not a bug. `atomdown
+        // materialize` always leaves the OPENING line of a fenced code block
+        // outside the atom it creates, so a page with fenced code has one
+        // uncovered block per fence, and both views draw it as a card marked
+        // implicit. The board gives those `data-atom-id="implicit-N"`; inline
+        // prints "no id" and offers nothing to key on.
+        //
+        // So key them by their own text. DOM position is what a first version
+        // used, and it is wrong: CodeMirror recycles line elements, so the
+        // same card had a different position at every scroll stop and one
+        // implicit card counted five or six times. Text is stable across a
+        // scroll, which is the whole requirement.
+        // Two following siblings are included because a header widget
+        // measured on its own says only "no id" — identical for both implicit
+        // cards — while the line just below it is that card's own fenced code
+        // and tells them apart.
+        const near: Element[] = [...els];
+        let next = els[els.length - 1]?.nextElementSibling ?? null;
+        for (let i = 0; next && i < 2; i++) {
+          near.push(next);
+          next = next.nextElementSibling;
+        }
+        const text = near
+          .map((el) => el.textContent ?? "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120);
+        return `text:${text}`;
+      };
+
       const clips = (el: Element) => {
         const cs = getComputedStyle(el);
         return (
@@ -718,18 +810,30 @@ export async function measureBoxes(
           document.querySelectorAll<HTMLElement>(`.${p}-line`),
         );
         let run: Element[] = [];
+        // Only a run that actually STARTED in this viewport is a box. At a
+        // scroll boundary CodeMirror realises a `-last` line whose `-first` is
+        // above the rendered window; accumulating that into a box produced
+        // seven phantom cards per sweep with a wrong top edge, and made the
+        // count differ run to run. A dropped fragment costs nothing: the sweep
+        // overlaps by 40%, so the whole run is realised at another stop.
+        let started = false;
         for (const line of lines) {
-          if (line.classList.contains(`${p}-first`)) run = [];
+          if (line.classList.contains(`${p}-first`)) {
+            run = [];
+            started = true;
+          }
+          if (!started) continue;
           run.push(line);
           if (line.classList.contains(`${p}-last`) && run.length) {
             // The header widget carries the box's top edge and its side
             // borders; without it the run's sides come from `.cm-line`, which
             // spans the whole content column and would make every side check
             // vacuous.
-            let edge: Element = run[0];
+            let edge: Element | null = spec.headerSelector ? null : run[0];
             if (spec.headerSelector) {
+              // The header widget sits just above the run, usually separated
+              // from it by the atom's own hidden directive line.
               let prev = run[0].previousElementSibling;
-              // A widget may be wrapped by the seam's own container.
               for (let i = 0; prev && i < 3; i++) {
                 const hit = prev.matches(spec.headerSelector)
                   ? prev
@@ -741,8 +845,14 @@ export async function measureBoxes(
                 prev = prev.previousElementSibling;
               }
             }
-            units.push({ members: run.slice(), edge });
+            // A run whose header is not realised is another kind of fragment:
+            // the header carries the box's top edge and its id, so without it
+            // there is neither a rect to measure against nor a key to dedupe
+            // by, and the sweep counted five phantom cards per pass. Skip it;
+            // the overlap means the complete run is measured at another stop.
+            if (edge) units.push({ members: run.slice(), edge });
             run = [];
+            started = false;
           }
         }
       } else {
@@ -821,6 +931,7 @@ export async function measureBoxes(
         // which is what `boxIdentity` needs to dedupe across scroll stops.
         return {
           label: label(edge),
+          id: idOf([edge, ...members]),
           rect,
           border,
           children,
@@ -902,15 +1013,13 @@ export async function sweepBoxes(
 /**
  * A stable name for one box across two sightings.
  *
- * The Atomdown id is the only thing that is stable: a box's rect moves when
- * the page scrolls and its DOM position changes as CodeMirror recycles line
- * elements. Both views put the id in the box's own chrome, so the label built
- * by `measureBoxes` carries it. Falling back to the whole label is safe —
- * worst case a box counts twice and the expected-count assertion notices.
+ * The Atomdown id is the only stable thing: a box's rect moves when the page
+ * scrolls and its DOM position changes as CodeMirror recycles line elements.
+ * `measureBoxes` reads it out of the document; see `Box.id` for why it is not
+ * derived from the label.
  */
 export function boxIdentity(box: Box): string {
-  const id = box.label.match(/\b([0-9A-Z]{8})\b/);
-  return id ? id[1] : box.label;
+  return box.id;
 }
 
 /** One containment violation: a child rect that pokes out of its bound. */
