@@ -20,3 +20,9 @@ functions:
 
   reorderAtom:
     path: "./atomdown-board.js:reorderAtom"
+
+  groupAtoms:
+    path: "./atomdown-board.js:groupAtoms"
+
+  ungroupAtoms:
+    path: "./atomdown-board.js:ungroupAtoms"
