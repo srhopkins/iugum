@@ -54,7 +54,7 @@ For the page in `atomdown/testdata`-shape, one atom and one two-atom group:
 |---|---|
 | `activeLine` | `true`, so the cursor's line carries `cm-activeLine` |
 | `lines` | `CommentBlock` and `Comment` → `atomdown-directive` |
-| `marks` | **two kinds.** An identity mark per unit, `unit:atom:<id>` / `unit:group:<id>`, over the unit's whole source span, with no line classes and no CSS. And a box mark with `lineClasses` over just the unit's visible lines: `box:atom:<id>`, `box:group:<id>`, `card:<group>:<n>` for an atom inside a group, `sel:<unit>` for a lassoed one. |
+| `marks` | **two kinds**, and the box kind carries `hoverClasses`. An identity mark per unit, `unit:atom:<id>` / `unit:group:<id>`, over the unit's whole source span, with no line classes and no CSS. And a box mark with `lineClasses` over just the unit's visible lines: `box:atom:<id>`, `box:group:<id>`, `card:<group>:<n>` for an atom inside a group, `sel:<unit>` for a lassoed one. |
 | `widgets` | one header row per card, one header bar per group |
 | `folds` | one per group: everything after its opening marker line |
 | `events` | `click` and `selection` |
@@ -72,6 +72,17 @@ marks outermost first, so a drag that starts inside a group reads
 `atom-group` means, and what keeps a group contiguous by construction. The
 `box:`, `card:` and `sel:` names are never read as units.
 
+**How the group's chrome knows the pointer is inside it.** The panel's group
+border and header bar are subdued at rest and come forward when the pointer is
+anywhere in that group, including over a member card. Inline, a group is a run
+of sibling line elements with nothing wrapping them, and CSS has no
+previous-sibling combinator, so `:hover` cannot reach the lines above the
+pointer. The seam's `hoverClasses` puts `atomdown-group-hover` on every line of
+the group the pointer is in; the header bar reaches the same state through
+`:has(+ .atomdown-group-hover)`, because its next sibling is its own group's
+first line. The quiet state is a `color-mix` on border and background - never
+`opacity`, which would fade every member card inside the group.
+
 **How a box is drawn out of lines.** `lineClasses` gives `-first`, `-mid` and
 `-last`. `-mid` takes the sides, `-last` takes the bottom edge and the bottom
 corners, and the card's top edge and top corners are on the header widget
@@ -87,8 +98,13 @@ what insets a member card inside its group on all four sides.
 
 ## The directive comments
 
-They are **hidden at rest**, collapsed to a 3px sliver, and revealed in full
-the moment the cursor is on that line. On a real page every atom carries a
+They are **hidden at rest** - every one of them, including the document-level
+`<atomdown version="1"/>` marker, which is the same Lezer node and takes the
+same rule. Collapsed to a 3px sliver, and revealed in full the moment the
+cursor is on that line **with the editor focused**. The focus condition matters:
+SilverBullet puts the cursor at offset 0 on a page load, which is the document
+marker's own line, so without it that one directive would always be revealed on
+arrival and look like a bug. On a real page every atom carries a
 64-character `sha256` digest that wraps over three or four rows, and 93 of
 those is the single biggest reason a decorated page stops reading as cards.
 
@@ -147,8 +163,34 @@ and most of them are about the decoration payload: every offset in it is
 checked against the page text it was built from, because a wrong offset there is
 the whole bug class this feature can have.
 
+## A wide table
+
+A table is constrained to the card's content width - `table-layout: fixed` with
+wrapped cells - rather than being given a horizontal scroller. A card's body is
+a run of `.cm-line` elements that CodeMirror owns and measures; making a line
+scroll horizontally would put text outside the box `posAtCoords` reads from and
+break cursor placement. Wrapping keeps every column reachable with no scrolling
+at all, and the table can then never cross the card's border or the group's. The
+panel wraps its cells too, so the two views agree.
+
+## A row that shows raw link markdown
+
+If a table row shows `[FFAI-1234 "[nice to have] Thing"](https://...)` as
+literal text while its neighbours render links, that is the markdown, not this
+view. An unescaped `[...]` inside a link label closes the label early, so the
+construct is not a link. Plain SilverBullet with the view off and the
+`atomdown-board` panel both show the same row raw, because all three use one
+parser. The fix is to escape the inner brackets in the page.
+
 ## Known limits
 
+- The card padding rules carry a `#sb-main .cm-editor` prefix. The client's own
+  `#sb-main .cm-editor .cm-line { padding: 0 }` is specificity (1,0,2) and beats
+  any two-class rule however late it is injected, which left card bodies flush
+  against their own border.
+- A group whose chrome should stay forward because it *holds* a selected member
+  card does not: only a selected group itself stays forward. The panel uses
+  `:has()` on a real container element, which inline does not exist.
 - The collapse caret alternates fold and unfold from memory, because the host
   offers `editor.fold` and `editor.unfold` but no read of the fold state. Fold a
   group from the gutter instead and the caret's next press is out of step once.
