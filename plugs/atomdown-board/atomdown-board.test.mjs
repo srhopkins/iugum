@@ -44,6 +44,11 @@ const {
   removeGroupMarkers,
   parseAtoms,
   injectSharedFunctions,
+  setGroupSlugInSource,
+  sanitizeSlug,
+  slugConflict,
+  deriveGroupSlug,
+  slugOrId,
 } = plug.internals;
 
 // --- Fixtures --------------------------------------------------------------
@@ -704,5 +709,500 @@ test("the injected pickDropTarget behaves identically to the tested one", () => 
   const injected = factory();
   for (const y of [10, 157, 180, 250, 350, 378, 500]) {
     assert.deepEqual(injected(y, RECTS), pickDropTarget(y, RECTS));
+  }
+});
+
+// --- slugs: the readable alias (iugum-w6y.4) -------------------------------
+//
+// Steve cannot group by eight-character ids, so the board shows and writes
+// SPEC.md's optional `slug`. These tests pin the two claims that make that
+// safe: a slug never becomes identity (no id and no digest moves), and typed
+// input always reaches the document in one shape.
+
+test("sanitizeSlug lowercases and kebab-cases typed text", () => {
+  assert.equal(sanitizeSlug("Email PRs"), "email-prs");
+  assert.equal(sanitizeSlug("  Local Dev  "), "local-dev");
+  assert.equal(sanitizeSlug("Notion / Docs"), "notion-docs");
+  assert.equal(sanitizeSlug("already-kebab"), "already-kebab");
+});
+
+test("sanitizeSlug folds accents to their ASCII base rather than dropping them", () => {
+  assert.equal(sanitizeSlug("Décisions"), "decisions");
+  assert.equal(sanitizeSlug("Añejo Bar"), "anejo-bar");
+});
+
+test("sanitizeSlug collapses punctuation runs and trims the edges", () => {
+  assert.equal(sanitizeSlug("-- a...b !! c --"), "a-b-c");
+  assert.equal(sanitizeSlug("#1. Plumbing (research)"), "1-plumbing-research");
+});
+
+test("sanitizeSlug returns an empty string when nothing usable survives", () => {
+  for (const input of ["", "   ", "!!!", "---", null, undefined]) {
+    assert.equal(sanitizeSlug(input), "");
+  }
+});
+
+test("sanitizeSlug truncates a long name at a word boundary", () => {
+  const slug = sanitizeSlug(
+    "A very long heading that keeps going well past any sensible slug length",
+  );
+  assert.ok(slug.length <= 48, slug);
+  assert.ok(!slug.endsWith("-"), slug);
+  // Cut on a hyphen, so no half word is left behind.
+  assert.ok("a-very-long-heading-that-keeps-going-well-past-any".startsWith(slug));
+});
+
+test("sanitizeSlug is idempotent: sanitizing its own output changes nothing", () => {
+  for (const input of ["Email PRs", "Décisions", "#1. Plumbing (research)"]) {
+    const once = sanitizeSlug(input);
+    assert.equal(sanitizeSlug(once), once);
+  }
+});
+
+test("slugConflict finds another block already using the name", () => {
+  const source = [
+    '<!-- <atom-group id="KATZ94NM" slug="decisions"> -->',
+    '<!-- <atom id="AAAAAAAA" slug="board"/> -->',
+    "Text.",
+    "<!-- </atom-group> -->",
+    "",
+  ].join("\n");
+  assert.deepEqual(slugConflict(source, "decisions", null), {
+    duplicate: true,
+    ids: ["KATZ94NM"],
+    warning: slugConflict(source, "decisions", null).warning,
+  });
+  assert.match(slugConflict(source, "board", null).warning, /already used/);
+  assert.equal(slugConflict(source, "unused-name", null).duplicate, false);
+  assert.equal(slugConflict(source, "unused-name", null).warning, null);
+});
+
+test("slugConflict does not report a block conflicting with itself", () => {
+  const source = '<!-- <atom-group id="KATZ94NM" slug="decisions"> -->\n';
+  assert.equal(slugConflict(source, "decisions", "KATZ94NM").duplicate, false);
+  assert.equal(slugConflict(source, "decisions", "OTHERIDX").duplicate, true);
+});
+
+test("slugConflict treats an empty slug as no conflict", () => {
+  const source = '<!-- <atom-group id="KATZ94NM" slug="decisions"> -->\n';
+  assert.deepEqual(slugConflict(source, "", null), {
+    duplicate: false,
+    ids: [],
+    warning: null,
+  });
+});
+
+test("deriveGroupSlug takes the first ATX heading in the selection", () => {
+  assert.equal(
+    deriveGroupSlug(["Some lead-in text.", "## Email PRs", "* One."]),
+    "email-prs",
+  );
+  assert.equal(deriveGroupSlug(["# Decisions"]), "decisions");
+});
+
+test("deriveGroupSlug takes a setext heading when there is no ATX one", () => {
+  assert.equal(deriveGroupSlug(["Local Dev\n=========", "Body."]), "local-dev");
+});
+
+test("deriveGroupSlug falls back to the first non-blank line", () => {
+  assert.equal(deriveGroupSlug(["", "  ", "* Reindex the search box."]),
+    "reindex-the-search-box");
+});
+
+test("deriveGroupSlug never returns an empty default", () => {
+  assert.equal(deriveGroupSlug([]), "group");
+  assert.equal(deriveGroupSlug(["", "!!!", "---"]), "group");
+});
+
+test("deriveGroupSlug output is already sanitized", () => {
+  const slug = deriveGroupSlug(["### Notion / Docs (WIP)"]);
+  assert.equal(slug, sanitizeSlug(slug));
+  assert.equal(slug, "notion-docs-wip");
+});
+
+test("slugOrId prefers the slug and falls back to the id", () => {
+  assert.equal(slugOrId("decisions", "KATZ94NM"), "decisions");
+  assert.equal(slugOrId("", "KATZ94NM"), "KATZ94NM");
+  assert.equal(slugOrId("   ", "KATZ94NM"), "KATZ94NM");
+  assert.equal(slugOrId(null, "KATZ94NM"), "KATZ94NM");
+});
+
+test("parseAtoms surfaces an atom's slug and its group's slug", () => {
+  const atoms = parseAtoms(LOOSE_GROUP);
+  assert.equal(atoms.length, 2);
+  for (const atom of atoms) {
+    assert.equal(atom.groupId, "3G7K9R5V");
+    assert.equal(atom.groupSlug, "claims");
+    assert.equal(atom.slug, null);
+  }
+
+  const named = parseAtoms(
+    '<!-- <atom id="AAAAAAAA" slug="board" digest="sha256:aa"/> -->\nText.\n',
+  );
+  assert.equal(named[0].slug, "board");
+  assert.equal(named[0].groupSlug, null);
+});
+
+test("computeUnits carries a group's slug without keying on it", () => {
+  const { units } = computeUnits(LOOSE_GROUP);
+  assert.equal(units.length, 1);
+  assert.equal(units[0].groupSlug, "claims");
+  // Identity is still the id: the unit key never mentions the slug.
+  assert.equal(units[0].unitKey, "group:3G7K9R5V");
+});
+
+test("insertGroupMarkers writes the slug after the id, and only two lines", () => {
+  const result = insertGroupMarkers(
+    THREE_ATOMS,
+    ["atom:AAAAAAAA", "atom:BBBBBBBB"],
+    "ZZZZZZZZ",
+    "First Two Blocks",
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "first-two-blocks");
+  assert.ok(result.text.includes(
+    '<!-- <atom-group id="ZZZZZZZZ" slug="first-two-blocks"> -->',
+  ));
+  // Exactly the two markers were added, and nothing else changed.
+  const before = THREE_ATOMS.split("\n");
+  const after = result.text.split("\n");
+  assert.equal(after.length, before.length + 2);
+  assert.deepEqual(
+    after.filter((l) => !l.includes("atom-group")),
+    before,
+  );
+});
+
+test("insertGroupMarkers writes no slug attribute for an empty name", () => {
+  for (const name of ["", "   ", "!!!", null, undefined]) {
+    const result = insertGroupMarkers(
+      THREE_ATOMS,
+      ["atom:AAAAAAAA", "atom:BBBBBBBB"],
+      "ZZZZZZZZ",
+      name,
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.slug, "");
+    assert.ok(result.text.includes('<!-- <atom-group id="ZZZZZZZZ"> -->'));
+    assert.ok(!result.text.includes("slug="));
+  }
+});
+
+test("insertGroupMarkers warns about a duplicate slug but still writes it", () => {
+  const source = [
+    '<!-- <atomdown version="1"/> -->',
+    '<!-- <atom-group id="KATZ94NM" slug="decisions"> -->',
+    '<!-- <atom id="AAAAAAAA"/> -->',
+    "First.",
+    "<!-- </atom-group> -->",
+    "",
+    '<!-- <atom id="BBBBBBBB"/> -->',
+    "Second.",
+    "",
+    '<!-- <atom id="CCCCCCCC"/> -->',
+    "Third.",
+    "",
+  ].join("\n");
+  const result = insertGroupMarkers(
+    source,
+    ["atom:BBBBBBBB", "atom:CCCCCCCC"],
+    "ZZZZZZZZ",
+    "Decisions",
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.text.includes(
+    '<!-- <atom-group id="ZZZZZZZZ" slug="decisions"> -->',
+  ));
+  assert.match(result.warning, /already used/);
+  assert.match(result.warning, /KATZ94NM/);
+});
+
+test("group then ungroup is still byte-exact when the group carries a slug", () => {
+  const grouped = insertGroupMarkers(
+    THREE_ATOMS,
+    ["atom:BBBBBBBB", "atom:CCCCCCCC"],
+    "ZZZZZZZZ",
+    "Two And Three",
+  );
+  assert.equal(grouped.ok, true);
+  const ungrouped = removeGroupMarkers(grouped.text, "ZZZZZZZZ");
+  assert.equal(ungrouped.ok, true);
+  assert.equal(ungrouped.text, THREE_ATOMS);
+});
+
+test("setGroupSlugInSource renames a group and touches nothing else", () => {
+  const result = setGroupSlugInSource(TIGHT_GROUP, "KF53ASNE", "Split List");
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "split-list");
+  const before = TIGHT_GROUP.split("\n");
+  const after = result.text.split("\n");
+  assert.equal(after.length, before.length);
+  const changed = after.filter((line, i) => line !== before[i]);
+  assert.deepEqual(changed, [
+    '<!-- <atom-group id="KF53ASNE" slug="split-list"> -->',
+  ]);
+});
+
+test("setGroupSlugInSource keeps the id and every atom's directive intact", () => {
+  const result = setGroupSlugInSource(TIGHT_GROUP, "KF53ASNE", "renamed");
+  assert.equal(result.ok, true);
+  assert.ok(result.text.includes('id="KF53ASNE"'));
+  for (const line of TIGHT_GROUP.split("\n")) {
+    if (line.includes("<atom ")) assert.ok(result.text.includes(line));
+  }
+});
+
+test("setGroupSlugInSource replaces an existing slug rather than adding a second", () => {
+  const result = setGroupSlugInSource(LOOSE_GROUP, "3G7K9R5V", "Ordered Claims");
+  assert.equal(result.ok, true);
+  assert.ok(result.text.includes(
+    '<!-- <atom-group id="3G7K9R5V" slug="ordered-claims"> -->',
+  ));
+  assert.equal(result.text.split("slug=").length - 1, 1);
+});
+
+test("setGroupSlugInSource removes the slug for an empty name", () => {
+  const result = setGroupSlugInSource(LOOSE_GROUP, "3G7K9R5V", "  ");
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "");
+  assert.ok(result.text.includes('<!-- <atom-group id="3G7K9R5V"> -->'));
+  assert.ok(!result.text.includes("slug="));
+});
+
+test("setGroupSlugInSource preserves any other attribute on the marker", () => {
+  const source = '<!-- <atom-group id="KF53ASNE" acme-owner="ada"> -->\n' +
+    '<!-- <atom id="AAAAAAAA"/> -->\nText.\n<!-- </atom-group> -->\n';
+  const result = setGroupSlugInSource(source, "KF53ASNE", "owned");
+  assert.equal(result.ok, true);
+  assert.ok(result.text.includes(
+    '<!-- <atom-group id="KF53ASNE" slug="owned" acme-owner="ada"> -->',
+  ));
+});
+
+test("setGroupSlugInSource escapes a value that would break the attribute", () => {
+  // sanitizeSlug already removes every character that needs escaping, so this
+  // pins that the two layers agree rather than trusting one of them.
+  const result = setGroupSlugInSource(TIGHT_GROUP, "KF53ASNE", 'a "b" & <c>');
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "a-b-c");
+  assert.ok(!result.text.includes("&quot;"));
+});
+
+test("setGroupSlugInSource reports an unknown group", () => {
+  const result = setGroupSlugInSource(TIGHT_GROUP, "NOSUCHID", "x");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Could not find that group/);
+});
+
+// --- slugs on the write path -----------------------------------------------
+
+test("groupAtoms writes the typed name as one editor.replaceRange", async () => {
+  const { calls, state } = recordingSyscall(THREE_ATOMS);
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "First Two",
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "first-two");
+  assert.match(result.groupId, /^[0-9A-HJKMNP-TV-Z]{8}$/);
+
+  const names = calls.map((c) => c.name);
+  assert.equal(names.filter((n) => n === "editor.replaceRange").length, 1);
+  assert.equal(names.includes("space.writePage"), false);
+  assert.equal(names.includes("space.readPage"), false);
+  assert.equal(names.includes("editor.reloadPage"), false);
+  assert.ok(state.text.includes(
+    '<atom-group id="' + result.groupId + '" slug="first-two">',
+  ));
+  // Naming a group changes no atom's directive line, so no id and no digest
+  // can have moved.
+  for (const line of THREE_ATOMS.split("\n")) {
+    if (line.includes("<atom ")) assert.ok(state.text.includes(line));
+  }
+});
+
+test("groupAtoms with no name writes no slug attribute", async () => {
+  const { state } = recordingSyscall(THREE_ATOMS);
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "",
+  );
+  assert.equal(result.ok, true);
+  assert.ok(state.text.includes('<atom-group id="' + result.groupId + '">'));
+  assert.ok(!state.text.includes("slug="));
+});
+
+test("setGroupSlug applies one editor.replaceRange and writes no page", async () => {
+  const { calls, state } = recordingSyscall(TIGHT_GROUP);
+  const result = await plug.functionMapping.setGroupSlug("KF53ASNE", "Split List");
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "split-list");
+  const names = calls.map((c) => c.name);
+  assert.equal(names.filter((n) => n === "editor.replaceRange").length, 1);
+  assert.equal(names.includes("space.writePage"), false);
+  assert.equal(names.includes("editor.reloadPage"), false);
+  assert.ok(state.text.includes(
+    '<!-- <atom-group id="KF53ASNE" slug="split-list"> -->',
+  ));
+});
+
+test("setGroupSlug makes no edit when the name did not change", async () => {
+  const { calls } = recordingSyscall(LOOSE_GROUP);
+  const result = await plug.functionMapping.setGroupSlug("3G7K9R5V", "claims");
+  assert.equal(result.ok, true);
+  assert.equal(result.unchanged, true);
+  assert.equal(calls.filter((c) => c.name === "editor.replaceRange").length, 0);
+});
+
+test("setGroupSlug refuses an unknown group without editing", async () => {
+  const { calls, state } = recordingSyscall(TIGHT_GROUP);
+  const result = await plug.functionMapping.setGroupSlug("NOSUCHID", "x");
+  assert.equal(result.ok, false);
+  assert.equal(calls.filter((c) => c.name === "editor.replaceRange").length, 0);
+  assert.equal(state.text, TIGHT_GROUP);
+});
+
+test("saveAttrs writes a sanitized slug second, after the id", async () => {
+  const { calls, state } = recordingSyscall(THREE_ATOMS);
+  const result = await plug.functionMapping.saveAttrs(
+    "AAAAAAAA",
+    JSON.stringify([
+      { name: "slug", value: "First Block" },
+      { name: "digest", value: "sha256:aa" },
+    ]),
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "first-block");
+  assert.equal(
+    calls.filter((c) => c.name === "editor.replaceRange").length,
+    1,
+  );
+  assert.equal(calls.some((c) => c.name === "space.writePage"), false);
+  // id, then slug, then the rest - the order emit.go writes, so a later
+  // `atomdown emit` does not reshuffle the line.
+  assert.ok(state.text.includes(
+    '<!-- <atom id="AAAAAAAA" slug="first-block" digest="sha256:aa" /> -->',
+  ));
+});
+
+test("saveAttrs drops an empty slug rather than writing slug=\"\"", async () => {
+  const named = '<!-- <atomdown version="1"/> -->\n' +
+    '<!-- <atom id="AAAAAAAA" slug="first"/> -->\nFirst block.\n';
+  const { state } = recordingSyscall(named);
+  const result = await plug.functionMapping.saveAttrs(
+    "AAAAAAAA",
+    JSON.stringify([{ name: "slug", value: "   " }]),
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.slug, "");
+  assert.ok(!state.text.includes("slug="));
+  assert.ok(state.text.includes('<!-- <atom id="AAAAAAAA" /> -->'));
+});
+
+test("saveAttrs redraws the board only when the name changed", async () => {
+  const named = '<!-- <atomdown version="1"/> -->\n' +
+    '<!-- <atom id="AAAAAAAA" slug="first"/> -->\nFirst block.\n';
+
+  const renamed = recordingSyscall(named);
+  await plug.functionMapping.saveAttrs(
+    "AAAAAAAA",
+    JSON.stringify([{ name: "slug", value: "second" }]),
+  );
+  assert.ok(renamed.calls.some((c) => c.name === "editor.showPanel"));
+
+  const untouched = recordingSyscall(named);
+  await plug.functionMapping.saveAttrs(
+    "AAAAAAAA",
+    JSON.stringify([
+      { name: "slug", value: "first" },
+      { name: "acme-note", value: "x" },
+    ]),
+  );
+  assert.equal(
+    untouched.calls.some((c) => c.name === "editor.showPanel"),
+    false,
+  );
+});
+
+test("a duplicate name reaches the user as a notification, not a refusal", async () => {
+  const source = [
+    '<!-- <atomdown version="1"/> -->',
+    '<!-- <atom-group id="KATZ94NM" slug="decisions"> -->',
+    '<!-- <atom id="AAAAAAAA"/> -->',
+    "First.",
+    "<!-- </atom-group> -->",
+    "",
+    '<!-- <atom id="BBBBBBBB"/> -->',
+    "Second.",
+    "",
+    '<!-- <atom id="CCCCCCCC"/> -->',
+    "Third.",
+    "",
+  ].join("\n");
+  const { calls, state } = recordingSyscall(source);
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:BBBBBBBB", "atom:CCCCCCCC"]),
+    "decisions",
+  );
+  assert.equal(result.ok, true);
+  assert.match(result.warning, /already used/);
+  const flash = calls.find((c) => c.name === "editor.flashNotification");
+  assert.ok(flash, "expected a flashNotification syscall");
+  assert.match(flash.args[0], /already used/);
+  // Written anyway: the format permits duplicate slugs.
+  assert.ok(state.text.includes('slug="decisions"'));
+});
+
+// --- the board reads the name, not the id ----------------------------------
+
+test("a rendered card shows the slug and keeps the id visible", async () => {
+  // The panel HTML is only reachable through the syscall the worker makes to
+  // draw it, which is also the only place it matters.
+  const { calls } = recordingSyscall(THREE_ATOMS);
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "First Two",
+  );
+  assert.equal(result.ok, true);
+  const panel = calls.filter((c) => c.name === "editor.showPanel").pop();
+  assert.ok(panel, "expected the board to redraw");
+  // showPanel("modal", inset, html, script) - html is the third argument.
+  const html = panel.args[2];
+  // The group badge reads the name...
+  assert.ok(html.includes("group first-two"));
+  assert.ok(!html.includes("group " + result.groupId));
+  // ...and the real group id is still discoverable in its tooltip.
+  assert.ok(html.includes("id " + result.groupId));
+  // Every atom's own id is still on its card.
+  for (const id of ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC"]) {
+    assert.ok(html.includes(">" + id + "<"), id);
+  }
+});
+
+test("a group with no name still shows its id on the badge", async () => {
+  const { calls } = recordingSyscall(THREE_ATOMS);
+  const result = await plug.functionMapping.groupAtoms(
+    JSON.stringify(["atom:AAAAAAAA", "atom:BBBBBBBB"]),
+    "",
+  );
+  assert.equal(result.ok, true);
+  const panel = calls.filter((c) => c.name === "editor.showPanel").pop();
+  assert.ok(panel.args[2].includes("group " + result.groupId));
+});
+
+test("the panel gets the same slug functions the worker uses", () => {
+  const source = injectSharedFunctions();
+  for (const name of ["sanitizeSlug", "deriveGroupSlug"]) {
+    assert.match(source, new RegExp("function " + name + "\\("));
+  }
+  const factory = new Function(
+    source + "\nreturn { sanitizeSlug: sanitizeSlug, deriveGroupSlug: deriveGroupSlug };",
+  );
+  const injected = factory();
+  for (const input of ["Email PRs", "Décisions", "#1. Plumbing (research)", ""]) {
+    assert.equal(injected.sanitizeSlug(input), sanitizeSlug(input));
+  }
+  for (const texts of [["## Email PRs"], ["Body only."], []]) {
+    assert.equal(injected.deriveGroupSlug(texts), deriveGroupSlug(texts));
   }
 });
