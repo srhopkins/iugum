@@ -1893,6 +1893,9 @@ const BOARD_VAR_NAMES = [
   "--board-group-header-padding",
   "--board-group-border-width",
   "--board-stale-border-color",
+  "--board-edit-font-family",
+  "--board-edit-font-size",
+  "--board-edit-line-height",
 ];
 
 /**
@@ -2221,6 +2224,21 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
          --board-accent-color either, so it can never be confused with the
          blue that means "group" or "selected". */
       --board-stale-border-color: #b7791f;
+      /* The raw-markdown editor's type. Monospace, because you are editing
+         source and column alignment matters. The size and line height are
+         DELIBERATE rather than inherited: an inherited size made the text
+         visibly change size on double-click.
+         The rendered body is 14px/1.5. 13px/1.45 was chosen by measuring all
+         82 cards of a real page: it keeps the type comparable to the body
+         while putting a block's source at close to the body's height, so
+         opening the editor nudges the page as little as possible. Across
+         those cards, 29 shift not at all and the largest shift is 19px,
+         always DOWNWARD. 12px matches better still (44 unshifted, 16px
+         worst) but reads too small beside 14px body text; both are knobs, so
+         that trade is Steve's to make and not baked in. */
+      --board-edit-font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      --board-edit-font-size: 13px;
+      --board-edit-line-height: 1.45;
     }
     /* COMPACT: chrome only.
        ------------------------------------------------------------------
@@ -2635,12 +2653,28 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
        padding, so entering edit mode does not make the card jump.
        resize: none and a script-set height: it is sized to its content, so
        the card grows with the text instead of showing a scrollbar inside a
-       box the user cannot see the end of. */
+       box the user cannot see the end of.
+       THE HEIGHT FLOOR IS THE BODY IT REPLACED, measured on the way in (see
+       beginEditing). Without it a six-item list came up two lines tall and
+       everything below the card jumped up the page. min-height is set inline
+       by the script for that reason; nothing here can know it.
+       Type metrics come from knobs, not from this rule, so the fit between
+       the rendered body and its source can be tuned from a space-style page.
+       They are set rather than inherited on purpose: an inherited size made
+       the text visibly change size on double-click. */
     .board-card-edit {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.9em;
-      line-height: 1.45;
+      font-family: var(--board-edit-font-family);
+      font-size: var(--board-edit-font-size);
+      line-height: var(--board-edit-line-height);
       tab-size: 2;
+      /* flex: none, overriding .board-card-body's flex: 1.
+         The card is a flex column, so a body with flex: 1 is sized by the
+         flex algorithm from a 0% basis and its own height is IGNORED. That
+         silently clamped the textarea to the card's height: the box stopped
+         growing as the user typed and kept an internal scrollbar instead.
+         An explicit height only governs once this item is out of the flex
+         sizing. */
+      flex: none;
       width: 100%;
       box-sizing: border-box;
       margin: 0;
@@ -3531,9 +3565,36 @@ ${injectSharedFunctions()}
     // whole edit session rather than one per keystroke.
     var editing = null;
 
+    // THE CARD MUST NOT SHRINK WHEN IT BECOMES EDITABLE.
+    //
+    // A textarea's natural height is its rows attribute, which has nothing to
+    // do with the block it is replacing: a six-item ordered list about 500px
+    // tall came up two lines tall, everything below it jumped up the page,
+    // and the user had to scroll a tiny box to see what they were editing.
+    //
+    // So the height floor is the height of the body being replaced, MEASURED
+    // on the way in while it is still visible (a hidden element measures 0).
+    // The textarea then grows past that floor as the user types. Taller than
+    // the rendering is fine and expected, because raw markdown is longer than
+    // its rendering; SHORTER is the bug.
+    //
+    // The floor comes from the measurement, not from a constant, which is
+    // what keeps a one-line heading's editor small. There is no minimum in
+    // the stylesheet for the same reason.
+    function visibleBody(cardEl) {
+      var rendered = cardEl.querySelector("[data-card-rendered]");
+      var raw = cardEl.querySelector("[data-card-raw]");
+      if (rendered && !rendered.hidden) return rendered;
+      if (raw && !raw.hidden) return raw;
+      return null;
+    }
+
     function autosize(textarea) {
+      // Read the floor before collapsing the box, or scrollHeight is measured
+      // against a height this function just threw away.
+      var floor = parseFloat(textarea.style.minHeight) || 0;
       textarea.style.height = "auto";
-      textarea.style.height = textarea.scrollHeight + "px";
+      textarea.style.height = Math.max(textarea.scrollHeight, floor) + "px";
     }
 
     function endEditing() {
@@ -3541,6 +3602,10 @@ ${injectSharedFunctions()}
       var session = editing;
       editing = null;
       session.textarea.hidden = true;
+      // Cleared so the next open measures the body again rather than
+      // inheriting a floor from whatever was edited last.
+      session.textarea.style.minHeight = "";
+      session.textarea.style.height = "";
       session.card.classList.remove("board-card-editing");
       applyCardView(session.card);
       return session;
@@ -3554,8 +3619,16 @@ ${injectSharedFunctions()}
       var textarea = cardEl.querySelector("[data-card-edit]");
       var raw = cardEl.querySelector("[data-card-raw]");
       if (!textarea || !raw) return;
+      // MEASURE FIRST, while the body is still on screen. Whichever body is
+      // showing is the one being replaced, so a card left in raw view is
+      // measured against its raw <pre>, not against a hidden rendered node.
+      var body = visibleBody(cardEl);
+      var floor = body ? body.getBoundingClientRect().height : 0;
       var original = raw.textContent;
       textarea.value = original;
+      // Border-box, and the floor includes the body's own padding, so the two
+      // boxes are directly comparable.
+      textarea.style.minHeight = floor > 0 ? floor + "px" : "";
       var rendered = cardEl.querySelector("[data-card-rendered]");
       if (rendered) rendered.hidden = true;
       raw.hidden = true;
@@ -3566,13 +3639,17 @@ ${injectSharedFunctions()}
         atomId: cardEl.getAttribute("data-atom-id"),
         textarea: textarea,
         original: original,
+        measuredFloor: floor,
         saving: false,
       };
       autosize(textarea);
       textarea.focus();
-      // Cursor at the end rather than selecting everything: the common edit
-      // is adding to a block, and a select-all means one keystroke wipes it.
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      // AT THE TOP, NOT THE BOTTOM. You are editing a block, not appending to
+      // it, and with a floor that fits the whole block there is nothing to
+      // scroll to. Opening scrolled to the end was why only the tail of a
+      // long block was visible.
+      textarea.setSelectionRange(0, 0);
+      textarea.scrollTop = 0;
     }
 
     async function saveEditing() {
@@ -3624,6 +3701,10 @@ ${injectSharedFunctions()}
       editing = null;
       session.textarea.value = session.original;
       session.textarea.hidden = true;
+      // Same reset as endEditing: the next open re-measures rather than
+      // inheriting this card's floor.
+      session.textarea.style.minHeight = "";
+      session.textarea.style.height = "";
       session.card.classList.remove("board-card-editing");
       applyCardView(session.card);
     }
