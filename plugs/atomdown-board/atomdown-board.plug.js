@@ -4855,8 +4855,28 @@ ${injectSharedFunctions()}
     var closeBtn = document.getElementById("atomdown-board-close");
     if (closeBtn) {
       closeBtn.addEventListener("click", async function () {
+        // FORGET FIRST, HIDE SECOND. Never the other way round.
+        //
+        // Hiding the modal unmounts this iframe, and the host tears down its
+        // postMessage bridge to it at the same moment (silverbullet
+        // client/components/panel.tsx). A syscall made after that is never
+        // delivered and never even rejects - it just vanishes. This handler
+        // used to hide the panel first, so the "forget this page" call was
+        // lost every single time: the board closed, the remembered-open flag
+        // stayed set, and the next reload brought the board back. That is the
+        // bug Steve hit.
+        //
+        // notifyClosed() forgets the page and then hides the panel itself, so
+        // the sequence completes worker-side even though the reply below can
+        // no longer reach us. The trailing hidePanel is only a fallback for an
+        // invoke that failed outright; hiding an already-hidden panel is a
+        // no-op, and Close must never leave the board on screen.
+        try {
+          await syscall("system.invokeFunction", "atomdown-board.notifyClosed");
+        } catch (e) {
+          // Fall through and close anyway.
+        }
         try { await syscall("editor.hidePanel", "modal"); } catch (e) {}
-        try { await syscall("system.invokeFunction", "atomdown-board.notifyClosed"); } catch (e) {}
       });
     }
 
@@ -5161,7 +5181,15 @@ async function loadViewState(pageName) {
   };
 }
 
-/** Remembers, or forgets, that the board is showing for this page. */
+/**
+ * Remembers, or forgets, that the board is showing for this page.
+ *
+ * This is the ONLY writer of the open flag in this file. Nothing else may
+ * write it, and nothing that persists some other piece of view state (the
+ * density, the raw/rendered view, the collapsed groups) may touch it as a
+ * side effect: each of those has its own key, and a stray truthy value in
+ * this one would reopen a dismissed board.
+ */
 async function rememberBoardOpen(pageName, open) {
   if (!pageName) return;
   try {
@@ -5172,7 +5200,16 @@ async function rememberBoardOpen(pageName, open) {
   }
 }
 
-/** True only when this exact page was left with the board showing. */
+/**
+ * True only when this exact page was left with the board showing.
+ *
+ * Deliberately `=== true`, not a truthiness test. Reopening a full-screen
+ * view the user did not ask for is the worse failure, so anything that is not
+ * literally the boolean this file wrote - a missing key, null, "", 0, the
+ * STRING "true", a number, a leftover value from some other feature - reads
+ * as closed. A read that throws reads as closed too, so a browser with site
+ * data blocked gets a closed board rather than an error.
+ */
 async function wasBoardOpen(pageName) {
   if (!pageName) return false;
   try {
@@ -5242,13 +5279,17 @@ async function showBoard(sourceText, pageName) {
 async function toggleBoard() {
   const currentPage = await syscall("editor.getCurrentPage").catch(() => undefined);
   if (boardOpen) {
-    await syscall("editor.hidePanel", "modal");
-    boardOpen = false;
-    await rememberBoardOpen(currentPage, false);
+    // Closing goes through the one close path, so this route and the panel's
+    // Close button cannot forget the page differently. notifyClosed() clears
+    // the flag first and hides the panel second, which is the order that
+    // matters (see the comment on it).
+    await notifyClosed();
     return;
   }
   const sourceText = await syscall("editor.getText");
   await showBoard(sourceText, currentPage);
+  // Written LAST, after the panel is up. Nothing else in this file writes the
+  // open flag, so a close can never be overtaken by a late write from here.
   await rememberBoardOpen(currentPage, true);
 }
 
@@ -5280,6 +5321,11 @@ async function restoreBoard(pageName) {
     if (!(await wasBoardOpen(page))) {
       // Navigated to a page the board was not open on. A panel still showing
       // from the previous page would now be describing the wrong document.
+      //
+      // This hides the panel directly rather than going through
+      // notifyClosed(), on purpose: the user did not close anything. The page
+      // they left with the board open keeps its flag, so going back there
+      // still reopens it.
       if (boardOpen) {
         try {
           await syscall("editor.hidePanel", "modal");
@@ -5307,10 +5353,33 @@ async function restoreBoard(pageName) {
 // on whether the board is open. Closing by the button must forget the page
 // too, or the next reload would bring back a board the user just dismissed.
 // Not a user-facing command itself.
+//
+// ORDER IS LOAD-BEARING, and getting it wrong was a real bug (Steve: he left
+// the board, reloaded, and it came back). The forget happens FIRST, and only
+// then does this take the panel down.
+//
+// Why: hiding the modal unmounts the panel's iframe, and the host's
+// postMessage bridge to it is torn down with it (silverbullet
+// client/components/panel.tsx removes its message listener on unmount). So
+// anything the panel still had to say is lost the instant the panel is
+// hidden. The close button used to hide the panel and THEN ask the worker to
+// forget the page; that second syscall never arrived, the flag stayed set,
+// and every reload reopened a board that had been dismissed.
+//
+// This function hides the panel itself, at the end, so the whole sequence
+// runs worker-side where nothing can be cut off half way. Hiding a panel
+// that is already hidden is a no-op dispatch, so it is safe for the panel to
+// also hide itself as a fallback.
 async function notifyClosed() {
   boardOpen = false;
   const currentPage = await syscall("editor.getCurrentPage").catch(() => undefined);
   await rememberBoardOpen(currentPage, false);
+  try {
+    await syscall("editor.hidePanel", "modal");
+  } catch (e) {
+    // Already gone, or no panel surface. The page is forgotten either way,
+    // which is the part that must not be skipped.
+  }
 }
 
 // ---------------------------------------------------------------------------
