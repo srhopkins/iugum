@@ -218,7 +218,8 @@ RUN set -eu; \
     if grep -qx browser /etc/iugum-with; then \
       apt-get update; \
       apt-get install -y --no-install-recommends \
-        chromium openssl fonts-liberation fonts-unifont dbus-x11; \
+        chromium openssl fonts-liberation fonts-unifont dbus-x11 \
+        pass gnupg; \
       curl -fsSL -o /tmp/kasmvnc.deb \
         "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_trixie_${KASMVNC_VERSION}_${TARGETARCH}.deb"; \
       apt-get install -y /tmp/kasmvnc.deb; \
