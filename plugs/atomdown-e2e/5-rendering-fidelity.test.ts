@@ -236,36 +236,67 @@ for (const theme of THEMES) {
  * the table group was not, so the two named groups have to be measured at
  * their own scroll positions rather than in one pass.
  */
-async function bringGroupIntoView(view: View, groupId: string) {
+async function bringGroupIntoView(
+  view: View,
+  groupId: string,
+  which: "decisions" | "table",
+) {
   if (view.kind !== "inline") return;
-  // Walk down until the group's id chip exists, then stop.
-  const found = await view.page.evaluate(async (id) => {
-    const scroller = document.querySelector(".cm-scroller")!;
-    const step = Math.max(200, Math.floor(scroller.clientHeight * 0.6));
-    const has = () =>
-      Array.from(document.querySelectorAll(".atomdown-group-id")).some(
-        (c) => c.textContent?.trim() === id,
-      );
-    for (let y = 0; y <= scroller.scrollHeight; y += step) {
-      scroller.scrollTop = y;
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-      if (has()) return true;
-    }
-    return has();
-  }, groupId);
+
+  // Scroll until the STRUCTURE is realised, not until the group's header is.
+  //
+  // Stopping at the header was not enough: the decisions group is taller than
+  // the viewport, so the header and five of the six list items were on screen
+  // and the sixth was not, and the rule reported five markers as a rendering
+  // defect. The property is "the six items render", so the search condition
+  // has to be the six items — with a fine step, because the window that holds
+  // all of them is only a little taller than the list itself.
+  const found = await view.page.evaluate(
+    async ({ id, which }) => {
+      const scroller = document.querySelector(".cm-scroller")!;
+      const groupSeen = () =>
+        Array.from(document.querySelectorAll(".atomdown-group-id")).some(
+          (c) => c.textContent?.trim() === id,
+        );
+      const ready = () => {
+        if (!groupSeen()) return false;
+        if (which === "table") {
+          return Array.from(document.querySelectorAll("table")).some(
+            (t) => t.querySelectorAll("tr").length >= 11,
+          );
+        }
+        const markers = Array.from(
+          document.querySelectorAll(".cm-content *"),
+        ).filter(
+          (el) =>
+            !el.children.length &&
+            /^\d+[.)]$/.test((el.textContent ?? "").trim()),
+        );
+        return markers.length >= 6;
+      };
+      for (let y = 0; y <= scroller.scrollHeight; y += 100) {
+        scroller.scrollTop = y;
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        if (ready()) return true;
+      }
+      return ready();
+    },
+    { id: groupId, which },
+  );
   await settle(view.page, 6);
   expect(
     found,
-    `the ${groupId} group could not be scrolled into view, so its structure ` +
-      `cannot be measured`,
+    `no scroll position realises the ${which} structure in group ${groupId}, ` +
+      `so it cannot be measured. Either the fixture changed shape or the ` +
+      `structure genuinely does not render.`,
   ).toBe(true);
 }
 
 async function assertStructures(view: View, combo: Combo) {
-  await bringGroupIntoView(view, FIXTURE.decisionsGroupId);
+  await bringGroupIntoView(view, FIXTURE.decisionsGroupId, "decisions");
   await assertShape(view, combo, "decisions");
-  await bringGroupIntoView(view, FIXTURE.tableGroupId);
+  await bringGroupIntoView(view, FIXTURE.tableGroupId, "table");
   await assertShape(view, combo, "table");
 }
 
