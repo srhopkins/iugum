@@ -9,19 +9,17 @@
  *
  * HOW A DEFECT IS INJECTED. Not by editing the plugs — another agent owns
  * those files, and a suite that has to patch production code to test itself is
- * a suite nobody runs. Instead each defect is a `space-style` page seeded into
- * the test's own temporary space. SilverBullet injects a space-style block as
- * real CSS into the real page, so the defect is genuinely present in the
- * rendered document, arrives through a supported mechanism, and disappears
- * with the temp directory.
+ * a suite nobody runs. Each defect is a stylesheet injected into the real page
+ * once the view is open, so the broken rule is genuinely in the document and
+ * disappears with the browser context.
  *
- * That has one honest limit, stated here rather than buried: CSS can reproduce
+ * That has one honest limit, stated here rather than buried: CSS reproduces
  * every GEOMETRY and VISIBILITY defect faithfully, and cannot reproduce a
  * state-machine defect — a group that will not expand is a JavaScript bug, not
- * a style. So rules 1, 2 and 3 are proven here against injected CSS, and the
- * state-machine halves of rules 4 and 7 are proven by the "does nothing"
- * guard inside `assertRoundTrip`, which fires when a toggle leaves the DOM
- * byte-identical.
+ * a style. So rules 1, 2, 3 and 5 and the grip's side are proven here against
+ * injected CSS, and the state-machine halves of rules 4 and 7 are covered by
+ * the "the toggle did nothing" guard inside rule 4's own round-trip helper,
+ * which fires when a toggle leaves the DOM byte-identical.
  *
  * Run it on its own — the pre-push gate does not, because these tests are
  * SUPPOSED to see violations and would read as failures:
@@ -29,7 +27,7 @@
  *   scripts/atomdown-fe-check.sh --defects
  */
 
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import {
   containmentViolations,
   directiveStates,
@@ -44,21 +42,24 @@ import {
   visibleText,
 } from "./harness.ts";
 
-/** Wrap CSS in the space-style block SilverBullet reads. */
-function styleSpace(css: string): Record<string, string> {
-  return {
-    "Library/Styles/InjectedDefect.md": [
-      "---",
-      "description: A deliberately broken style, injected by defects.test.ts",
-      "---",
-      "",
-      "```space-style",
-      "/* priority: 99 */",
-      css,
-      "```",
-      "",
-    ].join("\n"),
-  };
+/**
+ * Inject the defect's CSS straight into the page.
+ *
+ * The first version wrote a `space-style` page into the test's temporary
+ * space, which is the mechanism a real style change would use. It did not
+ * work reliably: SilverBullet picks a space-style block up through its own
+ * index, and a page seeded milliseconds before the first load is not indexed
+ * yet, so four of these tests silently exercised an unbroken page and
+ * reported the RULES as broken. That is the worst possible failure mode for a
+ * negative control.
+ *
+ * `addStyleTag` puts the rule in the document with no indexing in between, so
+ * the defect is either present or the call threw. The CSS is genuinely in the
+ * page either way; only the delivery changed.
+ */
+async function injectDefect(page: Page, css: string) {
+  await page.addStyleTag({ content: css });
+  await settle(page, 4);
 }
 
 const CARD_LINE = "#sb-main .cm-editor .cm-line.atomdown-card-line";
@@ -71,20 +72,20 @@ test.describe("rule 1 — containment", () => {
     // edge. A negative margin puts the marker's rect outside its line's rect
     // while the DOM still says the marker is inside the line, which is why no
     // structural assertion sees it and a rect comparison does.
-    const server: SBServer = await startSpace(
-      styleSpace(
+    const server: SBServer = await startSpace();
+    const css = (
         `${CARD_LINE} .cm-list-bullet,
          ${CARD_LINE} .sb-line-ol .cm-list-bullet,
          ${CARD_LINE} span.cm-list-bullet {
            margin-left: -40px !important;
            position: relative !important;
            left: -40px !important;
-         }`,
-      ),
+         }`
     );
     try {
       await gotoFixture(page, server);
       const view = await openInline(page);
+      await injectDefect(page, css);
       const sweep = await sweepBoxes(view, {
         name: "inline card",
         runPrefix: "atomdown-card",
@@ -114,8 +115,8 @@ test.describe("rule 1 — containment", () => {
     // explicit over-wide table with `table-layout: auto` and no wrapping is
     // exactly the state the plugs' `table-layout: fixed` plus wrapped cells
     // exists to prevent.
-    const server: SBServer = await startSpace(
-      styleSpace(
+    const server: SBServer = await startSpace();
+    const css = (
         `#sb-main .cm-editor table {
            table-layout: auto !important;
            width: 2000px !important;
@@ -125,12 +126,12 @@ test.describe("rule 1 — containment", () => {
          #sb-main .cm-editor table th {
            white-space: nowrap !important;
            overflow: visible !important;
-         }`,
-      ),
+         }`
     );
     try {
       await gotoFixture(page, server);
       const view = await openInline(page);
+      await injectDefect(page, css);
       // The group's SIDE borders are what a wide table crosses.
       const groups = await sweepBoxes(view, {
         name: "inline group",
@@ -143,8 +144,8 @@ test.describe("rule 1 — containment", () => {
         headerSelector: ".atomdown-card-header",
       });
       const all = [
-        ...containmentViolations(groups),
-        ...containmentViolations(cards),
+        ...containmentViolations(groups.boxes),
+        ...containmentViolations(cards.boxes),
       ];
       const right = all.filter((v) => v.side === "right");
       expect(
@@ -167,21 +168,28 @@ test.describe("rule 2 — directive invisibility", () => {
   test("fails when a directive line is visible at rest", async ({ page }) => {
     // The defect: 82 sha256 digests back on the page. Undoing the collapse is
     // a two-line style change, which is roughly how it regressed.
-    const server: SBServer = await startSpace(
-      styleSpace(
+    const server: SBServer = await startSpace();
+    const css = (
+        // `line-height` is the one that matters, and leaving it out is why
+        // this injection first failed to reproduce anything. The plug hides a
+        // directive with `font-size: 0; line-height: 0`, so overriding height
+        // and font size alone still leaves a 0px line: the line box is sized
+        // by line-height.
         `#sb-main .cm-editor .cm-line.atomdown-directive {
            font-size: 13px !important;
+           line-height: 1.5 !important;
            color: #333 !important;
            height: auto !important;
+           min-height: 18px !important;
            max-height: none !important;
            overflow: visible !important;
            opacity: 1 !important;
-         }`,
-      ),
+         }`
     );
     try {
       await gotoFixture(page, server);
       await openInline(page);
+      await injectDefect(page, css);
       await page.evaluate(() =>
         (globalThis as any).client.editorView.contentDOM.blur(),
       );
@@ -215,8 +223,8 @@ test.describe("rule 2 — directive invisibility", () => {
     // The interaction half. A directive that leaks only on hover passes an
     // at-rest check completely, which is why rule 2 sweeps the pointer over
     // every card rather than measuring once.
-    const server: SBServer = await startSpace(
-      styleSpace(
+    const server: SBServer = await startSpace();
+    const css = (
         `#sb-main .cm-editor .cm-line.atomdown-card-line:hover
            + .cm-line.atomdown-directive,
          #sb-main .cm-editor .atomdown-card-header:hover
@@ -228,12 +236,12 @@ test.describe("rule 2 — directive invisibility", () => {
            color: #333 !important;
            height: auto !important;
            opacity: 1 !important;
-         }`,
-      ),
+         }`
     );
     try {
       await gotoFixture(page, server);
       await openInline(page);
+      await injectDefect(page, css);
       await page.evaluate(() =>
         (globalThis as any).client.editorView.contentDOM.blur(),
       );
@@ -271,17 +279,24 @@ test.describe("rule 3 — layout stability", () => {
     // only its colour. The board plug's own notes say a card's border may
     // change COLOUR and never WIDTH for exactly this reason, so widening it on
     // hover is the regression that note is guarding against.
-    const server: SBServer = await startSpace(
-      styleSpace(
-        `#sb-main .cm-editor .cm-line.atomdown-card-line:hover {
-           padding-top: 30px !important;
-           padding-bottom: 30px !important;
-         }`,
-      ),
+    const server: SBServer = await startSpace();
+    const css = (
+        // `min-height` rather than padding. A hover that changes a card's
+        // BOX is the defect shape — the board plug's own notes say a card's
+        // border may change colour and never width for exactly this reason —
+        // and min-height is the version CodeMirror cannot quietly absorb.
+        `#sb-main .cm-editor .cm-line.atomdown-card-line:hover,
+         #sb-main .cm-editor .atomdown-card-header:hover
+           + .cm-line.atomdown-card-line {
+           min-height: 120px !important;
+           padding-top: 40px !important;
+           padding-bottom: 40px !important;
+         }`
     );
     try {
       await gotoFixture(page, server);
       const view = await openInline(page);
+      await injectDefect(page, css);
 
       const topOf = () =>
         page.evaluate(() => {
@@ -323,19 +338,21 @@ test.describe("rule 5 — rendering fidelity", () => {
     // in what it reads. This is the assertion that would have caught the first
     // version of rule 5, which read `textContent` and reported 13 leaks on a
     // page where a reader could see none.
-    const server: SBServer = await startSpace(
-      styleSpace(
+    const server: SBServer = await startSpace();
+    const css = (
         `#sb-main .cm-editor .cm-line.atomdown-directive {
            font-size: 13px !important;
+           line-height: 1.5 !important;
            color: #333 !important;
            height: auto !important;
+           min-height: 18px !important;
            overflow: visible !important;
-         }`,
-      ),
+         }`
     );
     try {
       await gotoFixture(page, server);
       const view = await openInline(page);
+      await injectDefect(page, css);
       const text = await visibleText(view.ev, ".cm-content");
       expect(
         text,
@@ -381,8 +398,8 @@ test.describe("area 7 — components", () => {
   }) => {
     // The grip regression verbatim: the class stayed correct and the element
     // rendered on the wrong side, which is why area 7 measures the side.
-    const server: SBServer = await startSpace(
-      styleSpace(
+    const server: SBServer = await startSpace();
+    const css = (
         `#sb-main .cm-editor .atomdown-card-header {
            position: relative !important;
          }
@@ -392,12 +409,12 @@ test.describe("area 7 — components", () => {
            left: auto !important;
            opacity: 1 !important;
            display: inline-block !important;
-         }`,
-      ),
+         }`
     );
     try {
       await gotoFixture(page, server);
       const view = await openInline(page);
+      await injectDefect(page, css);
       await page.locator(".atomdown-card-header").first().hover();
       await settle(page, 3);
 
