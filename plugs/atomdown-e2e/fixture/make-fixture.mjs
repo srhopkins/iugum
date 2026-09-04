@@ -108,7 +108,7 @@ function filler(i, topic) {
       `> A quoted line for ${topic}, step ${i}. It wraps far enough to make the blockquote bar measurable against the card border.`,
     () => `### ${topic} step ${i}`,
     () =>
-      "```sh\n" +
+      (i % 16 < 8 ? "```sh\n" : "```bash\n") +
       `# ${topic} step ${i}\n` +
       `iugum wiki --port 0 ./space-${i}\n` +
       "```",
@@ -286,6 +286,23 @@ const slugify = (line) =>
     lines[i] = `<!-- <atom id="${m[1]}" slug="${slug}"${m[2]}/> -->`;
   }
   writeFileSync(OUT, lines.join("\n"));
+}
+
+// The opening line of a fenced code block is always left OUTSIDE the atom
+// `materialize` creates for the block, so each fence produces one uncovered
+// block that both views draw as a card with no Atomdown id. The suite keys
+// those cards by their own text (see `idOf` in the harness), so two fences
+// that opened with the same line would dedupe to one card and the sweep's
+// count assertion would fail. Keep the info strings distinct.
+{
+  const opens = readFileSync(OUT, "utf8")
+    .split("\n")
+    .filter((l) => /^```\S/.test(l));
+  if (new Set(opens).size !== opens.length) {
+    throw new Error(
+      `fence opening lines must be distinct, got ${JSON.stringify(opens)}`,
+    );
+  }
 }
 
 const lint = execFileSync(bin, ["lint", OUT], { encoding: "utf8" }).trim();
