@@ -33,29 +33,16 @@
 }
 
 #sb-main {
-
-  >.sb-panel:last-child {
+  .sb-panel:last-child {
     border-left: 1px solid var(--panel-border-color);
   }
 
-  >.sb-panel:first-child {
+  .sb-panel:first-child {
     border-right: 1px solid var(--panel-border-color);
   }
 
   .sb-panel {
     background-color: var(--panel-background-color);
-  }
-
-  // Not `--panel-border-color`: that is white in the light theme (the plug
-  // panels sit on their own surface and want no visible seam), which left a
-  // docked sidebar running straight into the editor with nothing between
-  // them.
-  .sb-nav-root-lhs {
-    border-right: 1px solid var(--ui-surface-border-color);
-  }
-
-  .sb-nav-root-rhs {
-    border-left: 1px solid var(--ui-surface-border-color);
   }
 }
 
@@ -68,7 +55,7 @@
   font-family: var(--editor-font);
 }
 
-.sb-notifications>div {
+.sb-notifications > div {
   border: var(--notifications-border-color) 1px solid;
 }
 
@@ -105,10 +92,12 @@
   color: var(--action-button-hover-color);
 }
 
+// Only color the expander button, when the hamburger menu is open
 .sb-actions:not(.open) button.expander:hover {
   color: var(--action-button-color);
 }
 
+/* Modal boxes */
 .sb-modal-box {
   color: var(--modal-color);
   background-color: var(--modal-background-color);
@@ -159,6 +148,8 @@
   }
 }
 
+/* Editor */
+
 #sb-editor {
   .cm-content {
     font-family: var(--editor-font);
@@ -177,12 +168,12 @@
       .cm-textfield {
         background-color: var(--editor-panels-bottom-input-background-color);
       }
-
       .cm-button {
         background-image: var(--editor-panels-bottom-button-background-image);
-
         &:active {
-          background-image: var(--editor-panels-bottom-button-active-background-image);
+          background-image: var(
+            --editor-panels-bottom-button-active-background-image
+          );
         }
       }
     }
@@ -223,6 +214,7 @@
   .sb-line-h4,
   .sb-line-h5,
   .sb-line-h6 {
+    // background-color: rgba(0, 30, 77, 0.5);
     color: var(--editor-heading-color);
   }
 
@@ -244,17 +236,6 @@
   cursor: pointer;
 }
 
-.sb-at-mention {
-  color: var(--editor-at-mention-color);
-  background-color: var(--editor-at-mention-background-color);
-  border: 1px solid var(--editor-at-mention-border-color);
-  cursor: pointer;
-}
-
-.sb-at-mention-mark {
-  opacity: 0.6;
-}
-
 // Anchor styling — mark and text colored independently so themes can
 // diverge them later. Default: both get the link color.
 .sb-named-anchor {
@@ -273,6 +254,7 @@
   color: var(--editor-naked-url-color);
 }
 
+/* Color list items when the cursor is on it */
 .sb-li-cursor .sb-meta {
   color: var(--editor-line-meta-color);
 }
@@ -289,10 +271,7 @@ tbody tr:nth-of-type(even) {
 .sb-line-blockquote {
   background-color: var(--editor-blockquote-background-color);
   color: var(--editor-blockquote-color);
-}
-
-.sb-comment-block {
-  border-left-color: transparent;
+  border-left: 1px solid var(--editor-blockquote-border-color);
 }
 
 .sb-line-code {
@@ -358,38 +337,10 @@ tbody tr:nth-of-type(even) {
   color: var(--editor-meta-color);
 }
 
-// HTML comments (inline `Comment` + block `CommentMarkerBlock`, e.g.
-// baked-section `<!--#lua … -->` markers) render in a subtle gray, like code
-// comments. The fenced-code-scoped rule above keeps comments inside code blocks
-// code-sized.
+// HTML comments (inline `Comment` + block `CommentBlock`, e.g. baked-section
+// `<!--#lua … -->` markers) render in a subtle gray, like code comments. The
+// fenced-code-scoped rule above keeps comments inside code blocks code-sized.
 .sb-comment {
-  color: var(--editor-code-comment-color);
-}
-
-// The `<!--` / `-->` delimiters of a comment whose body is parsed as markdown:
-// the body styles itself, so only the markers get the comment colour.
-// An opaque surface, so the button reads as a control rather than dissolving
-// into the region's own tint.
-.sb-comment-resolve {
-  color: var(--subtle-color);
-  background-color: var(--root-background-color);
-  border-color: var(--subtle-color);
-}
-
-.sb-comment-resolve:hover {
-  background-color: var(--editor-widget-background-color);
-  color: var(--editor-text-color);
-}
-
-.sb-comment-label {
-  color: var(--editor-code-comment-color);
-}
-
-.sb-comment-marker {
-  color: var(--editor-code-comment-color);
-}
-
-.sb-conflict-marker {
   color: var(--editor-code-comment-color);
 }
 
@@ -403,16 +354,25 @@ tbody tr:nth-of-type(even) {
   background-color: var(--editor-code-inserted-bg, rgba(187, 247, 208, 0.25));
 }
 
+// Admonitions
+
 .sb-admonition {
   border-left-color: var(--admonition-color);
-  background-color: color-mix(in srgb,
-      var(--admonition-color),
-      transparent 90%);
+}
+
+.sb-admonition-title {
+  background-color: color-mix(
+    in srgb,
+    var(--admonition-color),
+    transparent 90%
+  );
 }
 
 .sb-admonition-type::before {
   background-color: var(--admonition-color);
 }
+
+// Frontmatter
 
 .sb-frontmatter {
   background-color: var(--editor-frontmatter-background-color);
@@ -469,12 +429,12 @@ a,
 }
 
 a.sb-wiki-link-missing,
-.sb-wiki-link-missing>.sb-wiki-link {
+.sb-wiki-link-missing > .sb-wiki-link {
   color: var(--editor-wiki-link-page-missing-color);
 }
 
 a.sb-wiki-link-invalid,
-.sb-wiki-link-invalid>.sb-wiki-link {
+.sb-wiki-link-invalid > .sb-wiki-link {
   color: var(--editor-wiki-link-page-invalid-color);
 }
 
@@ -514,5 +474,5 @@ a.sb-wiki-link-invalid,
 }
 
 .sb-line-comment {
-  background-color: var(--editor-code-comment-color);
+  background-color: var(--editor-code-comment-color); // rgba(255, 255, 0, 0.5);
 }

@@ -19,15 +19,15 @@ end)}
 ${widgets.commandButton("System: Reload")}
 
 ## Top and bottom widgets
-* Table of contents: shows a table of contents for your page — **off by default**; the `Navigate: Outline` and `Navigate: Outline Picker` commands show the same headers on demand instead
+* Table of contents: shows a table of contents for your page
 * Linked mentions: show a list of links that link to the current page, at the bottom of your page
 * Linked tasks: shows a list of tasks that link to the current page, at the top of the page
 
 These can each be individually enabled/disabled and configured in your `CONFIG` page (use `space-lua` instead of `lua`):
 
 ```lua
--- Put the TOC back at the top of every page
-config.set("std.widgets.toc.enabled", true)
+-- Disable TOC altogether
+config.set("std.widgets.toc.enabled", false)
 -- Only render a TOC when there's >= 5 headers
 config.set("std.widgets.toc.minHeaders", 5)
 -- Disable linked mentions altogether
@@ -111,13 +111,14 @@ config.defineCategory {
   priority = 45,
 }
 
+-- configuration schema
 config.define("std.widgets.toc", {
   type = "object",
   properties = {
     enabled = {
       type = "boolean",
-      default = false,
-      description = "Show a table of contents at the top of pages (off by default: the Outline navigator views show one on demand instead)",
+      default = true,
+      description = "Show a table of contents at the top of pages",
       ui = { category = "Widgets", label = "Table of Contents", priority = 4 },
     },
     minHeaders = {
@@ -129,39 +130,6 @@ config.define("std.widgets.toc", {
   }
 })
 
--- Every ATX heading in `text` (defaulting to the page being edited), as
--- `{name, pos, level}`: the text to show, the position to navigate to, and the
--- nesting depth. Shared by the table-of-contents widget and the navigator
--- outline views, so the two can never disagree about what a header is called
--- or where it starts.
-function widgets.tocHeaders(text)
-  local parsedMarkdown = markdown.parseMarkdown(text or editor.getText())
-  local headers = {}
-  for topLevelChild in parsedMarkdown.children do
-    if topLevelChild.type then
-      local headerLevel = string.match(topLevelChild.type, "^ATXHeading(%d+)")
-      if headerLevel then
-        local label = ""
-        table.remove(topLevelChild.children, 1)
-        for child in topLevelChild.children do
-          label = label .. string.trim(markdown.renderParseTree(child))
-        end
-        -- Strip link syntax to avoid nested brackets in TOC
-        label = string.gsub(label, "%[%[(.-)%]%]", "%1")
-
-        if label != "" then
-          table.insert(headers, {
-            name = label,
-            pos = topLevelChild.from,
-            level = tonumber(headerLevel)
-          })
-        end
-      end
-    end
-  end
-  return headers
-end
-
 function widgets.toc(options)
   options = options or config.get("std.widgets.toc", {})
   options.minHeaders = options.minHeaders or 3
@@ -169,13 +137,40 @@ function widgets.toc(options)
   options.header = options.header or "Table of Contents"
   local defaultOpen = (options.defaultOpen ~= false) or nil
 
+  local text = editor.getText()
   local pageName = editor.getCurrentPage()
-  local headers = widgets.tocHeaders(editor.getText())
+  local parsedMarkdown = markdown.parseMarkdown(text)
+
+  -- Collect all headers
+  local headers = {}
+  for topLevelChild in parsedMarkdown.children do
+    if topLevelChild.type then
+      local headerLevel = string.match(topLevelChild.type, "^ATXHeading(%d+)")
+      if headerLevel then
+        local text = ""
+        table.remove(topLevelChild.children, 1)
+        for child in topLevelChild.children do
+          text = text .. string.trim(markdown.renderParseTree(child))
+        end
+        -- Strip link syntax to avoid nested brackets in TOC
+        text = string.gsub(text, "%[%[(.-)%]%]", "%1")
+
+        if text != "" then
+          table.insert(headers, {
+            name = text,
+            pos = topLevelChild.from,
+            level = tonumber(headerLevel)
+          })
+        end
+      end
+    end
+  end
 
   if options.minHeaders and options.minHeaders > #headers then
     return widget.new{}
   end
 
+  -- Filter headers to display
   local headersToDisplay = {}
   for _, header in ipairs(headers) do
     if not (options.maxHeader and header.level > options.maxHeader or
@@ -184,22 +179,27 @@ function widgets.toc(options)
     end
   end
   
+  -- Find min level
   local minLevel = 6
   for _, header in ipairs(headersToDisplay) do
     minLevel = math.min(minLevel, header.level)
   end
 
+  -- Build a nested ul/li structure based on heading levels
   local function buildTocList(headers)
     local root = dom.ul {  }
     local stack = { { node = root, level = minLevel - 1, lastLi = nil } }
 
     for _, header in ipairs(headers) do
+      -- Pop back up when heading is at same or higher level
       while #stack > 1 and stack[#stack].level >= header.level do
         table.remove(stack)
       end
 
+      -- Open nested <ul>s for deeper headings
       while stack[#stack].level < header.level - 1 do
         local newUl = dom.ul {}
+        -- Attach nested list to the last <li> in the current level, or create one if needed
         local parent = stack[#stack].lastLi or dom.li {}
         if not stack[#stack].lastLi then
           stack[#stack].node.appendChild(parent)
@@ -208,6 +208,7 @@ function widgets.toc(options)
         table.insert(stack, { node = newUl, level = stack[#stack].level + 1, lastLi = nil })
       end
 
+      -- Create the <li> with link
       local li = dom.li {
         dom.a {
           onclick = function()
@@ -242,7 +243,7 @@ end
 ### Top widget
 ```space-lua
 -- priority: -1
-if config.get("std.widgets.toc.enabled", false) then
+if config.get("std.widgets.toc.enabled", true) then
   event.listen {
     name = "hooks:renderTopWidgets",
     run = function(e)
@@ -268,6 +269,7 @@ ${_.snippet}
 
 ]==]
 
+-- configuration schema
 config.define("std.widgets.linkedMentions", {
   type = "object",
   properties = {
@@ -319,6 +321,7 @@ end
 ```space-lua
 -- priority: 10
 
+-- configuration schema
 config.define("std.widgets.linkedTasks", {
   type = "object",
   properties = {

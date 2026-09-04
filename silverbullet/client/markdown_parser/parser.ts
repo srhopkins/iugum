@@ -15,13 +15,11 @@ import { Table } from "./table_parser.ts";
 import { FootnoteDefinition, FootnoteRef, InlineFootnote } from "./footnote.ts";
 import {
   anchorRegex,
-  atMentionRegex,
   nakedUrlRegex,
   pWikiLinkRegex,
   tagRegex,
 } from "./constants.ts";
 import { HTMLBlockParsing } from "./html_block.ts";
-import { ConflictMarkers } from "./conflict_marker.ts";
 import { parse } from "./parse_tree.ts";
 import type { ParseTree } from "@silverbulletmd/silverbullet/lib/tree";
 import { luaLanguage } from "../space_lua/parse.ts";
@@ -330,40 +328,6 @@ const NamedAnchor: MarkdownConfig = {
   ],
 };
 
-// AtMention: @nickname with the leading `@` exposed as an AtMentionMark
-// child node. Guarded on the preceding character so emails
-// (pete@example.com) never parse as mentions.
-const pAtMentionRegex = new RegExp(`^${atMentionRegex.source}`);
-const AtMention: MarkdownConfig = {
-  defineNodes: ["AtMention", "AtMentionMark"],
-  parseInline: [
-    {
-      name: "AtMention",
-      parse(cx, next, pos) {
-        if (next !== 64 /* @ */) {
-          return -1;
-        }
-        if (pos > cx.offset) {
-          const prev = cx.slice(pos - 1, pos);
-          if (/[\w.@+-]/.test(prev)) {
-            return -1;
-          }
-        }
-        const match = pAtMentionRegex.exec(cx.slice(pos, cx.end));
-        if (!match) {
-          return -1;
-        }
-        const end = pos + match[0].length;
-        return cx.addElement(
-          cx.elt("AtMention", pos, end, [
-            cx.elt("AtMentionMark", pos, pos + 1),
-          ]),
-        );
-      },
-    },
-  ],
-};
-
 // FrontMatter parser
 
 const yamlLang = StreamLanguage.define(yamlLanguage);
@@ -433,7 +397,6 @@ export const FrontMatter: MarkdownConfig = {
 
 const baseMarkdownExtensions: MarkdownConfig[] = [
   HTMLBlockParsing,
-  ConflictMarkers,
   WikiLink,
   Attribute,
   FrontMatter,
@@ -448,7 +411,6 @@ const baseMarkdownExtensions: MarkdownConfig[] = [
   NakedURL,
   Hashtag,
   NamedAnchor,
-  AtMention,
   Superscript,
   Subscript,
   {
@@ -473,8 +435,7 @@ const baseMarkdownExtensions: MarkdownConfig[] = [
         Task: ct.TaskTag,
         TaskMark: ct.TaskMarkTag,
         Comment: ct.CommentTag,
-        CommentMarker: ct.CommentMarkerTag,
-        CommentMarkerBlock: ct.CommentTag,
+        CommentBlock: ct.CommentTag,
         Subscript: ct.SubscriptTag,
         Superscript: ct.SuperscriptTag,
         "TableDelimiter StrikethroughMark": t.processingInstruction,
@@ -486,8 +447,6 @@ const baseMarkdownExtensions: MarkdownConfig[] = [
         NakedURL: ct.NakedURLTag,
         NamedAnchor: ct.NamedAnchorTag,
         NamedAnchorMark: ct.NamedAnchorMarkTag,
-        AtMention: ct.AtMentionTag,
-        AtMentionMark: ct.AtMentionMarkTag,
       }),
     ],
   },

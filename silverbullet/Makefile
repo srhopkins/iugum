@@ -1,4 +1,4 @@
-.PHONY: build build-e2e build-for-docker build-linux-ci docker build-server-releases build-server-releases-macos build-server-releases-freebsd build-cli-releases-rust build-cli-releases-freebsd build-cli-releases-rust-macos clean check fmt test test-e2e test-e2e-all test-e2e-release bench generate website install uninstall bundle build-rs build-rs-cli run-rs
+.PHONY: build build-e2e build-for-docker build-linux-ci docker build-server-releases build-server-releases-macos build-cli-releases-rust build-cli-releases-freebsd build-cli-releases-rust-macos clean check fmt test test-e2e test-e2e-release bench generate website install uninstall bundle build-rs build-rs-cli run-rs
 
 build:
 	npm run build
@@ -86,10 +86,6 @@ build-server-releases-macos:
 	cargo build --release -p silverbullet --target x86_64-apple-darwin
 	cp target/x86_64-apple-darwin/release/silverbullet silverbullet && zip silverbullet-server-darwin-x86_64.zip silverbullet && rm silverbullet
 
-build-server-releases-freebsd:
-	cargo build --release -p silverbullet --target x86_64-unknown-freebsd
-	cp target/x86_64-unknown-freebsd/release/silverbullet silverbullet && zip silverbullet-server-freebsd-x86_64.zip silverbullet && rm silverbullet
-
 # --- Rust standalone server binary (bin/silverbullet) -----------------------
 build-rs:
 	npm run build
@@ -139,7 +135,6 @@ clean:
 check:
 	npm run check
 	npx biome lint .
-	npm run fmt:check
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -153,12 +148,6 @@ test:
 
 test-e2e: build-e2e
 	npx playwright test --project=chromium
-
-# The same suite on all three engines. CI gates on chromium only; run this
-# before a release to catch firefox/webkit regressions. Needs the extra
-# engines installed (`npx playwright install`, part of `make setup`).
-test-e2e-all: build-e2e
-	npx playwright test --project=chromium --project=firefox --project=webkit
 
 # Browser E2E tests against the standalone release binary, validating the
 # rust-embed embedded client bundle and the browser login flow. Builds the

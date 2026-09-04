@@ -13,10 +13,13 @@ use silverbullet_server_common::space::{
 use silverbullet_server_common::{BootConfig, FileMeta, SpaceError, SpacePrimitives};
 
 use crate::auth::{
-    headless_cookie_name, AuthConfig, Authenticator, HeadlessTokenAuthorizer, JwtAuthorizer,
-    LockoutTimer, LoginManager, RequestAuthorizer,
+    AuthConfig, Authenticator, HeadlessTokenAuthorizer, JwtAuthorizer, LockoutTimer, LoginManager,
+    RequestAuthorizer,
 };
-use crate::multi::access::{SessionPolicy, SpaceUsersAuth, UserTokenAuthorizer};
+use crate::multi::access::{
+    SpaceUsersAuth, UserTokenAuthorizer, USERS_LOCKOUT_LIMIT, USERS_LOCKOUT_TIME_SECS,
+    USERS_REMEMBER_ME_HOURS,
+};
 use crate::multi::config::{Binding, SpaceConfig};
 use crate::multi::users::UserStore;
 use crate::multi::validate::normalize_prefix;
@@ -32,7 +35,7 @@ pub struct AssetFactories {
 
 /// Everything the runtime factory needs to (maybe) build a backend for a space.
 pub struct RuntimeRequest<'a> {
-    pub space_id: &'a str,
+    pub space_folder: &'a str,
     pub server_url: String,
     pub headless_token: &'a str,
     pub read_only: bool,
@@ -62,22 +65,16 @@ pub struct InstanceDeps {
     /// crate supplies the rich `space_template/index.md`; test helpers in
     /// this crate can use any short string.
     pub index_template: String,
-    /// Process-wide shutdown signal, cloned into every instance's
-    /// `ServerState::shutdown`. See that field's doc comment.
-    pub shutdown: Option<tokio::sync::watch::Receiver<()>>,
 }
 
 /// Single-space servers retain their classic environment credentials. An
 /// account-managed multi-space server shares one user store, JWT signing
-/// secret, salt, browser session, and session policy across all of its spaces.
+/// secret, salt, and browser session across all of its spaces.
 pub enum InstanceAuth {
     Single(Option<AuthConfig>),
     Accounts {
         users: Arc<UserStore>,
         authenticator: Arc<Authenticator>,
-        /// Remember-me window and lockout thresholds for every space's
-        /// `/.auth`. Server-wide, like the session it issues.
-        session: SessionPolicy,
     },
 }
 
@@ -194,12 +191,12 @@ pub fn resolve_folder(root: &Path, id: &str, folder: &str) -> PathBuf {
 
 /// Create `<index_page>.md` in `folder` (with `content`) when the space has no
 /// `.md` files yet. Mirrors the single-space binary's former `ensure_index`
-/// exactly: emptiness is decided by a recursive walk (honoring `space_ignore`),
-/// not a shallow `read_dir`, so a space with markdown only in subdirectories
-/// isn't treated as empty. The walk stops at the first `.md` file, so an
-/// already-populated space costs O(1), not a full listing, on every boot. Uses `DiskSpacePrimitives::write_file`
-/// for the actual write so nested index pages (e.g. `notes/index`) get their
-/// parent directories created for free.
+/// exactly: emptiness is decided via a recursive `fetch_file_list()` (honoring
+/// `space_ignore` + any `.gitignore` in the folder), not a shallow
+/// `read_dir`, so a space with markdown only in subdirectories isn't treated
+/// as empty. Uses `DiskSpacePrimitives::write_file` for the actual write so
+/// nested index pages (e.g. `notes/index`) get their parent directories
+/// created for free.
 pub fn seed_index(folder: &Path, index_page: &str, content: &str, space_ignore: &str) {
     let disk = match DiskSpacePrimitives::new(folder, space_ignore) {
         Err(e) => {
@@ -210,8 +207,13 @@ pub fn seed_index(folder: &Path, index_page: &str, content: &str, space_ignore: 
         }
         Ok(disk) => disk,
     };
-    if disk.has_file_with_suffix(".md") {
-        return;
+    match disk.fetch_file_list() {
+        Ok(files) if files.iter().any(|f| f.name.ends_with(".md")) => return,
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("could not check space state: {e}");
+            return;
+        }
     }
     let path = format!("{index_page}.md");
     if let Err(e) = disk.write_file(&path, content.as_bytes(), None) {
@@ -235,7 +237,6 @@ type AuthPair = (
 /// Classic single-space authorizer/login pair: one `AuthConfig` drives both
 /// the JWT authorizer (with its bearer token) and the login manager.
 fn build_env_style_auth(
-    space_id: &str,
     folder: &Path,
     prefix: &str,
     ac: &AuthConfig,
@@ -252,7 +253,6 @@ fn build_env_style_auth(
     ));
     let authorizer: Arc<dyn RequestAuthorizer> = Arc::new(HeadlessTokenAuthorizer::new(
         inner,
-        headless_cookie_name(space_id),
         headless_token.to_string(),
     ));
     let lockout = LockoutTimer::from_config(ac.lockout_time_secs, ac.lockout_limit);
@@ -346,13 +346,12 @@ fn try_build_state(
     let (authorizer, login): AuthPair = match &deps.auth {
         InstanceAuth::Single(None) => (None, None),
         InstanceAuth::Single(Some(config)) => {
-            build_env_style_auth(id, &folder, prefix, config, &headless_token)?
+            build_env_style_auth(&folder, prefix, config, &headless_token)?
         }
         InstanceAuth::Accounts { .. } if config.public => (None, None),
         InstanceAuth::Accounts {
             users: store,
             authenticator,
-            session,
         } => {
             let members: BTreeSet<String> = config.members.keys().cloned().collect();
             let jwt: Box<dyn RequestAuthorizer> = Box::new(JwtAuthorizer::with_filter(
@@ -366,11 +365,8 @@ fn try_build_state(
                 store.clone(),
                 member_name_filter(store.clone(), members.clone()),
             ));
-            let authorizer: Arc<dyn RequestAuthorizer> = Arc::new(HeadlessTokenAuthorizer::new(
-                tokens,
-                headless_cookie_name(id),
-                headless_token.clone(),
-            ));
+            let authorizer: Arc<dyn RequestAuthorizer> =
+                Arc::new(HeadlessTokenAuthorizer::new(tokens, headless_token.clone()));
             let verifier = Arc::new(SpaceUsersAuth {
                 store: store.clone(),
                 members,
@@ -380,8 +376,8 @@ fn try_build_state(
                 LoginManager::new(
                     authenticator.clone(),
                     verifier,
-                    session.remember_me_hours,
-                    session.lockout(),
+                    USERS_REMEMBER_ME_HOURS,
+                    LockoutTimer::from_config(USERS_LOCKOUT_TIME_SECS, USERS_LOCKOUT_LIMIT),
                     prefix.to_string(),
                 )
                 .with_credential_version(Arc::new(move |username| {
@@ -401,7 +397,7 @@ fn try_build_state(
         let server_url = match &config.binding {
             Binding::Prefix { .. } => format!("http://127.0.0.1:{}{prefix}", deps.main_port),
             Binding::Host { .. } => {
-                tracing::debug!("space {id}: runtimeApi unsupported for host bindings, disabled");
+                tracing::warn!("space {id}: runtimeApi unsupported for host bindings, disabled");
                 String::new()
             }
         };
@@ -409,7 +405,7 @@ fn try_build_state(
             None
         } else {
             (deps.runtime)(&RuntimeRequest {
-                space_id: id,
+                space_folder: &folder_str,
                 server_url,
                 headless_token: &headless_token,
                 read_only: config.read_only,
@@ -420,7 +416,6 @@ fn try_build_state(
     };
 
     let shell_enabled = config.shell.enabled && !config.read_only && !deps.shell_disabled;
-    let fs_guard = Arc::new(crate::fs_guard::FsGuard::default());
     Ok(ServerState {
         space,
         client_bundle: (deps.assets.client_bundle)(),
@@ -438,7 +433,6 @@ fn try_build_state(
                 "noop".into()
             },
             disable_service_worker: deps.disable_service_worker,
-            sync_protocol_version: 2,
         },
         space_folder_path: folder_str,
         version: ServerVersion::Static(deps.version.clone()),
@@ -454,14 +448,6 @@ fn try_build_state(
         },
         metrics: deps.metrics.clone(),
         runtime,
-        fs_events: crate::start_watcher(
-            &folder,
-            &config.space_ignore,
-            crate::WatchMode::from_env(),
-            fs_guard.clone(),
-        ),
-        shutdown: deps.shutdown.clone(),
-        fs_guard,
     })
 }
 
@@ -490,7 +476,6 @@ mod tests {
             disable_service_worker: true,
             shell_disabled: false,
             index_template: "# Test space\n".into(),
-            shutdown: None,
         }
     }
 
@@ -547,22 +532,6 @@ mod tests {
         );
         assert_eq!(inst.prefix, "/work");
         assert!(inst.router.is_some());
-    }
-
-    #[test]
-    fn wires_fs_watcher_into_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let deps = test_deps(dir.path());
-        let folder = dir.path().join("spaces/x");
-        std::fs::create_dir_all(&folder).unwrap();
-        let cfg = space(
-            Binding::Prefix {
-                prefix: "/work".into(),
-            },
-            folder.to_str().unwrap(),
-        );
-        let state = try_build_state("x", &cfg, "/work", &deps).unwrap();
-        assert!(state.fs_events.is_some());
     }
 
     #[test]
@@ -705,7 +674,6 @@ mod tests {
         deps.auth = InstanceAuth::Accounts {
             users: store,
             authenticator: Arc::new(Authenticator::from_secret_bytes(vec![8; 32], "v1".into())),
-            session: SessionPolicy::default(),
         };
         let folder = dir.path().join("pub");
         std::fs::create_dir_all(&folder).unwrap();
@@ -751,7 +719,6 @@ mod tests {
         deps.auth = InstanceAuth::Accounts {
             users: store,
             authenticator,
-            session: SessionPolicy::default(),
         };
 
         let folder = dir.path().join("members");
@@ -826,7 +793,6 @@ mod tests {
         deps.auth = InstanceAuth::Accounts {
             users: store.clone(),
             authenticator: authenticator.clone(),
-            session: SessionPolicy::default(),
         };
 
         let cfg = space_users_model(

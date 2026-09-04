@@ -49,11 +49,13 @@ export default function reducer(
       };
     }
     case "update-current-page-meta": {
+      // Update in the allPages list as well
       state.allPages = state.allPages.map((pageMeta) =>
         pageMeta.name === action.meta.name
           ? { ...action.meta, lastOpened: Date.now() }
           : pageMeta,
       );
+      // Can't update page meta if not on a page
       if (!state.current || !isMarkdownPath(state.current.path)) {
         return state;
       }
@@ -71,6 +73,7 @@ export default function reducer(
         isOnline: action.isOnline,
       };
     case "update-page-list": {
+      // Let's move over any "lastOpened" times to the "allPages" list
       const oldPageMeta = new Map(
         [...state.allPages].map((pm) => [pm.name, pm]),
       );
@@ -93,6 +96,43 @@ export default function reducer(
       }
       return newState;
     }
+    case "update-document-list": {
+      return {
+        ...state,
+        allDocuments: action.allDocuments,
+      };
+    }
+    case "start-navigate": {
+      return {
+        ...state,
+        showPageNavigator: true,
+        pageNavigatorMode: action.mode,
+        showCommandPalette: false,
+        showFilterBox: false,
+      };
+    }
+    case "stop-navigate":
+      return {
+        ...state,
+        showPageNavigator: false,
+      };
+
+    case "show-palette": {
+      return {
+        ...state,
+        showCommandPalette: true,
+        showPageNavigator: false,
+        showFilterBox: false,
+        showCommandPaletteContext: action.context,
+        commands: action.commands,
+      };
+    }
+    case "hide-palette":
+      return {
+        ...state,
+        showCommandPalette: false,
+        showCommandPaletteContext: undefined,
+      };
     case "update-commands":
       return {
         ...state,
@@ -124,6 +164,7 @@ export default function reducer(
           [action.id]: {},
         },
       };
+
     case "show-filterbox":
       return {
         ...state,
@@ -137,6 +178,8 @@ export default function reducer(
     case "hide-filterbox":
       return {
         ...state,
+        showCommandPalette: false,
+        showPageNavigator: false,
         showFilterBox: false,
         filterBoxOnSelect: () => {},
         filterBoxPlaceHolder: "",

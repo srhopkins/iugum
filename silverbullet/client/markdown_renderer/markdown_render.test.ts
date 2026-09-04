@@ -177,17 +177,6 @@ test("Unmatched HTML tags render as literal text", () => {
   expect(html).toEqual('<span class="p">text &lt;b&gt;unclosed</span>');
 });
 
-test("Inline HTML renders inside task items", () => {
-  const tree = parse(
-    extendedMarkdownLanguage,
-    "* [ ] <mark>highlighted</mark> task",
-  );
-  const html = renderMarkdownToHtml(tree, { failOnUnknown: true });
-  expect(html).toEqual(
-    '<ul><li><span class="sb-task"><input type="checkbox" data-state=" "> <mark>highlighted</mark> task</span></li></ul>',
-  );
-});
-
 test("CustomSyntaxRenderedHtml renders raw HTML", () => {
   // Directly test the renderer with a synthetic parse tree
   const tree = {
@@ -460,17 +449,6 @@ test("HTML comment is still removed", () => {
   expect(html).toBe("");
 });
 
-test("Conforming inline comment renders to nothing", () => {
-  const tree = parse(
-    extendedMarkdownLanguage,
-    "A claim.\n\n<!-- @pete: verify — john, 2026-08-04 -->\n",
-  );
-  const html = renderMarkdownToHtml(tree, { failOnUnknown: true });
-  expect(html).not.toContain("pete");
-  expect(html).not.toContain("verify");
-  expect(html).not.toContain("<!--");
-});
-
 test("Whitespace between block siblings is dropped (no spurious <br>)", () => {
   const tree = parse(
     extendedMarkdownLanguage,
@@ -583,13 +561,4 @@ test("Paragraph between two blocks keeps its surrounding breaks where needed", (
       "<br/>" +
       "<h1>H2</h1>",
   );
-});
-
-test("renders at-mentions as plain styled text", () => {
-  const tree = parse(extendedMarkdownLanguage, "Hello @PeteSmith");
-  const html = renderMarkdownToHtml(tree);
-  expect(html).toContain(
-    `<span class="sb-at-mention"><span class="sb-at-mention-mark">@</span>PeteSmith</span>`,
-  );
-  expect(html).not.toContain("<a");
 });

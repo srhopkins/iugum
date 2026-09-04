@@ -7,9 +7,7 @@ import { sleep } from "@silverbulletmd/silverbullet/lib/async";
 
 /**
  * Events exposed:
- * - file:changed (string, oldHash, newHash, ownWrite): dispatched from inside
- *   writeFile, before it returns, so ownWrite is a listener's only way to tell
- *   our own write from someone else's.
+ * - file:changed (string, oldHash, newHash)
  * - file:deleted (string)
  * - file:listed (FileMeta[])
  * - file:initial: triggered in case of an initially empty snapshot, after the first set of events has gone out
@@ -201,7 +199,7 @@ export class EventedSpacePrimitives implements SpacePrimitives {
     try {
       const newMeta = await this.wrapped.writeFile(path, data, meta);
       if (this.operationCount === 1) {
-        await this.triggerEventsAndCache(path, newMeta.lastModified, true);
+        await this.triggerEventsAndCache(path, newMeta.lastModified);
       }
       if (path.endsWith(".md")) {
         const pageName = path.substring(0, path.length - 3);
@@ -218,21 +216,14 @@ export class EventedSpacePrimitives implements SpacePrimitives {
   /**
    * @param name
    * @param newHash
-   * @param ownWrite
    * @return whether something changed in the snapshot
    */
-  async triggerEventsAndCache(name: string, newHash: number, ownWrite = false) {
+  async triggerEventsAndCache(name: string, newHash: number) {
     const oldHash = this.spaceSnapshot[name];
     // if (oldHash && newHash && oldHash !== newHash) {
     if (oldHash !== newHash) {
       // Page changed since last cached metadata, trigger event
-      await this.dispatchEvent(
-        "file:changed",
-        name,
-        oldHash,
-        newHash,
-        ownWrite,
-      );
+      await this.dispatchEvent("file:changed", name, oldHash, newHash);
     }
     this.updateInSnapshot(name, newHash);
     await this.saveSnapshot();

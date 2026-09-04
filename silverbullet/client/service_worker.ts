@@ -1,25 +1,24 @@
-import { wrongSpacePathError } from "@silverbulletmd/silverbullet/constants";
-import { throttleImmediately } from "@silverbulletmd/silverbullet/lib/async";
+import { initLogger } from "./lib/logger.ts";
+import { ProxyRouter } from "./service_worker/proxy_router.ts";
+
+import { SyncEngine } from "./service_worker/sync_engine.ts";
+import type {
+  ServiceWorkerSourceMessage,
+  ServiceWorkerTargetMessage,
+} from "./types/ui.ts";
 import {
   deriveDbName,
   exportKey,
   importKey,
 } from "@silverbulletmd/silverbullet/lib/crypto";
-import { EncryptedKvPrimitives } from "./data/encrypted_kv_primitives.ts";
 import { IndexedDBKvPrimitives } from "./data/indexeddb_kv_primitives.ts";
-import type { KvPrimitives } from "./data/kv_primitives.ts";
-import { initLogger } from "./lib/logger.ts";
-import { ProxyRouter } from "./service_worker/proxy_router.ts";
-import { SyncEngine } from "./service_worker/sync_engine.ts";
-import { getOrCreateClientId } from "./spaces/client_id.ts";
 import { fsEndpoint } from "./spaces/constants.ts";
 import { DataStoreSpacePrimitives } from "./spaces/datastore_space_primitives.ts";
 import { HttpSpacePrimitives } from "./spaces/http_space_primitives.ts";
-import { decodeSafetyText } from "./sync_recovery.ts";
-import type {
-  ServiceWorkerSourceMessage,
-  ServiceWorkerTargetMessage,
-} from "./types/ui.ts";
+import { throttleImmediately } from "@silverbulletmd/silverbullet/lib/async";
+import { wrongSpacePathError } from "@silverbulletmd/silverbullet/constants";
+import type { KvPrimitives } from "./data/kv_primitives.ts";
+import { EncryptedKvPrimitives } from "./data/encrypted_kv_primitives.ts";
 
 const logger = initLogger("[Service Worker]");
 
@@ -113,16 +112,7 @@ self.addEventListener("message", async (event: any) => {
     }
     case "perform-file-sync": {
       if (proxyRouter.syncEngine) {
-        proxyRouter.syncEngine.requestFileSync(
-          message.path,
-          message.remoteLastModified !== undefined
-            ? {
-                type: "remote",
-                lastModified: message.remoteLastModified,
-                hash: message.remoteRevisionHash,
-              }
-            : { type: "any" },
-        );
+        await proxyRouter.syncEngine.syncSingleFile(message.path);
       } else {
         console.warn(
           "Ignoring perform-file-sync request, proxy not configured yet",
@@ -133,25 +123,12 @@ self.addEventListener("message", async (event: any) => {
     }
     case "perform-space-sync": {
       if (proxyRouter.syncEngine) {
-        proxyRouter.syncEngine.requestSpaceSync();
+        await proxyRouter.syncEngine.syncSpace();
       } else {
         console.warn(
           "Ignoring perform-space-sync request, proxy not configured yet",
         );
       }
-      break;
-    }
-    case "declare-divergent-base": {
-      await proxyRouter.syncEngine?.declareDivergentBase(
-        message.path,
-        message.baseText,
-      );
-      // The client waits for this before writing the divergent buffer.
-      event.ports[0]?.postMessage({ type: "divergent-base-declared" });
-      break;
-    }
-    case "realtime-status": {
-      proxyRouter.syncEngine?.notifyRealtimeStatus(message.connected);
       break;
     }
     case "get-encryption-key": {
@@ -167,33 +144,6 @@ self.addEventListener("message", async (event: any) => {
       encryptionKeyMemoryStore = await importKey(message.key);
       console.info("Encryption phrase set");
       event.ports[0]?.postMessage({ type: "encryption-key-set" });
-      break;
-    }
-    case "list-safety": {
-      const raw = (await proxyRouter.syncEngine?.listSafety()) ?? [];
-      const entries = await Promise.all(
-        raw.map(async (entry) => {
-          const data = await proxyRouter.syncEngine?.getSafety(entry.hash);
-          return {
-            ...entry,
-            binary: data ? decodeSafetyText(data) === null : true,
-          };
-        }),
-      );
-      event.source.postMessage({
-        type: "safety-list",
-        entries,
-      } as ServiceWorkerSourceMessage);
-      break;
-    }
-    case "get-safety": {
-      const data =
-        (await proxyRouter.syncEngine?.getSafety(message.hash)) ?? null;
-      event.source.postMessage({
-        type: "safety-content",
-        hash: message.hash,
-        data,
-      } as ServiceWorkerSourceMessage);
       break;
     }
     case "config": {
@@ -266,8 +216,6 @@ self.addEventListener("message", async (event: any) => {
         // And use that to power the IndexedDB backed local storage
         const local = new DataStoreSpacePrimitives(kv);
 
-        const clientId = await getOrCreateClientId(kv);
-
         // Which we'll sync with the remote server
         const remote = new HttpSpacePrimitives(
           basePathName + fsEndpoint,
@@ -288,9 +236,6 @@ self.addEventListener("message", async (event: any) => {
               actionOrRedirectHeader,
             });
           },
-          undefined,
-          clientId,
-          "sync",
         );
 
         // Now let's setup sync
@@ -308,7 +253,7 @@ self.addEventListener("message", async (event: any) => {
         proxyRouter.on({
           observedRequest: (path) => {
             // This is triggered for the currently open file, we want to proactively sync it to keep it up to date
-            syncEngine.requestFileSync(path, { type: "probe" });
+            void syncEngine.syncSingleFile(path);
           },
           onlineStatusUpdated: (isOnline) => {
             broadcastMessage({
@@ -328,12 +273,6 @@ self.addEventListener("message", async (event: any) => {
             console.warn("Sync conflict detected:", path);
             broadcastMessage({
               type: "sync-conflict",
-              path,
-            });
-          },
-          suppressedDeletion: (path) => {
-            broadcastMessage({
-              type: "suppressed-deletion",
               path,
             });
           },

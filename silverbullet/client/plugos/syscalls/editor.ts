@@ -72,7 +72,6 @@ import type {
   FilterOption,
   NotificationAction,
   NotificationType,
-  PanelMode,
   UploadFile,
 } from "@silverbulletmd/silverbullet/type/client";
 import type { VimConfig } from "@silverbulletmd/silverbullet/type/config";
@@ -80,9 +79,6 @@ import type { PageMeta } from "@silverbulletmd/silverbullet/type/index";
 import { updateBakedSections } from "../../baked_sections/bake.ts";
 import type { Client } from "../../client.ts";
 import { refreshLintEffect } from "../../codemirror/lint.ts";
-import { isNarrowScreen } from "../../lib/mobile.ts";
-import { hide as hideNavigatorSlot } from "../../navigator/navigator.ts";
-import type { PanelSlot } from "../../types/ui.ts";
 import { getVimModule } from "../../vim_loader.ts";
 import type { SysCallMapping } from "../system.ts";
 
@@ -140,40 +136,6 @@ export function editorSyscalls(client: Client): SysCallMapping {
       description:
         "Returns page metadata ordered from most to least recently opened.",
       returns: [{ type: "PageMeta[]", description: "Recently opened pages." }],
-    },
-    "editor.getLastOpenedMap": {
-      callback: (): Record<string, number> => {
-        const out: Record<string, number> = {};
-        for (const pageMeta of client.ui.viewState.allPages) {
-          if (pageMeta.lastOpened) out[pageMeta.name] = pageMeta.lastOpened;
-        }
-        return out;
-      },
-      description: `Returns a map of page name to the time it was last opened (epoch milliseconds), for the pages that have ever been opened on this client. This lives outside the object index.`,
-      returns: [
-        {
-          type: "Record<string, number>",
-          description: "Page name to last-opened timestamp.",
-        },
-      ],
-    },
-    "editor.getViewableExtensions": {
-      callback: (): string[] => {
-        return [
-          ...new Set(
-            Array.from(
-              client.clientSystem.documentEditorHook.documentEditors.values(),
-            ).flatMap(({ extensions }) => extensions),
-          ),
-        ];
-      },
-      description: `Returns the file extensions that have a document editor registered, i.e. the documents this client can actually open. Extensions carry no leading dot. Which editors are loaded depends on the plugs installed, so this is a property of the client rather than of the space.`,
-      returns: [
-        {
-          type: "string[]",
-          description: "Extensions with a registered document editor.",
-        },
-      ],
     },
     "editor.getText": {
       callback: () => {
@@ -391,6 +353,9 @@ export function editorSyscalls(client: Client): SysCallMapping {
         },
       ],
     },
+    // Re-evaluate every baked section on the current page and rewrite each body
+    // with its latest output (same as the "Baked Sections: Update" command),
+    // exposed for programmatic use.
     "editor.updateBakedSections": {
       callback: (): Promise<void> => {
         return updateBakedSections(client);
@@ -629,17 +594,13 @@ export function editorSyscalls(client: Client): SysCallMapping {
       ],
     },
     "editor.showPanel": {
-      callback: async (
+      callback: (
         _ctx,
         id: string,
-        mode: PanelMode,
+        mode: number,
         html: HTMLElement | HTMLElement[] | string,
         script: string,
       ) => {
-        // The other half of "one modal at a time" (see editor_ui.tsx): a plug
-        // opening the modal closes the navigator's, rather than landing
-        // underneath it.
-        if (id === "modal") await hideNavigatorSlot(id);
         client.ui.viewDispatch({
           type: "show-panel",
           id: id as any,
@@ -659,7 +620,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
         },
         {
           name: "mode",
-          type: "number | string",
+          type: "number",
           description: "The panel display mode or size.",
         },
         {
@@ -680,33 +641,8 @@ export function editorSyscalls(client: Client): SysCallMapping {
       },
       description: "Returns focus to the main editor.",
     },
-    "editor.getFocusedPanelSlot": {
-      callback: (): PanelSlot | undefined => {
-        const active = document.activeElement;
-        if (!(active instanceof HTMLIFrameElement)) return undefined;
-        const slot = active.dataset.slot;
-        return slot === "lhs" ||
-          slot === "rhs" ||
-          slot === "bhs" ||
-          slot === "modal"
-          ? slot
-          : undefined;
-      },
-      description:
-        "Returns the slot of the panel (keyed or legacy) whose iframe currently holds focus, or undefined if none does.",
-      returns: [
-        {
-          type: '"lhs" | "rhs" | "bhs" | "modal" | undefined',
-          description:
-            "The focused panel's slot, or undefined if no panel iframe has focus.",
-        },
-      ],
-    },
     "editor.hidePanel": {
-      callback: async (_ctx, id: string) => {
-        // The navigator owns this slot whenever it is the thing showing
-        // there, so "hide the panel at this location" has to reach it too.
-        await hideNavigatorSlot(id);
+      callback: (_ctx, id: string) => {
         client.ui.viewDispatch({
           type: "hide-panel",
           id: id as any,
@@ -728,24 +664,25 @@ export function editorSyscalls(client: Client): SysCallMapping {
     "editor.showProgress": {
       callback: (
         _ctx,
-        progressType: "sync" | "index",
         progressPercentage?: number,
+        progressType?: "sync" | "index",
       ) => {
-        client.ui.showProgress(progressType, progressPercentage);
+        client.ui.showProgress(progressPercentage, progressType);
       },
       description:
         "Shows, updates, or hides a sync or indexing progress indicator.",
       parameters: [
         {
-          name: "progressType",
-          type: "sync | index",
-          description: "The operation represented by the indicator.",
-        },
-        {
           name: "progressPercentage",
           type: "number",
           description:
             "Completion percentage, or undefined to hide the indicator.",
+          optional: true,
+        },
+        {
+          name: "progressType",
+          type: "sync | index",
+          description: "The operation represented by the indicator.",
           optional: true,
         },
       ],
@@ -891,8 +828,11 @@ export function editorSyscalls(client: Client): SysCallMapping {
     },
     "editor.moveCursorToLine": {
       callback: (_ctx, line: number, column = 1, center = false) => {
+        // CodeMirror already keeps information about lines
         const cmLine = client.editorView.state.doc.line(line);
+        // How much to move inside the line, column number starts from 1
         const offset = Math.max(0, Math.min(cmLine.length, column - 1));
+        // Just reuse the implementation above
         const moveCursor = syscalls["editor.moveCursor"];
         const moveCursorCallback =
           typeof moveCursor === "function" ? moveCursor : moveCursor.callback;
@@ -1128,30 +1068,44 @@ export function editorSyscalls(client: Client): SysCallMapping {
           throw new Error("Vim module not loaded.");
         }
         const { Vim } = vimMod;
+        // Override the default "o" binding to be more intelligent and follow the markdown editor's behavior
         Vim.mapCommand("o", "action", "newline-continue-markup", {}, {});
         Vim.mapCommand("O", "action", "back-newline-continue-markup", {}, {});
         Vim.unmap("<C-q>", undefined as any);
         Vim.defineAction("newline-continue-markup", (cm) => {
+          // Append at end of line
           Vim.handleKey(cm, "A", "+input");
+          // Insert newline continuing markup where appropriate
           insertNewlineContinueMarkup(client.editorView) ||
             insertNewlineAndIndent(client.editorView);
         });
         Vim.defineAction("back-newline-continue-markup", (cm) => {
+          // Determine current line
           const pos = client.editorView.state.selection.main.from;
           const line = client.editorView.state.doc.lineAt(pos).number;
           if (line === 1) {
+            // We're on the top line
+            // Go to 0:0
             Vim.handleKey(cm, "0", "+input");
+            // Insert a newline
             insertNewline(client.editorView);
+            // Go up to the new line
             Vim.handleKey(cm, "k", "+input");
+            // Into insert mode
             Vim.handleKey(cm, "i", "+input");
           } else {
+            // We're elsewhere in the document
+            // Go up
             Vim.handleKey(cm, "k", "+input");
+            // Append mode at the end of the line
             Vim.handleKey(cm, "A", "+input");
+            // Insert a newline using the continue markup thing
             insertNewlineContinueMarkup(client.editorView) ||
               insertNewlineAndIndent(client.editorView);
           }
         });
 
+        // Load the config if any
         const config = client.config.get<VimConfig>("vim", {});
         if (config) {
           config.unmap?.forEach((binding) => {
@@ -1189,9 +1143,9 @@ export function editorSyscalls(client: Client): SysCallMapping {
     },
     "editor.openPageNavigator": {
       callback: (_ctx, mode: "page" | "meta" | "document" | "all" = "page") => {
-        void client.startPageNavigate(mode);
+        client.startPageNavigate(mode);
       },
-      description: `Opens the page picker in the requested browsing mode. Each mode maps to a segment of the \`std.pages\` navigator view.`,
+      description: "Opens the page navigator in the requested browsing mode.",
       parameters: [
         {
           name: "mode",
@@ -1206,30 +1160,6 @@ export function editorSyscalls(client: Client): SysCallMapping {
         void client.startCommandPalette();
       },
       description: "Opens the command palette.",
-    },
-    "editor.openNavigator": {
-      callback: (
-        _ctx,
-        name: string,
-        opts?: {
-          segment?: string;
-          phrase?: string;
-          dropdown?: unknown;
-          focus?: boolean;
-        },
-      ) => client.openNavigatorView(name, opts),
-      description: `Opens a navigator view, returning whether it opened. False means the view isn't there to open -- typically because it's defined in Space Lua that hasn't been indexed yet -- so a caller can fall back to something else.`,
-      parameters: [
-        { name: "name", type: "string", description: "The view's name." },
-        {
-          name: "opts",
-          type: "table",
-          description:
-            "Optional `segment` (segment label), `phrase`, `dropdown` (dropdown value to select), and `focus` (`false` opens without taking focus).",
-          optional: true,
-        },
-      ],
-      returns: [{ type: "boolean", description: "Whether a view opened." }],
     },
     "editor.deleteLine": {
       callback: () => {
@@ -1292,6 +1222,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       },
       description: "Moves the current line or selected lines downward.",
     },
+    // Folding
     "editor.fold": {
       callback: () => {
         foldCode(client.editorView);
@@ -1334,6 +1265,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       },
       description: "Redoes the most recently undone editor change.",
     },
+    // Cursor motion syscalls
     "editor.cursorCharLeft": {
       callback: () => cursorCharLeft(client.editorView),
       description:
@@ -1378,6 +1310,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       callback: () => cursorDocEnd(client.editorView),
       description: "Moves the cursor to the end of the document.",
     },
+    // Cursor motions that also navigate the completion popup if it's open
     "editor.cursorLineUp": {
       callback: () => {
         const view = client.editorView;
@@ -1414,6 +1347,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       description:
         "Moves completion selection down one page when open, otherwise moves the cursor down one viewport page.",
     },
+    // Selection-extending motions
     "editor.selectCharLeft": {
       callback: () => selectCharLeft(client.editorView),
       description:
@@ -1477,6 +1411,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       callback: () => selectPageDown(client.editorView),
       description: "Extends the selection downward by one viewport page.",
     },
+    // Delete
     "editor.deleteCharBackward": {
       callback: () => deleteCharBackward(client.editorView),
       description: "Deletes the selection or the character before the cursor.",
@@ -1509,6 +1444,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       callback: () => transposeChars(client.editorView),
       description: "Transposes the characters around the cursor.",
     },
+    // Enter: accept completion if popup is open, else newline-and-indent
     "editor.insertNewline": {
       callback: () => {
         const view = client.editorView;
@@ -1518,6 +1454,7 @@ export function editorSyscalls(client: Client): SysCallMapping {
       description:
         "Accepts the active completion, or inserts a newline with appropriate indentation.",
     },
+    // Completion popup control
     "editor.acceptCompletion": {
       callback: () => acceptCompletion(client.editorView),
       description:
@@ -1603,23 +1540,6 @@ export function editorSyscalls(client: Client): SysCallMapping {
           type: "boolean",
           description:
             "Whether the editor is running in a mobile-style pointer environment.",
-        },
-      ],
-    },
-
-    // Deliberately separate from `editor.isMobile`: that one answers "what
-    // kind of pointer is this", which is the right question for touch
-    // affordances and the wrong one for layout. A narrow window on a desktop
-    // gets the narrow layout with a mouse attached; a tablet in landscape gets
-    // the wide one without.
-    "editor.isNarrowScreen": {
-      callback: () => isNarrowScreen(),
-      description:
-        "Checks whether the client is currently laid out for a narrow screen, i.e. below the breakpoint where sidebar panels become full-width drawers.",
-      returns: [
-        {
-          type: "boolean",
-          description: "Whether the narrow-screen layout is in effect.",
         },
       ],
     },

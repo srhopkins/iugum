@@ -1,15 +1,15 @@
+import { fsEndpoint } from "../spaces/constants.ts";
+import { decodePageURI } from "@silverbulletmd/silverbullet/lib/ref";
+import type { SpacePrimitives } from "../spaces/space_primitives.ts";
+import { fileMetaToHeaders, headersToFileMeta } from "../lib/util.ts";
 import {
   isNetworkError,
   notFoundError,
   offlineError,
   pingInterval,
 } from "@silverbulletmd/silverbullet/constants";
-import { decodePageURI } from "@silverbulletmd/silverbullet/lib/ref";
-import { fileMetaToHeaders, headersToFileMeta } from "../lib/util.ts";
-import { EventEmitter } from "../plugos/event.ts";
-import { fsEndpoint } from "../spaces/constants.ts";
-import type { SpacePrimitives } from "../spaces/space_primitives.ts";
 import type { SyncEngine } from "./sync_engine.ts";
+import { EventEmitter } from "../plugos/event.ts";
 
 // The server surfaces every space carries under its own base path. This worker
 // can answer exactly two of them for its OWN space — `.client` from the
@@ -17,32 +17,31 @@ import type { SyncEngine } from "./sync_engine.ts";
 // rest. Both lists below derive from this one, so a new surface is declared
 // once instead of being kept in sync by hand.
 const spaceSurfaces = [
-  "/.client",
-  "/.fs",
-  "/.events",
-  "/.auth",
-  "/.config",
-  "/.logout",
-  "/.shell",
-  "/.proxy",
-  "/.logs",
+  "client",
+  "fs",
+  "auth",
+  "config",
+  "logout",
+  "shell",
+  "proxy",
+  "logs",
 ];
-const locallyServed = ["/.client", "/.fs"];
+const locallyServed = ["client", "fs"];
 
 // Always straight to the server: the space surfaces we have no local answer
 // for, plus the server-wide ones, which only ever exist at the origin root.
 // Matched as a prefix of the *space-relative* path.
 const alwaysProxy = [
-  ...spaceSurfaces.filter((surface) => !locallyServed.includes(surface)),
+  ...spaceSurfaces
+    .filter((surface) => !locallyServed.includes(surface))
+    .map((surface) => `/.${surface}`),
   "/.spaces",
   "/.setup",
   "/.instance",
 ];
 
 const anotherSpaceSurface = new RegExp(
-  `/[^/]+/\\.(${spaceSurfaces
-    .map((surface) => surface.slice("/.".length))
-    .join("|")})(/|$)`,
+  `/[^/]+/\\.(${spaceSurfaces.join("|")})(/|$)`,
 );
 
 /**
@@ -420,7 +419,30 @@ export class ProxyRouter extends EventEmitter<ProxyRouterEvents> {
           // Note: there are going to be many cases where no meta is supplied in the request, this is ok, in that case this argument will be undefined
           headersToFileMeta(path, request.headers),
         );
-        this.syncEngine.requestFileSync(path, { type: "local" });
+        // Attempt immediate sync
+        try {
+          const operations = await this.syncEngine.syncSingleFile(path);
+          if (operations === -1) {
+            console.info("File sync delayed for", path);
+            // Sync was in progress, will sync later
+            return new Response("Delayed", {
+              status: 202,
+              headers: fileMetaToHeaders(meta),
+            });
+          }
+        } catch (e: any) {
+          console.error(
+            "File sync delayed for",
+            path,
+            "due to error",
+            e.message,
+          );
+          // Sync failed (could be offline or other reason)
+          return new Response(e.message, {
+            status: 202,
+            headers: fileMetaToHeaders(meta),
+          });
+        }
 
         return new Response("OK", {
           status: 200,

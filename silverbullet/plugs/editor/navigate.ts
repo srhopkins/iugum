@@ -1,9 +1,9 @@
-import { parseToRef } from "@silverbulletmd/silverbullet/lib/ref";
 import {
-  isLocalURL,
-  resolveMarkdownLink,
-} from "@silverbulletmd/silverbullet/lib/resolve";
-import { extractHashtag } from "@silverbulletmd/silverbullet/lib/tags";
+  config,
+  editor,
+  markdown,
+  space,
+} from "@silverbulletmd/silverbullet/syscalls";
 import {
   addParentPointers,
   collectNodesOfType,
@@ -11,17 +11,15 @@ import {
   findParentMatching,
   nodeAtPos,
   type ParseTree,
-  renderToText,
 } from "@silverbulletmd/silverbullet/lib/tree";
 import {
-  config,
-  editor,
-  markdown,
-  space,
-  system,
-} from "@silverbulletmd/silverbullet/syscalls";
-import type { ClickEvent } from "@silverbulletmd/silverbullet/type/client";
+  isLocalURL,
+  resolveMarkdownLink,
+} from "@silverbulletmd/silverbullet/lib/resolve";
+import { parseToRef } from "@silverbulletmd/silverbullet/lib/ref";
 import { tagPrefix } from "../index/constants.ts";
+import type { ClickEvent } from "@silverbulletmd/silverbullet/type/client";
+import { extractHashtag } from "@silverbulletmd/silverbullet/lib/tags";
 
 async function actionClickOrActionEnter(
   mdTree: ParseTree | null,
@@ -38,7 +36,6 @@ async function actionClickOrActionEnter(
       "Autolink",
       "NakedURL",
       "Hashtag",
-      "AtMention",
       "FootnoteRef",
     ].includes(t.type!);
   if (!navigationNodeFinder(mdTree)) {
@@ -114,26 +111,6 @@ async function actionClickOrActionEnter(
         false,
         inNewWindow,
       );
-      break;
-    }
-    case "AtMention": {
-      const nickname = renderToText(mdTree).slice(1);
-      const result = await system.invokeFunction(
-        "index.resolveRecipient",
-        nickname,
-      );
-      // Every mention resolves: a nickname claimed by a page navigates
-      // there, and either way the Mention Inbox opens filtered on the
-      // recipient, without pulling focus out of the editor.
-      if (result.page) {
-        await editor.navigate(result.page, false, inNewWindow);
-      }
-      await editor.openNavigator("inbox", {
-        // Mentions group by recipient, not by spelling: the page is the key
-        // for anyone who has one.
-        dropdown: result.page ?? result.target,
-        focus: false,
-      });
       break;
     }
     case "FootnoteRef": {

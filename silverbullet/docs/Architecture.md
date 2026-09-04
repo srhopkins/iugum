@@ -23,4 +23,3 @@ ${query[[
   order by p.name
   select templates.pageItem(p)
 ]]}
-

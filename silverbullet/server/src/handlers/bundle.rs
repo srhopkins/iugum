@@ -244,12 +244,12 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::auth::{AuthContext, AuthOutcome, RequestAuthorizer};
+    use crate::auth::{AuthContext, RequestAuthorizer};
 
     struct Deny;
     impl RequestAuthorizer for Deny {
-        fn authorize(&self, _ctx: &AuthContext) -> Option<AuthOutcome> {
-            None
+        fn is_authorized(&self, _ctx: &AuthContext) -> bool {
+            false
         }
     }
 

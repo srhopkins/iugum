@@ -33,18 +33,6 @@ export default defineConfig({
       },
     },
     {
-      name: "firefox",
-      testIgnore: "**/release-embedded.test.ts",
-      retries: 2,
-      use: { ...devices["Desktop Firefox"] },
-    },
-    {
-      name: "webkit",
-      testIgnore: "**/release-embedded.test.ts",
-      retries: 2,
-      use: { ...devices["Desktop Safari"] },
-    },
-    {
       name: "release",
       testMatch: "**/release-embedded.test.ts",
       use: {

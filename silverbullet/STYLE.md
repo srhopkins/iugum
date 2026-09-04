@@ -94,13 +94,9 @@ export function listPages(unfiltered?: boolean): Promise<PageMeta[]> {
 }
 ```
 
-Inline comments: write one only when it definitely earns its place: a non-obvious _why_, a constraint not visible in the code, a workaround for an external bug, or a subtle ordering/safety requirement. 
-
-Don't:
-* restate what the code already says, or narrate a function's steps
-* write a doc comment that only repeats the signature
-* explain what a better name or an extracted function would make obvious
-
+Inline comments:
+* In case of doubt: add comments around the _why_ of the code (not what)
+* Add TODO comments for known issues
 
 ```typescript
 // Note: these events are dispatched asynchronously (not waiting for results)

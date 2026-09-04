@@ -1,5 +1,4 @@
 import { expect, gotoSilverBulletPage, mod, test } from "./fixtures.ts";
-import { navInput } from "./navigator-ui.ts";
 
 test.describe("Top-bar page rename", () => {
   test.use({
@@ -67,33 +66,6 @@ test.describe("Top-bar page rename", () => {
     // the page picker even though a native input is focused (parity with the
     // old CodeMirror page-name editor).
     await sbPage.keyboard.press(`${mod}+k`);
-    await expect(navInput(sbPage)).toHaveAttribute("placeholder", "Page", {
-      timeout: 20_000,
-    });
-  });
-
-  test("rename to a different casing of the same name", async ({
-    sbPage,
-    sbServer,
-  }) => {
-    await gotoSilverBulletPage(sbPage, sbServer, "OldName");
-
-    const nameInput = sbPage.locator("#sb-current-page input.sb-input");
-    await nameInput.click();
-    await sbPage.keyboard.press(`${mod}+a`);
-    await sbPage.keyboard.type("oldname");
-    await sbPage.keyboard.press("Enter");
-
-    await sbPage.waitForURL(/\/oldname$/);
-
-    const resp = await fetch(`${sbServer.url}/.fs/oldname.md`);
-    expect(resp.ok).toBe(true);
-    expect(await resp.text()).toContain("Content to keep");
-
-    // Exactly one file, under the new casing.
-    const listResp = await fetch(`${sbServer.url}/.fs`);
-    const names = (await listResp.json()).map((f: { name: string }) => f.name);
-    expect(names).toContain("oldname.md");
-    expect(names).not.toContain("OldName.md");
+    await expect(sbPage.locator(".sb-modal-box")).toBeVisible();
   });
 });

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { cp, rm } from "node:fs/promises";
+import { cp } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
@@ -24,8 +24,7 @@ export async function buildPlugsAndLibraries(options?: {
   mkdirSync(targetDir, { recursive: true });
   mkdirSync("dist", { recursive: true });
 
-  await rm(`${plugBundlePath}/Library`, { recursive: true, force: true });
-  await rm(`${plugBundlePath}/Repositories`, { recursive: true, force: true });
+  // Copy Library files
   await cp("libraries/Library", `${plugBundlePath}/Library`, {
     recursive: true,
   });
@@ -33,6 +32,7 @@ export async function buildPlugsAndLibraries(options?: {
     recursive: true,
   });
 
+  // Build the plugs
   await compileManifests(manifests, targetDir, {
     debug: options?.debug,
     info: options?.info,

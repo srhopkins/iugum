@@ -1,10 +1,4 @@
 import {
-  acceptCompletion,
-  closeCompletion,
-  moveCompletionSelection,
-  startCompletion,
-} from "@codemirror/autocomplete";
-import {
   cursorCharLeft,
   cursorCharRight,
   cursorDocEnd,
@@ -48,24 +42,23 @@ import {
   transposeChars,
   undo,
 } from "@codemirror/commands";
+import {
+  acceptCompletion,
+  closeCompletion,
+  moveCompletionSelection,
+  startCompletion,
+} from "@codemirror/autocomplete";
 import { openSearchPanel } from "@codemirror/search";
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import type { FilterOption } from "@silverbulletmd/silverbullet/type/client";
+import { reloadAllWidgets } from "./codemirror/code_widget.ts";
+import { broadcastReload } from "./components/widget_sandbox_iframe.ts";
+import type { Client } from "./client.ts";
+import type { CommandHook } from "./plugos/hooks/command.ts";
 import {
   unbakeSectionAtCursor,
   updateBakedSections,
 } from "./baked_sections/bake.ts";
-import type { Client } from "./client.ts";
-import { reloadAllWidgets } from "./codemirror/code_widget.ts";
-import { broadcastReload } from "./components/widget_sandbox_iframe.ts";
-import type { CommandHook } from "./plugos/hooks/command.ts";
-import {
-  decodeSafetyText,
-  formatSafetyLabel,
-  requestSafetyContent,
-  requestSafetyList,
-} from "./sync_recovery.ts";
 
 /**
  * Block widgets (queries, tables, …) hide their multi-line source via
@@ -106,7 +99,15 @@ function withCollapsedBlockSnap(
 }
 
 /**
- * Registers client-side editor commands with the CommandHook.
+ * Registers client-side editor commands with the CommandHook. These were
+ * previously defined in the editor plug; moving them into the client makes
+ * them synchronous (no async round-trip through the plug Web Worker) and
+ * avoids losing key events when the user types faster than the worker
+ * responds. They are still exposed through the official command mechanism
+ * so Lua scripts can rebind them.
+ *
+ * The `hook` is passed explicitly because this runs from inside the
+ * `ClientSystem` constructor, before `client.clientSystem` has been assigned.
  */
 export function registerEditorCommands(
   client: Client,
@@ -114,6 +115,7 @@ export function registerEditorCommands(
 ): void {
   const view = () => client.editorView;
 
+  // Enter: accept completion if popup is open, else newline-and-indent
   hook.registerCommand({
     name: "Editor: Insert Newline",
     key: "Enter",
@@ -128,6 +130,7 @@ export function registerEditorCommands(
     },
   });
 
+  // Delete
   hook.registerCommand({
     name: "Editor: Delete Char Backward",
     key: ["Backspace", "Ctrl-h"],
@@ -190,6 +193,7 @@ export function registerEditorCommands(
     run: async () => transposeChars(view()),
   });
 
+  // Cursor motions
   hook.registerCommand({
     name: "Editor: Cursor Char Left",
     key: "ArrowLeft",
@@ -319,6 +323,7 @@ export function registerEditorCommands(
     },
   });
 
+  // Selection-extending motions
   hook.registerCommand({
     name: "Editor: Select Char Left",
     key: "Shift-ArrowLeft",
@@ -427,6 +432,7 @@ export function registerEditorCommands(
     run: async () => selectPageDown(view()),
   });
 
+  // Selection / indentation
   hook.registerCommand({
     name: "Editor: Select All",
     key: "Ctrl-a",
@@ -446,6 +452,7 @@ export function registerEditorCommands(
     requireEditor: "page",
     run: async () => {
       const v = view();
+      // Accept completion popup suggestion if open, else indent
       if (acceptCompletion(v)) return true;
       return indentMore({ state: v.state, dispatch: v.dispatch });
     },
@@ -462,6 +469,7 @@ export function registerEditorCommands(
     },
   });
 
+  // Undo / redo
   hook.registerCommand({
     name: "Editor: Undo",
     key: "Ctrl-z",
@@ -481,6 +489,7 @@ export function registerEditorCommands(
     run: async () => redo(view()),
   });
 
+  // Delete line
   hook.registerCommand({
     name: "Delete Line",
     key: "Ctrl-d",
@@ -489,6 +498,7 @@ export function registerEditorCommands(
     run: async () => deleteLine(view()),
   });
 
+  // Completion popup
   hook.registerCommand({
     name: "Editor: Start Completion",
     key: "Ctrl-Space",
@@ -511,10 +521,7 @@ export function registerEditorCommands(
     key: "Ctrl-/",
     mac: "Cmd-/",
     menu: { location: "file", group: "3_palette", label: "Command Palette..." },
-    run: async () => {
-      await client.startCommandPalette();
-      return false;
-    },
+    run: async () => client.startCommandPalette(),
   });
   hook.registerCommand({
     name: "Navigate: Page Picker",
@@ -524,10 +531,7 @@ export function registerEditorCommands(
       { location: "file", group: "1_new", order: 2, label: "Open Page..." },
       { location: "navigate", group: "2_picker", order: 1, label: "Page..." },
     ],
-    run: async () => {
-      await client.startPageNavigate("page");
-      return false;
-    },
+    run: async () => client.startPageNavigate("page"),
   });
   hook.registerCommand({
     name: "Navigate: Meta Picker",
@@ -540,13 +544,12 @@ export function registerEditorCommands(
       order: 4,
       label: "Meta Page...",
     },
-    run: async () => {
-      await client.startPageNavigate("meta");
-      return false;
-    },
+    run: async () => client.startPageNavigate("meta"),
   });
   hook.registerCommand({
     name: "Navigate: Document Picker",
+    key: "Ctrl-o",
+    mac: "Cmd-o",
     priority: 2,
     menu: [
       { location: "file", group: "1_new", order: 3, label: "Open Document..." },
@@ -557,17 +560,11 @@ export function registerEditorCommands(
         label: "Document...",
       },
     ],
-    run: async () => {
-      await client.startPageNavigate("document");
-      return false;
-    },
+    run: async () => client.startPageNavigate("document"),
   });
   hook.registerCommand({
     name: "Navigate: Anything Picker",
-    run: async () => {
-      await client.startPageNavigate("all");
-      return false;
-    },
+    run: async () => client.startPageNavigate("all"),
   });
   hook.registerCommand({
     name: "Editor: Find in Page",
@@ -618,75 +615,6 @@ export function registerEditorCommands(
     run: () => {
       unbakeSectionAtCursor(client);
       return Promise.resolve();
-    },
-  });
-  hook.registerCommand({
-    name: "Sync: Recover Stale Revision",
-    requireMode: "rw",
-    requireEditor: "page",
-    run: async () => {
-      if (!globalThis.navigator?.serviceWorker?.controller) {
-        client.ui.flashNotification(
-          "Sync recovery requires the service worker to be active",
-          "error",
-        );
-        return;
-      }
-      const entries = await requestSafetyList(client);
-      if (entries === undefined) {
-        client.ui.flashNotification("Sync engine did not respond", "error");
-        return;
-      }
-      if (entries.length === 0) {
-        client.ui.flashNotification("No stale revisions found");
-        return;
-      }
-      const options: FilterOption[] = entries.map((entry) => ({
-        name: formatSafetyLabel(entry),
-        hash: entry.hash,
-        binary: entry.binary,
-      }));
-      const selected = await client.ui.filterBox(
-        "Recover stale revision",
-        options,
-        "Select a stale revision to insert into the current page",
-      );
-      if (!selected) {
-        return;
-      }
-      if (selected.binary) {
-        client.ui.flashNotification(
-          "This revision is binary and can't be inserted as text",
-          "error",
-        );
-        return;
-      }
-      const data = await requestSafetyContent(client, selected.hash);
-      if (data === undefined) {
-        client.ui.flashNotification("Sync engine did not respond", "error");
-        return;
-      }
-      if (!data) {
-        client.ui.flashNotification(
-          "Could not load the selected revision",
-          "error",
-        );
-        return;
-      }
-      const text = decodeSafetyText(data);
-      if (text === null) {
-        client.ui.flashNotification(
-          "This revision is binary and can't be inserted as text",
-          "error",
-        );
-        return;
-      }
-      const from = view().state.selection.main.from;
-      view().dispatch({
-        changes: { insert: text, from },
-        selection: { anchor: from + text.length },
-      });
-      client.focus();
     },
   });
 }

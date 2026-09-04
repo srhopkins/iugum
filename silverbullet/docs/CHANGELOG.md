@@ -1,34 +1,8 @@
 An attempt at documenting the changes/new features introduced in each release.
 
 ## Edge
-Whenever a commit is pushed to the `main` branch, within ~10 minutes, it will be released as a docker image with the `:v2` tag, and a binary in the [edge release](https://github.com/silverbulletmd/silverbullet/releases/tag/edge). If you want to live on the bleeding edge of SilverBullet goodness (or regression) this is where to do it.
+Whenever a commit is pushed to the `main` branch, within ~5 minutes, it will be released as a docker image with the `:v2` tag, and a binary in the [edge release](https://github.com/silverbulletmd/silverbullet/releases/tag/edge). If you want to live on the bleeding edge of SilverBullet goodness (or regression) this is where to do it.
 
-* Beginnings of more solid [[Collaboration]] functionality, comprising of a few improvements/features:
-  * **Near real-time sync**: changes made to pages are now synced (and will appear in other clients) within ~2-3s.
-  * **Near real-time content updates**: if multiple clients/process edit the same page, SilverBullet will do its best to reconcile those changes with local ones. In cases of unresolvable conflicts a new _conflict widget_ will show helping you to resolve the conflict.
-  * **At-mentions and Recipients** ([[Recipient]]): mention people, teams, or anything else with `@nickname`. Mentions are indexed, autocompleted, and listed in a Mention Inbox sidebar (${widgets.commandButton("Navigate: Mentions")}). 
-  * **HTML comments are now parsed as markdown** ([[Markdown/Comment]]): the body of a `<!-- ... -->` block is now parsed and rendered as ordinary markdown. This enables a communication channel (likely using [[Recipient|recipients]]) to communicate between team members.
-* **Completely revamped [[Navigator]] UX (includes a file tree!):** one configurable navigation UI that presents any object collection as a fuzzy-filterable list **or tree**, either as a modal or as a sidebar. A lot of views have been rebuilt on this. Oh yeah: ${widgets.commandButton("Navigate: Tree")} 🤯
-* [[API/index#index.relations]] is the canonical accessor for `relation` objects, alongside `index.tasks()`, `index.items()`, and friends: `index.relations()` for all of them, `index.relations("at-mention")` to filter to one kind.
-* Blockquote rendering fixes:
-  * Nested blockquotes now draw one accent bar per level, with real per-level indentation. Previously every level shared a single bar and the indent was an accident of the whitespace left behind by hidden quote markers.
-* [[Space Manager|Multi-space]] mode: the [[Runtime API]] (`runtimeApi`) is now **on by default** for new and existing spaces, instead of off.
-* The table-of-contents widget **is off by default**: replaced by two [[Navigator]] **outline** views over the same headers. The ToC widgets caused a lot of “content jiggling” on (first) load, which was quite distracting.
-* Fix: a markdown table whose column happens to be named `ref`, `tag`, `tags`, `itags`, `page` or `tableref` no longer overwrites the indexed row’s own identity.
-* Fix: the [[Runtime API]]’s headless Chrome crashed and restarted every few seconds on the `-runtime-api` docker image, spamming the server log (and the host’s console with core dumps) and leaving the API only intermittently available.
-* Fix: `.heif` files are now served as `image/heif` (their registered type) instead of `image/heic`
-* Fix: a `.gitignore` file in the space root was applied as a SilverBullet ignore list
-* Fix: the docker image ignored `PUID`/`PGID` and space folder ownership, running as `root` and creating root-owned files
-* Fix: the FreeBSD **server** binary is being built and released again
-* Fix: [[Space Manager|multi-space]] mode silently ignored `SB_REMEMBER_ME_HOURS`, `SB_LOCKOUT_TIME`, and `SB_LOCKOUT_LIMIT`, hardcoding “remember me” sessions to 7 days and lockout to 10 attempts per minute. All three now apply there too — server-wide, like the session itself — matching what [[Install/Configuration]] documents.
-* Multi-space servers now share a single headless Chrome across all spaces instead of launching one browser per space.
-* Fix: the Runtime API failed to start when authentication was enabled.
-* Fixes around casing in page/file names:
-  * Renaming a page or folder to a different casing of the same name now works on case-insensitive filesystems (macOS, Windows)
-  * Renames are now rejected when the new name differs only in casing from an existing page or document, so spaces stay portable between case-sensitive and case-insensitive hosts.
-  * On case-insensitive filesystems, writing a file whose folder differs only in casing from an existing one now re-cases that folder to match — so writing `notes/foo` when the disk holds `Notes/` renames the folder, changing the reported path of every page inside it.
-
-## 2.10.0
 * [[Space Manager]]: multi-space hosting with multiple accounts is here. A fresh install pointed at an empty folder opens a browser-based first-run **setup wizard** that creates an admin account and your first space, then serves it in place with no restart. One server can host any number of [[Space|spaces]], each bound to a URL prefix or hostname.
 * [[Baked Sections]]: bake `${...}` Lua expressions and widgets into
   HTML-comment-delimited markdown (`<!--#lua EXPR -->` … `<!--/lua-->`).

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::HeaderMap;
 
 use crate::auth::authenticator::{Authenticator, Claims};
-use crate::auth::authorizer::{AuthContext, AuthOutcome, RequestAuthorizer};
+use crate::auth::authorizer::{AuthContext, RequestAuthorizer};
 use crate::auth::config::constant_time_eq;
 use crate::auth::cookie::{cookie_value, request_host, scoped_auth_cookie_name};
 
@@ -62,11 +62,11 @@ impl JwtAuthorizer {
 }
 
 impl RequestAuthorizer for JwtAuthorizer {
-    fn authorize(&self, ctx: &AuthContext) -> Option<AuthOutcome> {
+    fn is_authorized(&self, ctx: &AuthContext) -> bool {
         if !self.auth_token.is_empty() {
             if let Some(token) = bearer_token(ctx.headers) {
                 if constant_time_eq(token.as_bytes(), self.auth_token.as_bytes()) {
-                    return Some(AuthOutcome { username: None });
+                    return true;
                 }
             }
         }
@@ -75,15 +75,13 @@ impl RequestAuthorizer for JwtAuthorizer {
             if let Ok(claims) = self.authenticator.verify_jwt(&cookie) {
                 if let Some(f) = &self.claims_filter {
                     if !f(&claims) {
-                        return None;
+                        return false;
                     }
                 }
-                return Some(AuthOutcome {
-                    username: Some(claims.username.clone()),
-                });
+                return true;
             }
         }
-        None
+        false
     }
 }
 
