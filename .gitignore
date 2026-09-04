@@ -11,7 +11,9 @@ web/observe/node_modules/
 *.swp
 *.swo
 *.DS_Store
-bin/
+# Anchored to the repo root. An unanchored `bin/` also swallowed the
+# `silverbullet/bin/` Rust crate directories in the vendored subtree.
+/bin/
 go-build/
 *.pb.go
 *.pb.gw.go

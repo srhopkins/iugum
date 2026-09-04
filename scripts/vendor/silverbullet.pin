@@ -1,0 +1,12 @@
+# Pinned upstream SilverBullet commit for the silverbullet/ subtree.
+# Read by a human and by scripts. Keep the key=value form.
+# Update this file in the same commit as a `git subtree pull`.
+# Procedure: docs/silverbullet-vendor.md
+
+prefix=silverbullet
+upstream_repo=https://github.com/silverbulletmd/silverbullet.git
+fork_repo=https://github.com/srhopkins/silverbullet.git
+ref=2.10.0
+commit=2b2a7c719bb3546df8c78ddeaf95256535ee2dd3
+commit_date=2026-07-28
+version=2.10.0
