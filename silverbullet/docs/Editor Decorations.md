@@ -34,6 +34,29 @@ The client re-reads the key on every editor state rebuild. A rebuild happens on
 page load, on `editor:reloadState`, and on the `editor.rebuildEditorState`
 syscall.
 
+## Changing the value while the page stays open
+`marks`, `widgets` and `folds` also refresh **without** a rebuild. Write the new
+value, then let any transaction reach the editor; the seam notices the value is
+a different object and rebuilds those three from the new state.
+
+Prefer that route after your own edit, and write the config **before** the edit:
+
+```lua
+config.set("editorDecorations", decorationsFor(newText))
+editor.replaceRange(from, to, insert)
+```
+
+`editor.rebuildEditorState` calls `setState`, which **discards the undo
+history**. So a caller that rewrites the document and then rebuilds makes its
+own edit un-undoable. Writing the config first and letting the edit's own
+transaction carry the refresh keeps native undo working: one edit, one
+transaction, one undo step.
+
+`lines`, `events` and `gestures` are installed as extensions, so those do need
+a rebuild. Rebuild when you turn a feature on or off, not after an edit. Use
+`editor.dispatch({})` to nudge the editor when the config changed and no edit
+followed.
+
 # Config shape
 ```lua
 config.set("editorDecorations", {
@@ -52,8 +75,17 @@ config.set("editorDecorations", {
     { id = "bar-1", at = 120, side = "before", class = "my-bar",
       html = "<span>3 items</span>" },
   },
-  -- 4. App events about the decorated page
+  -- 4. Source ranges the editor's own folding can collapse
+  folds = {
+    { from = 152, to = 245 },
+  },
+  -- 5. App events about the decorated page
   events = { click = true, selection = true },
+  -- 6. Pointer gestures over the decorated ranges
+  gestures = {
+    drag = { handleClass = "my-grip" },
+    lasso = { modifier = "alt" },
+  },
 })
 ```
 
@@ -92,13 +124,40 @@ past the end of the document is clamped.
 | `at` | any source offset in the target block |
 | `html` | HTML for the element's content |
 | `side` | `before` (default) puts the element above the line at `at`, `after` puts it below |
+| `inline` | render at exactly `at`, on the same line as the text, instead of as its own block |
 | `class` | class on the element, in addition to `sb-decoration-widget` |
 | `id` | name reported back on a click in the widget |
 
-The element is a block-level `<div>`. It needs no fenced code block and no
+The element is a `<div>`. It needs no fenced code block and no
 `${}` [[Space Lua/Lua Directive]].
 
+An `inline` widget sits between two characters of a line, so it spends no line
+of its own. Give it `display: inline-block` in your style. This is how you
+attach a per-block affordance - a drag handle, a status dot - to a document with
+hundreds of blocks.
+
+A press and a click inside a seam widget reach the editor's handlers, so
+`events` and `gestures` work on your controls. Every other event type stays
+ignored, the way CodeMirror ignores events in a widget by default, so typing
+and pasting in one are still not editor input.
+
 `html` is inserted as written. Only trust the writer of your own config.
+
+## folds
+| Field | Meaning |
+|---|---|
+| `from` | where the hidden part starts. Normally the end of the region's first line |
+| `to` | where the hidden part ends |
+
+CodeMirror folds a syntax node it knows how to fold. A `folds` entry names a
+region that is **not** a syntax node - a run of blocks you grouped yourself, for
+example - and the editor's own folding then handles it: the fold and unfold
+commands, the `editor.fold` and `editor.unfold` syscalls, and the fold gutter.
+
+The seam adds no collapse state of its own. Nothing is folded until something
+folds it, and the editor owns the fold from then on. Move the cursor to the
+region's **first line** before calling `editor.fold`: that is the line the entry
+makes foldable.
 
 ## events
 Set `events.click` or `events.selection` to `true`, then handle these
@@ -106,16 +165,57 @@ Set `events.click` or `events.selection` to `true`, then handle these
 
 | Event | Payload |
 |---|---|
-| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
+| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
 | `editor:decorationSelect` | `page`, `from`, `to`, `marks` |
 
 `lineClasses` holds the CSS classes on the clicked line, so a handler learns
-which block kind was clicked without keeping its own map. `marks` holds the
-`id` of every configured mark the position or the selection touches. `widget`
-is present only when the click landed in a seam widget.
+which block kind was clicked without keeping its own map. `classes` holds the
+classes of the element that was clicked, nearest first: that is what lets one
+widget carry several controls, because the handler reads the class you put on
+the control instead of needing a widget each. `marks` holds the `id` of every
+configured mark the position or the selection touches, **outermost first**, so a
+handler that nests ranges reads element 0 and gets the outer one. `widget` is
+present only when the click landed in a seam widget.
 
 The click handler never stops the event. The seam observes; it does not take
 the click away from the editor.
+
+# gestures
+Two pointer gestures the browser has no primitive for. Both are off unless
+configured, and **neither one changes the document**: the seam does the pointer
+tracking and the visual feedback, then reports what happened. Whatever handles
+the event decides what the gesture means and writes the document itself, which
+is what keeps the edit outside the client and lets it be one undo step.
+
+| Field | Meaning |
+|---|---|
+| `drag.handleClass` | a press on an element with this class starts a drag |
+| `drag.modifier` | a press with this modifier held, inside a decorated range, starts a drag. `alt`, `shift`, `ctrl`, `meta` or `none` |
+| `lasso.modifier` | the modifier that arms the rubber band. Defaults to `alt` |
+
+A `drag` with neither a handle nor a usable modifier is dropped, since it could
+never fire. Prefer a handle: it intercepts no ordinary text drag and asks the
+reader to discover no modifier. Render it as an `inline` widget.
+
+| Event | Payload |
+|---|---|
+| `editor:decorationDrag` | `page`, `from`, `to`, `marks`, `targetFrom`, `targetTo`, `targetMarks`, `targetLine`, `placement`, and the modifier flags |
+| `editor:decorationLasso` | `page`, `from`, `to`, `fromLine`, `toLine`, `marks`, `ranges`, and the modifier flags |
+
+`from`/`to` is the range that was picked up, and `marks` names it - the covering
+marks, outermost first. `targetFrom`/`targetTo` is the range it was released on,
+and `placement` is `before` or `after` by which side of that range's vertical
+midpoint the pointer was on. A release outside every mark reports the line's own
+range and an empty `targetMarks`.
+
+The band selects whole lines, because the ranges a caller decorates are blocks.
+`ranges` holds every decorated range the swept lines touch, as
+`{ from, to, name }`, outermost first.
+
+While a drag runs, the seam puts `sb-decoration-dragging` on the lines being
+carried and `sb-decoration-drop-before` or `sb-decoration-drop-after` on the
+line the drop would land against. The band is a `sb-decoration-lasso` element.
+All three are yours to style, and all three disappear when the gesture ends.
 
 # Styling
 The seam ships no CSS. Style your classes from [[Space Style]]:
@@ -124,7 +224,14 @@ The seam ships no CSS. Style your classes from [[Space Style]]:
 .my-group-line { border-left: 3px solid var(--editor-directive-color); }
 .my-group-first { border-top-left-radius: 4px; }
 .my-group-last { border-bottom-left-radius: 4px; }
+.sb-decoration-widget.my-grip { display: inline-block; cursor: grab; }
+.sb-decoration-drop-before { box-shadow: inset 0 2px 0 var(--ui-accent-color); }
+.sb-decoration-lasso { border: 1px solid var(--ui-accent-color); }
 ```
+
+One line can carry the line classes of two nested marks, and one element can
+only have one `border-left`. Draw the outer outline with a real `border` and the
+inner one with an inset `box-shadow`, and both are visible at once.
 
 # Cost when unused
 `decorationSeam()` returns no extensions when the key is absent. An

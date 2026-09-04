@@ -9,7 +9,7 @@
  * the client a CodeMirror extension; config is data, and data crosses that
  * boundary. See `docs/Editor Decorations.md`.
  *
- * The seam supplies five capabilities:
+ * The seam supplies six capabilities:
  *
  *  1. `lines`    - CSS classes on the lines of arbitrary top-level blocks,
  *                  selected by Lezer node name. Same shape the client already
@@ -23,7 +23,9 @@
  *  4. `events`   - `editor:decorationClick` and `editor:decorationSelect` app
  *                  events, so interactive features do not each need their own
  *                  DOM listener.
- *  5. `gestures` - a pointer drag of one decorated range onto another
+ *  5. `folds`    - a source range the editor's own folding can collapse, for a
+ *                  region that is not a syntax node.
+ *  6. `gestures` - a pointer drag of one decorated range onto another
  *                  (`editor:decorationDrag`) and a rubber-band sweep over
  *                  decorated ranges (`editor:decorationLasso`). The seam owns
  *                  the pointer tracking and the drag/band feedback; it never
@@ -60,6 +62,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
+import { foldService } from "@codemirror/language";
 import { safeRun } from "@silverbulletmd/silverbullet/lib/async";
 import type { Client } from "../client.ts";
 import { lineWrapper } from "./line_wrapper.ts";
@@ -155,10 +158,28 @@ export type DecorationGestureConfig = {
   lasso?: DecorationLassoConfig;
 };
 
+/**
+ * A source range the reader can collapse.
+ *
+ * CodeMirror already folds a syntax node it knows how to fold. A caller whose
+ * regions are not syntax nodes - a run of blocks it grouped itself, say - has
+ * no way to say "this is one collapsible region". A `folds` entry says exactly
+ * that, and the region then folds through the editor's own folding: the fold
+ * gutter, the fold and unfold commands, and the `editor.fold` syscall. The
+ * seam adds no collapse machinery of its own.
+ */
+export type DecorationFoldRule = {
+  /** Where the hidden part starts. Normally the end of the region's first line. */
+  from: number;
+  /** Where the hidden part ends. */
+  to: number;
+};
+
 export type DecorationConfig = {
   lines: DecorationLineRule[];
   marks: DecorationMarkRule[];
   widgets: DecorationWidgetRule[];
+  folds: DecorationFoldRule[];
   events: DecorationEventConfig;
   gestures: DecorationGestureConfig;
 };
@@ -167,6 +188,7 @@ export const emptyDecorationConfig: DecorationConfig = {
   lines: [],
   marks: [],
   widgets: [],
+  folds: [],
   events: {},
   gestures: {},
 };
@@ -179,6 +201,12 @@ export type DecorationClickEvent = {
   line: number;
   /** Classes on the clicked line's DOM element. */
   lineClasses: string[];
+  /**
+   * Classes on the element that was clicked, nearest first, up to the line.
+   * This is what lets one widget carry several controls: the receiver reads
+   * the class it put on the control instead of needing a widget each.
+   */
+  classes: string[];
   /** `id` (or `class`) of every configured mark covering `pos`. */
   marks: string[];
   /** `id` (or `class`) of the widget clicked, when the click was in one. */
@@ -334,13 +362,29 @@ export function normalizeDecorationConfig(value: unknown): DecorationConfig {
     });
   }
 
+  const folds: DecorationFoldRule[] = [];
+  for (const entry of asArray(value.folds)) {
+    if (!isRecord(entry)) continue;
+    const from = offset(entry.from);
+    const to = offset(entry.to);
+    if (from === undefined || to === undefined || to <= from) continue;
+    folds.push({ from, to });
+  }
+
   const eventsValue = isRecord(value.events) ? value.events : {};
   const events: DecorationEventConfig = {
     ...(eventsValue.click === true ? { click: true } : {}),
     ...(eventsValue.selection === true ? { selection: true } : {}),
   };
 
-  return { lines, marks, widgets, events, gestures: gestures(value.gestures) };
+  return {
+    lines,
+    marks,
+    widgets,
+    folds,
+    events,
+    gestures: gestures(value.gestures),
+  };
 }
 
 const MODIFIERS: DecorationModifier[] = [
@@ -412,6 +456,21 @@ export class DecorationWidget extends WidgetType {
       other.cssClass === this.cssClass &&
       other.id === this.id
     );
+  }
+
+  /**
+   * Let a press and a click through to the editor's handlers.
+   *
+   * CodeMirror ignores every DOM event that starts inside a widget, which is
+   * the right default for a widget that renders content. It is the wrong
+   * default here: a seam widget is an affordance, so a click on it and a drag
+   * from it are the only reasons it exists, and with the default the click
+   * event and the drag gesture never reach the seam's own handlers at all.
+   * Every other event type stays ignored, so typing and pasting inside a
+   * widget still are not editor input.
+   */
+  override ignoreEvent(event: Event): boolean {
+    return event.type !== "mousedown" && event.type !== "click";
   }
 }
 
@@ -511,7 +570,22 @@ type SeamState = {
   source: unknown;
   decorations: DecorationSet;
   marks: DecorationRangeRef[];
+  folds: DecorationFoldRule[];
 };
+
+/** The configured fold regions, clamped to the document. Exported for tests. */
+export function buildFoldRanges(
+  state: EditorState,
+  config: DecorationConfig,
+): DecorationFoldRule[] {
+  const docLength = state.doc.length;
+  return config.folds
+    .map((fold) => ({
+      from: Math.min(fold.from, docLength),
+      to: Math.min(fold.to, docLength),
+    }))
+    .filter((fold) => fold.to > fold.from);
+}
 
 /**
  * Mark and widget decorations live in their own StateField so their offsets can
@@ -533,6 +607,7 @@ function seamStateField(client: Client) {
       source,
       decorations: buildRangeDecorations(state, config),
       marks: buildMarkRanges(state, config),
+      folds: buildFoldRanges(state, config),
     };
   };
   return StateField.define<SeamState>({
@@ -548,6 +623,10 @@ function seamStateField(client: Client) {
           from: tr.changes.mapPos(mark.from, 1),
           to: tr.changes.mapPos(mark.to, -1),
           name: mark.name,
+        })),
+        folds: value.folds.map((fold) => ({
+          from: tr.changes.mapPos(fold.from, 1),
+          to: tr.changes.mapPos(fold.to, -1),
         })),
       };
     },
@@ -595,8 +674,19 @@ function clickHandler(
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos === null) return;
       let lineClasses: string[] = [];
+      const classes: string[] = [];
       let widget: string | undefined;
       if (event.target instanceof Element) {
+        for (
+          let el: Element | null = event.target;
+          el && !el.classList.contains("cm-line") &&
+          !el.classList.contains("cm-content");
+          el = el.parentElement
+        ) {
+          for (const cls of Array.from(el.classList)) {
+            if (!classes.includes(cls)) classes.push(cls);
+          }
+        }
         const lineEl = event.target.closest(".cm-line");
         if (lineEl) {
           lineClasses = Array.from(lineEl.classList);
@@ -611,6 +701,7 @@ function clickHandler(
         pos,
         line: view.state.doc.lineAt(pos).number,
         lineClasses,
+        classes,
         marks: markNames(
           marksIn(liveMarks(view.state, field, config), pos, pos),
         ),
@@ -1024,12 +1115,26 @@ export function decorationSeam(client: Client, pageName: string): Extension[] {
   const wantsGestures = config.gestures.drag !== undefined ||
     config.gestures.lasso !== undefined;
   const wantsField = config.marks.length > 0 || config.widgets.length > 0 ||
-    config.events.click || config.events.selection || wantsGestures;
+    config.folds.length > 0 || config.events.click ||
+    config.events.selection || wantsGestures;
   // One field, so the marks the events and the gestures hit-test against are
   // the same objects the decorations were drawn from.
   const field = seamStateField(client);
   if (wantsField) {
     extensions.push(field);
+  }
+  if (config.folds.length > 0) {
+    // The editor's own folding does the collapsing. This only tells it that a
+    // caller-named range is one region.
+    extensions.push(
+      foldService.of((state, lineStart, lineEnd) => {
+        const folds = state.field(field, false)?.folds ??
+          buildFoldRanges(state, config);
+        return folds.find(
+          (fold) => fold.from >= lineStart && fold.from <= lineEnd,
+        ) ?? null;
+      }),
+    );
   }
   if (config.events.click) {
     extensions.push(clickHandler(client, pageName, config, field));
