@@ -21,25 +21,34 @@ NOT implemented" below.
    as a heading, a table as a table, a link as a link. The id stays on the
    card either way -- see "Names (slugs)" and "Rendered CommonMark, and the
    raw option".
-3. Click the three-dot (`⋮`) menu on a card to see every XML attribute
+3. The toolbar carries two switches beside **Close**: one flips the whole
+   board between rendered CommonMark and raw markdown, and one flips it
+   between the **comfortable** and **compact** densities. Compact drops the
+   card header row and thins the group bars, and changes no content size at
+   all. Both choices are remembered per page — see "Two densities:
+   comfortable and compact".
+4. Click the three-dot (`⋮`) menu on a card to see the atom's name and id,
+   then every XML attribute
    present on that atom's directive, as plain name/value pairs — whatever
    they happen to be. There is no list of known attribute names anywhere
    in this plug; it renders and edits generically, the same way Atomdown
    Core itself preserves attributes without interpreting them (see
    `atomdown/SPEC.md`, "Extensions").
-4. In that menu you can change a value, add a new name/value pair, or
+5. In that menu you can change a value, add a new name/value pair, or
    remove one, then click **Save**. Saving rewrites *only* that atom's
    one directive line in the document (see "How the write path works"),
    and leaves everything else byte-identical.
-5. Drag a card by its header (the grip icon, id, or badges — anywhere in
-   the header strip, not the prose body below it) to reorder it. The drop
+6. Drag a card by its header (the grip icon, id, or badges — anywhere in
+   the header strip, not the prose body below it) to reorder it. At compact
+   density there is no header strip, so the floating grip in the card's
+   top-left corner is the drag source — see "Two densities" below. The drop
    lands on the seam the pointer is over: releasing anywhere above a card's
    vertical midpoint puts the dragged block before that card, and releasing
    below the last card's bottom edge puts it at the very end. The space
    *between* two cards is the seam between them, not "the end" — see
    "Where a drop lands" below. See "Drag-to-reorder" for exactly what this
    rewrites in the file and how atom groups are handled.
-6. Click a card to select it; modifier-click or shift-click to select
+7. Click a card to select it; modifier-click or shift-click to select
    several, or lasso them by dragging on empty background. With a valid
    selection, the three-dot menu's **Group** item wraps those blocks in an
    Atomdown `atom-group`; on a card that is already in a group the item
@@ -47,18 +56,18 @@ NOT implemented" below.
    group, defaulted from the first heading in the selection, so one
    confirm is usually enough. Cmd-Z undoes either. See "Selection and
    grouping" and "Names (slugs)".
-7. An `atom-group`'s cards are wrapped in one bordered container with a
+8. An `atom-group`'s cards are wrapped in one bordered container with a
    header bar carrying the group's name, its id, and **Rename** and
    **Ungroup**. Clicking the header selects the whole group; the toggle at
    its left collapses it. See "One group, one object".
-8. Closing the modal (the **Close** button, or running the toggle command
+9. Closing the modal (the **Close** button, or running the toggle command
    again) returns to the normal page. The document is otherwise
    unchanged unless you explicitly clicked Save on an attribute edit or
    dragged a card.
-9. If the board was open on a page when you reload it, it reopens by itself.
+10. If the board was open on a page when you reload it, it reopens by itself.
    It never opens on a page you did not open it on, and Close means closed.
    See "Remembering the view".
-10. The toolbar's **Raw markdown** button switches every card to its
+11. The toolbar's **Raw markdown** button switches every card to its
    markdown source, and back. One card's three-dot menu carries **Show raw
    markdown** for that card alone. Rendered is the default at both levels.
    See "Rendered CommonMark, and the raw option".
@@ -711,6 +720,193 @@ has no `localStorage` at all, and `clientStore` is reachable from both the
 worker and the panel iframe through the one syscall bridge. There is one
 persistence mechanism in this file, not two.
 
+## Two densities: comfortable and compact
+
+The board has two display densities and no third. **Comfortable** is the
+default. **Compact** compresses the chrome and nothing else. There is no
+"bare" density, because reading the document with no chrome at all is what
+closing the board does — it needs no mode.
+
+The switch is a button in the toolbar, beside the raw/rendered switch and in
+the same idiom: it is labelled with the state it would *give* you, so
+`Compact` means "press this for compact". The same control repeats in a
+group's three-dot menu, with the current density as a state readout.
+
+### What compact changes
+
+| | comfortable | compact |
+|---|---|---|
+| card header row | present, quiet at rest, full on hover | **gone** |
+| card slug and id | on the header | in the three-dot menu |
+| grip and three-dot button | in the header row, hover-only | floating in the card's top corners, hover-only |
+| group bar | chevron, grip, `GROUP`, name, id, count, Rename, Ungroup | chevron, grip, name, bare count, three-dot menu |
+| group outline | 2px accent | **identical** |
+| collapse chevron | full size, always visible | **identical** |
+| content (headings, tables, body text) | full rendered size | **identical** |
+
+**No seam.** The header row is not replaced by a dotted line, a dashed line,
+or a rule of any kind. The card border is the card. The rendered content
+already carries the name, because a heading renders as a heading, which is
+what made the header redundant at this density in the first place.
+
+**The collapse chevron is the one thing compact does not compress.** It is the
+control that turns a 291-line page into 11 lines, so it keeps its full size
+and stays visible at both densities. That is restated explicitly in the
+compact rules rather than left to inheritance, so a later change to the bar's
+padding cannot shrink it by accident.
+
+### How compact keeps every interaction alive
+
+The markup is **identical at both densities** — the card strip is byte for
+byte the same string — so switching is a CSS-level change, needs no redraw and
+no round trip to the worker, and cannot move, add or remove an element that
+the geometry, the drag, the selection or the lasso reads.
+
+What is left of the card header in compact is a chrome layer pinned across the
+card's top edge, carrying the grip and the three-dot button and nothing else:
+
+- `position: absolute`, so it adds **no height**. A card's rectangle is its
+  body's rectangle, which is exactly what `cardGeometry()` hands
+  `pickDropTarget()`. Shorter cards, same decision function.
+- `pointer-events: none` on the layer and `auto` on the two controls, so a
+  click on the top strip of a card falls **through** to the card and still
+  selects it. Click-to-select, modifier-click, shift-range and
+  lasso-from-empty-background are untouched.
+- the grip is the header's first child and the menu carries
+  `margin-left: auto`, so the flex row puts them in the top-left and top-right
+  corners with no per-control positioning to get wrong.
+- the body reserves `--board-card-chrome-space` at its top right, so the menu
+  never sits on top of content. The grip gets an opaque chip behind it so it
+  never smears the first line of text it floats over on the way in.
+
+**What drags in compact: the grip.** In comfortable the whole header row is the
+drag source (`draggable="true"` on `.board-card-header`) and it still is. That
+row has no pointer events in compact, so the grip carries `draggable="true"`
+and its own `data-drag-unit` — the resolved unit key, so a grouped card's grip
+drags the whole group, the same key a member card's header resolves to. The
+existing generic `[data-drag-unit]` handler picks it up and stops propagation,
+so one drag is one `dragstart` with one unit key at either density. The card
+body is deliberately **not** draggable: a card whose whole surface starts a
+drag turns every mis-aimed click into a move, and the body is the click target
+for selection.
+
+The grip is `role="button" tabindex="0"` with an `aria-label`, so the
+`:focus-visible` escape in the hover-only rules genuinely reaches it — a
+hover-only drag source that no keyboard can focus is a drag source a keyboard
+user does not have.
+
+### Identity moved into the menu
+
+With the header gone, a card's slug and id are not on screen. So the three-dot
+menu's popover opens with the **name and the id as a non-clickable label**,
+before any action — if the menu is the only place identity lives, the menu has
+to show it. That label is built at **both** densities, so the menu reads the
+same wherever it is opened. An implicit atom has no directive and so no id of
+its own, and says exactly that.
+
+A group's menu carries the same label, plus the two actions the thin bar folded
+away (Rename, Ungroup) and the density readout.
+
+### Comfortable recedes too
+
+A card you are not pointing at is quiet: the header text drops to the theme's
+own muted text token at rest and returns to the full text token on hover,
+focus, or selection, while the grip and the three-dot button stay fully hidden
+until then. So the header gets out of the way without switching density.
+
+A group's own chrome recedes the same way: at rest the container's border and
+the header bar's background soften, and they come to full strength when the
+pointer is anywhere inside the container — **hovering a member card counts**,
+because `:hover` is tested on the container, which a descendant's hover
+satisfies. Four states never recede: a hovered group, a group with focus in it,
+a group holding a selected card (which is also what clicking the header
+produces), and a **collapsed** group — collapsed, the bar is the only thing on
+screen representing its contents, so it must stay findable.
+
+**A token or a `color-mix`, never `opacity`.** Two reasons, and the second one
+is not a preference:
+
+1. `opacity` multiplies against whatever is behind the element, so one value
+   reads differently on the plain card surface, on a selected card's lifted
+   background, on the group container's field, and again in the dark theme.
+   `--subtle-color` is the colour SilverBullet itself uses for secondary text,
+   so it is legible by construction in both themes and on all of those.
+2. `opacity` applies to an element **and all its descendants**. An opacity on
+   `.board-group` would fade every member card inside it. Only the container's
+   `border-color` and the header bar's `background` move (with the header's
+   text colour following its background, or light-on-pale would be
+   unreadable). A member card's surface, border and content are identical
+   resting and active.
+
+Both are colour-only changes, so nothing reflows between the two states.
+
+The resting override is written **after** the full-strength rules, so a browser
+without `color-mix()` or `:has()` drops the block and the group simply never
+recedes — it is never left at an unreadable half state.
+
+### It is presentation, like everything else here
+
+The density never reaches the document. It lives in the same client-local
+key-value store, under one more page-scoped key:
+
+| key | value |
+|-----|-------|
+| `atomdown-board.density:<page>` | `"comfortable"` \| `"compact"` |
+
+A page that was never switched, a store that is missing or throwing, and a
+stored value in any shape `loadDensity()` does not recognise all come back as
+comfortable. The density is rendered into the markup rather than applied by the
+panel script afterwards, so a board left compact draws compact with no frame of
+the wrong layout — the same rule a collapsed group follows.
+
+## Customizing the board's CSS
+
+Every tweakable value is a named CSS custom property with a default. Set any of
+them on `html` in your own `space-style` page and the board picks it up:
+
+```css
+html {
+  --board-card-padding: 4px;
+  --board-accent-color: #b5651d;
+  --board-card-radius: 0px;
+}
+```
+
+That indirection is not a style choice, it is the only route in. The panel
+renders in an iframe, so a stylesheet in the parent document cannot select
+anything inside it. Named custom properties are copied across by
+`applyParentTheme()` — exactly the seam that already carries SilverBullet's
+theme tokens, so there is one mechanism here, not two. A property you do not
+set keeps its default; a property you do set lands as an inline declaration on
+the panel's root, which beats both the defaults **and** the compact
+overrides, so a value you asked for wins at either density.
+
+The stable class names matter as much as the properties. `.board-card`,
+`.board-card-header`, `.board-card-body`, `.board-group`,
+`.board-group-header` and the rest are part of this surface and are not
+renamed.
+
+| property | default | what it sizes |
+|---|---|---|
+| `--board-card-padding` | `8px` | a card body's padding (compact: `6px`) |
+| `--board-card-header-padding` | `6px 8px` | the card header row's padding, which is what gives it its height (compact: `0`) |
+| `--board-card-header-height` | `auto` | a floor under that row's height (compact: `0`) |
+| `--board-card-border-width` | `1px` | a card's border |
+| `--board-card-radius` | `6px` | a card's and a group container's corner radius (compact: `4px`) |
+| `--board-accent-color` | `var(--ui-accent-color)` | the one blue: the group outline, the drop indicator, the selection ring, the lasso |
+| `--board-grip-size` | `14px` | the six-dot drag grip |
+| `--board-id-size` | `11px` | the monospace id, on a card and on a group bar |
+| `--board-header-quiet-color` | `var(--subtle-color)` | a resting card header's text |
+| `--board-header-active-color` | `var(--root-color)` | a hovered, focused or selected card header's text |
+| `--board-card-gap` | `14px` | the space between two top-level items (compact: `6px`) |
+| `--board-card-chrome-space` | `24px` | room reserved at a compact card body's top right, so the menu never overlaps content |
+| `--board-group-padding` | `8px` | a group container's inner padding (compact: `4px`) |
+| `--board-group-card-gap` | `8px` | the space between two member cards (compact: `4px`) |
+| `--board-group-header-padding` | `5px 8px` | the group bar's padding, which is what thins it (compact: `1px 4px`) |
+| `--board-group-border-width` | `2px` | the group outline. **The same at both densities** — it is structure, not chrome |
+| `--board-group-quiet-border` | `40%` | how much accent a resting group's outline keeps |
+| `--board-group-quiet-header` | `16%` | how much accent a resting group's header bar keeps |
+
 ## Theme
 
 The board renders inside an iframe (`client/components/panel.tsx`'s
@@ -793,9 +989,9 @@ go test ./plugs/atomdown-board        # same tests, through go test ./...
   `groupMenuState`, `rectsIntersect`, `minimalEdit`, `newAtomdownId`,
   `insertGroupMarkers`, `removeGroupMarkers`, `setGroupSlugInSource`,
   `sanitizeSlug`, `slugConflict`, `deriveGroupSlug`, `slugOrId`,
-  `effectiveCardView`, `sanitizeRenderedHtml`, `isSafeUrl`,
-  `decodeUrlEntities`. These are the seams whose absence let the drop bug
-  ship.
+  `effectiveCardView`, `normalizeDensity`, `otherDensity`, `densityLabel`,
+  `densityTitle`, `sanitizeRenderedHtml`, `isSafeUrl`, `decodeUrlEntities`.
+  These are the seams whose absence let the drop bug ship.
 - **The exported plug functions**, driven with a recording `syscall` stub, so
   the tests assert the real syscall sequence: exactly one
   `editor.replaceRange` per action, and no `space.writePage`, `space.readPage`
@@ -812,6 +1008,16 @@ go test ./plugs/atomdown-board        # same tests, through go test ./...
   open, stay closed when it was closed, per-page isolation, Close clearing the
   flag, an empty buffer and an overtaking navigation both drawing nothing, and
   a store that throws degrading to a closed board rather than an error.
+- **The stylesheet, parsed rather than grepped.** The density tests split the
+  `<style>` block into real `{selector, body}` rules with comments stripped
+  (`cssRules()` in the test file), because a crude split on `}` drags
+  neighbouring rules and comment prose into the answer — which is how a test
+  passes while asserting nothing. On top of that: the compact rules add no
+  seam and no `font-size` except the collapse chevron's full one, no compact
+  rule reaches a card body or the group outline, the resting-chrome rules name
+  only the container and its own header bar, no rule puts `opacity` on
+  `.board-group`, and the card strip is byte-identical between the two
+  densities.
 
 The panel script is not duplicated for testing. `injectSharedFunctions()`
 stringifies those same functions into the panel script at render time, and a
@@ -887,6 +1093,120 @@ ever adds a `"github:.../atomdown-board.plug.js"` entry to `CONFIG.md`
 for convenience, the next `Plugs: Update` will destroy this hand-built
 copy and there is no upstream repo to re-fetch it from. Don't add it to
 that list.
+
+## What was verified — the two densities and the CSS knobs
+
+**In a real browser**, driving the real panel markup and the real panel script
+with real DOM events, against a copy of the real 291-line `Todo/running` (82
+cards, 11 named groups, a 10-row markdown table). The panel ran inside a real
+iframe, which matters: a harness that ran it in the parent document itself
+would find the panel's own defaults in the "parent" and pin every custom
+property, so the customization surface would not have been under test at all.
+
+Comfortable, at rest:
+
+- the card header is 33px tall, its slug and id draw in `#787774`
+  (`--subtle-color`), and the grip and the three-dot button are at `opacity: 0`.
+- a group's outline is `2px` of accent at `0.4` alpha; its bar is a pale accent
+  tint with full-contrast `#37352f` text; the collapse chevron is
+  `#37352f` at `12px`, `opacity: 1` — legible at rest.
+- a member card is `#f7f6f3` with a `1px #e9e9e7` border.
+
+Comfortable, pointer on a **member card** (not the header):
+
+- the group's outline goes to solid `rgb(35, 131, 226)`, its bar to full accent
+  with white text and a white chevron. A different group on the same screen
+  stays receded.
+- the hovered card's slug and id go to `#37352f`, its grip to `0.5`, its menu
+  button to `1`.
+- **no layout shift**: the group is 1323px, its bar 30px and the card 93px in
+  both states.
+- **the member card does not change**: `#f7f6f3`, `1px #e9e9e7`, identical.
+
+Interactions, at **both** densities, with dispatched `MouseEvent`s and
+`DragEvent`s through the real listeners:
+
+- a plain click on a card body selects exactly that card; `meta`-click adds a
+  second; `shift`-click ranges three from the anchor; a plain click on empty
+  board background clears; a `mousedown`/`mousemove`/`mouseup` band from empty
+  background lassoes the two cards it crossed.
+- `dragstart` on the grip fades one unit, `dragover` at 75% of a card's height
+  draws exactly one drop marker, and `drop` calls
+  `atomdown-board.reorderAtom` with the same unit key and placement at either
+  density.
+- every card reports a non-zero rectangle and the rectangles stay in document
+  order, so `cardGeometry()` feeds `pickDropTarget()` correctly with shorter
+  cards.
+
+Compact, after clicking the toolbar switch:
+
+- the card header row computes `position: absolute`, `border-bottom: none`,
+  `pointer-events: none`, and its slug and id `display: none`. The card goes
+  from 93px to 56px.
+- the grip lands 1px from the card's left edge and 4px from its top; the menu
+  1px from the right edge and 1px from the top.
+- the body reserves 30px of right padding (`6px` + `24px`).
+- `document.elementFromPoint()` 4px below a card's top edge returns the **card
+  body**, and clicking it selects that card — the strip the header occupies is
+  click-through.
+- the group bar hides `GROUP`, the id and both buttons, the count reads a bare
+  `7`, and the chevron is still `12px` / `1px 5px` / `opacity: 1`.
+- content is unchanged: `14px` body text, a `21px` `h1`.
+- the density is written to `clientStore` under
+  `atomdown-board.density:Todo/running` and to nothing else, and a reload of
+  the page draws compact from the markup with no frame of comfortable.
+
+The customization surface, by setting properties on the parent's `html` the
+way a `space-style` page would:
+
+- `--board-card-padding: 14px` → a compact card body computes
+  `14px 38px 14px 14px`. The value the user asked for beats the compact
+  override.
+- `--board-accent-color: #b5651d` → the group outline becomes that colour at
+  `0.4` alpha, and the lasso, the drop indicator and the selection ring follow,
+  because none of them names the theme token directly any more.
+- `--board-card-radius: 0px` → square cards.
+
+Dark theme, by switching the parent's `data-theme` and re-copying: the resting
+slug is `#9b9b98` on a `#2a2a29` card, the resting chevron `#e8e8e6` — receded
+but readable, with no value hand-tuned per theme.
+
+**In the real app**, `iugum wiki` serving a scratchpad copy of the page on a
+high port with this plug in the space's `_plug/`, the board opened through
+`client.runCommandByName("Atomdown: Toggle Board")` and the panel iframe's DOM
+read directly. Through SilverBullet's own `markdown.markdownToHtml`:
+
+- the six-item ordered list card renders **one `<ol>` with six `<li>`**, not a
+  run-on paragraph. A block's newlines are what make it a list, and nothing in
+  the parse path joins, trims or reflows a block's lines.
+- the 10-row ticket table renders one `<table>` with 10 `<tr>` and **nine real
+  `<a href>` inside `<td>`**, each with `target="_blank"`. The sanitizer is
+  context-free on purpose, so a cell is not a special case: an anchor in a
+  `<td>` is treated exactly like one in a `<p>`.
+- switching to compact takes that card from 114px to 77px, and the list and
+  the cell links are still a list and still links.
+- a real browser reload reopened the board **compact**, from the markup.
+
+Both of those were once reported as defects from a test rig whose markdown stub
+had no ordered-list branch and did not substitute inline markdown inside table
+cells. Neither was ever a defect in this plug. A rig like that also carries a
+**hardcoded fallback palette** so it can render standalone; that is a test
+fixture and not a theme. The live board takes every colour from the parent
+document's own theme tokens — see "Theme".
+
+**The document, with the real `atomdown` binary.** A group, a rename, an
+ungroup and a reorder run at compact density against the copy of
+`Todo/running`:
+
+- four actions, four `editor.replaceRange` calls, zero `space.*` calls, zero
+  `editor.reloadPage`.
+- group → rename → ungroup restores the buffer **byte for byte**.
+- 82 atoms before and after, the same set of `id|slug|groupId` fingerprints,
+  and every `digest` attribute unchanged.
+- `atomdown lint` → `ok`, `atomdown verify` → `ok - no drift`, the same answers
+  the untouched page gives.
+- the words `density`, `compact` and `comfortable` appear nowhere in the
+  document.
 
 ## What was verified — rendered CommonMark and the raw option
 
