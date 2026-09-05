@@ -779,6 +779,71 @@ function gripHtml(title) {
 }
 
 /**
+ * The three-dot glyph, VERTICAL.
+ *
+ * `&#8942;` is U+22EE VERTICAL ELLIPSIS, the same character the board panel's
+ * `.board-menu-btn` carries. The horizontal form this replaced, U+22EF MIDLINE
+ * HORIZONTAL ELLIPSIS, is about three times as wide, which mattered once both
+ * controls moved into the page gutter: the gutter is 28.8px at the `full`
+ * editor width and a horizontal glyph does not fit in it.
+ */
+const MENU_GLYPH = "&#8942;";
+
+/**
+ * THE POPOVER, drawn by this plug rather than shown in the host's picker.
+ *
+ * Why a hand-built element and not `editor.filterBox`. The picker is the
+ * command palette's own surface: it opens centred over the whole window with a
+ * search field, and it lists a card's identity and its actions as palette
+ * rows. That is the defect Steve reported — the control read as "a command
+ * palette opened", not "this card's menu opened", and it is not what the board
+ * panel does. The board anchors a popover to the card it belongs to
+ * (`.board-menu-popover`), with the name and the id as its first, inert child.
+ * This is that popover.
+ *
+ * How it can work with no script. A seam widget's HTML is set with
+ * `innerHTML`, so it carries no listeners — but a click inside a widget comes
+ * back to the plug as `editor:decorationClick` carrying the CLASS LIST of the
+ * element that was hit (see the seam's `events.click`). So every row names its
+ * own action in a class, `atomdown-mi-<action>`, and `onDecorationClick` reads
+ * it. One widget carries several controls; that is the shape the collapse
+ * caret and the three-dot button already use.
+ *
+ * WHY NO TEXT INPUT IS IN HERE, measured rather than assumed. The seam's
+ * `widgetPressGuard` returns true for a plain press anywhere inside a widget,
+ * which makes CodeMirror call `preventDefault` on `mousedown`; a prevented
+ * `mousedown` moves no focus. Measured on the real fixture
+ * (`plugs/atomdown-e2e/input-probe.test.ts`): a click on an input inside a
+ * card header widget left `document.activeElement` on `.cm-content`, and the
+ * characters typed next went INTO THE DOCUMENT. So an in-popover attribute
+ * form would silently type the reader's attribute values into the page, which
+ * is the one thing this whole view may never do. Every row here is a button,
+ * and text entry goes through `editor.prompt`, which is a modal dialog with a
+ * focused field of its own. The row that edits attributes puts the cursor on
+ * the directive line instead, where the peek shows the raw bytes.
+ */
+function menuPopoverHtml(kind, items) {
+  const rows = items.map(function (item) {
+    if (item.action === "label") {
+      // INERT ON PURPOSE, and it is the popover's first child, the way the
+      // panel's is. It carries no `atomdown-menu-item` class, so a click on it
+      // matches no action and the popover stays open.
+      return '<span class="atomdown-menu-label">' +
+        '<span class="atomdown-menu-label-text">' + escapeHtml(item.name) +
+        "</span>" +
+        '<span class="atomdown-menu-label-note">' +
+        escapeHtml(item.description) + "</span>" +
+        "</span>";
+    }
+    return '<span class="atomdown-menu-item atomdown-mi-' +
+      escapeHtml(item.action) + '" role="button" tabindex="0" title="' +
+      escapeHtml(item.description) + '">' + escapeHtml(item.name) + "</span>";
+  }).join("");
+  return '<span class="atomdown-menu-popover atomdown-menu-' + kind + '">' +
+    rows + "</span>";
+}
+
+/**
  * A card's header row: the grip, the readable name, and the id.
  *
  * This is the board's card header, and it exists inline for a second reason:
@@ -786,7 +851,7 @@ function gripHtml(title) {
  * have nowhere at all to appear. Name in body text, id in small grey
  * monospace, in that order - identity stays visible, the name reads first.
  */
-function cardHeaderHtml(unit, nested, directiveText) {
+function cardHeaderHtml(unit, nested, directiveText, popover) {
   const id = unit.atomIds[0];
   const slug = unit.implicit ? null : unit.atomSlug;
   const name = slug
@@ -799,13 +864,20 @@ function cardHeaderHtml(unit, nested, directiveText) {
     : '<span class="atomdown-card-id" title="' +
       escapeHtml("Atomdown id " + id) + '">' + escapeHtml(id) + "</span>";
   const peek = directivePeekHtml(directiveText);
-  // GRIP LEFT, MENU RIGHT, and both are absolutely positioned in the header's
-  // own padding rather than laid out in the row. That is what lets the grip
-  // sit on the left, as the panel has it, while the slug still starts on the
-  // same left edge as the body text: an in-flow grip ahead of the slug would
-  // push the slug right by the grip's width even while the grip is invisible.
-  // Being out of flow also means neither control moves anything when it
+  // GRIP LEFT, MENU RIGHT, and both are absolutely positioned OUTSIDE the
+  // card's own border, in the page gutter, rather than inside the header's
+  // padding. Steve's change: it gives the card its full width back, it is what
+  // makes the compact density actually compact, and it leaves the header row
+  // free for whatever goes there next.
+  //
+  // Out of flow is still what makes it work: an in-flow grip ahead of the slug
+  // would push the slug right by the grip's width even while the grip is
+  // invisible, so the slug would no longer start on the same left edge as the
+  // body text (R2). Out of flow, neither control moves anything when it
   // appears on hover.
+  //
+  // A CONTROL IN THE GUTTER IS NOT PART OF THE CARD'S CLICK TARGET, and that
+  // is deliberate. See `onDecorationClick`.
   return '<span class="atomdown-card-head' + (nested ? " atomdown-nested" : "") +
     '">' +
     gripHtml(
@@ -814,8 +886,12 @@ function cardHeaderHtml(unit, nested, directiveText) {
         : "Drag to move " + slugOrId(slug, id),
     ) +
     name + idLabel +
-    '<span class="atomdown-card-menu" role="button" tabindex="0" title="' +
-    escapeHtml("Actions for " + slugOrId(slug, id)) + '">&#8943;</span>' +
+    '<span class="atomdown-card-menu" role="button" tabindex="0"' +
+    ' aria-haspopup="true" aria-expanded="' + (popover ? "true" : "false") +
+    '" title="' +
+    escapeHtml("Actions for " + slugOrId(slug, id)) + '">' + MENU_GLYPH +
+    "</span>" +
+    (popover || "") +
     "</span>" + peek;
 }
 
@@ -915,7 +991,7 @@ function densityClass(value) {
  * element that was clicked, so one widget can carry several controls without
  * needing a widget each.
  */
-function groupHeaderHtml(unit, memberCount, directiveText, collapsed) {
+function groupHeaderHtml(unit, memberCount, directiveText, collapsed, popover) {
   const name = slugOrId(unit.groupSlug, unit.groupId);
   const word = memberCount === 1 ? "card" : "cards";
   return [
@@ -938,8 +1014,11 @@ function groupHeaderHtml(unit, memberCount, directiveText, collapsed) {
     '<span class="atomdown-group-count-n">' + memberCount + "</span>" +
     '<span class="atomdown-group-count-word"> ' + word + "</span>" +
     "</span>",
-    '<span class="atomdown-group-menu" role="button" tabindex="0" title="' +
-    escapeHtml("Actions for group " + name) + '">&#8943;</span>',
+    '<span class="atomdown-group-menu" role="button" tabindex="0"' +
+    ' aria-haspopup="true" aria-expanded="' + (popover ? "true" : "false") +
+    '" title="' +
+    escapeHtml("Actions for group " + name) + '">' + MENU_GLYPH + "</span>",
+    popover || "",
     directivePeekHtml(directiveText),
   ].join("");
 }
@@ -997,7 +1076,13 @@ function toggleAction(remembered, applied) {
  * CSS keys off `atomdown-<density>-line` together with the card's or the
  * group's own `-first` / `-last`.
  */
-function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) {
+function buildDecorations(
+  sourceText,
+  selectedKeys,
+  collapsedGroupIds,
+  density,
+  open,
+) {
   const scan = computeCards(sourceText);
   const lines = scan.lines;
   const starts = lineStarts(lines);
@@ -1066,13 +1151,30 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) 
     // keeps the grip, the menu and the directive peek working identically at
     // both densities; a density that dropped the widget would have to rebuild
     // those three controls somewhere else.
+    const isOpen = menuOpenForCard(open, boxKey);
     widgets.push({
       id: boxKey,
       at: box.from,
       side: "before",
       class: "atomdown-card-header" + (nested ? " atomdown-nested" : "") +
+        (isOpen ? " atomdown-menu-open" : "") +
         " " + densClass,
-      html: cardHeaderHtml(unit, nested, directiveText),
+      html: cardHeaderHtml(
+        unit,
+        nested,
+        directiveText,
+        isOpen
+          ? menuPopoverHtml(
+            "card",
+            cardMenuItems(
+              slugOrId(unit.atomSlug, unit.atomIds[0]),
+              unit.atomIds[0],
+              unit.implicit === true,
+              nested,
+            ),
+          )
+          : "",
+      ),
     });
     return box;
   }
@@ -1119,12 +1221,22 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) 
         side: "before",
         class: "atomdown-group-header" +
           (isCollapsed ? " atomdown-group-collapsed" : "") +
+          (menuOpenForGroup(open, unit.unitKey) ? " atomdown-menu-open" : "") +
           " " + densClass,
         html: groupHeaderHtml(
           unit,
           members.length,
           lines[unit.startLine],
           isCollapsed,
+          menuOpenForGroup(open, unit.unitKey)
+            ? menuPopoverHtml(
+              "group",
+              groupMenuItems(
+                slugOrId(unit.groupSlug, unit.groupId),
+                unit.groupId,
+              ),
+            )
+            : "",
         ),
       });
       const openLineEnd = starts[unit.startLine] + lines[unit.startLine].length;
@@ -1484,6 +1596,24 @@ let collapsedGroupIds = [];
  * compact after a reload.
  */
 let activeDensity = "comfortable";
+/**
+ * Which control's popover is open, or null. Presentation, like the three
+ * above: not one byte of the document changes with it, and it is deliberately
+ * NOT persisted — a menu left open across a reload would be a surprise.
+ *
+ * Shape: `{ kind: "card", boxKey }` or `{ kind: "group", unitKey }`.
+ */
+let openMenu = null;
+
+/** Is this card's popover the open one? */
+function menuOpenForCard(open, boxKey) {
+  return !!open && open.kind === "card" && open.boxKey === boxKey;
+}
+
+/** Is this group's popover the open one? */
+function menuOpenForGroup(open, unitKey) {
+  return !!open && open.kind === "group" && open.unitKey === unitKey;
+}
 
 async function warnUser(message, level) {
   if (!message) return;
@@ -1512,7 +1642,13 @@ async function writeDecorations(text, rebuild) {
   await syscall(
     "config.set",
     "editorDecorations",
-    buildDecorations(text, selectedUnitKeys, collapsedGroupIds, activeDensity),
+    buildDecorations(
+      text,
+      selectedUnitKeys,
+      collapsedGroupIds,
+      activeDensity,
+      openMenu,
+    ),
   );
   if (rebuild) {
     await syscall("editor.rebuildEditorState");
@@ -1529,6 +1665,7 @@ async function writeDecorations(text, rebuild) {
 async function clearDecorations(rebuild) {
   selectedUnitKeys = [];
   collapsedGroupIds = [];
+  openMenu = null;
   activeDensity = "comfortable";
   activePage = null;
   await syscall("config.set", "editorDecorations", emptyDecorations());
@@ -1545,10 +1682,19 @@ async function clearDecorations(rebuild) {
 async function applyEdit(oldText, newText) {
   const edit = minimalEdit(oldText, newText);
   if (!edit) return false;
+  // An edit invalidates whatever popover was open: it was drawn from the
+  // pre-edit document.
+  openMenu = null;
   await syscall(
     "config.set",
     "editorDecorations",
-    buildDecorations(newText, selectedUnitKeys, collapsedGroupIds, activeDensity),
+    buildDecorations(
+      newText,
+      selectedUnitKeys,
+      collapsedGroupIds,
+      activeDensity,
+      openMenu,
+    ),
   );
   await syscall("editor.replaceRange", edit.from, edit.to, edit.insert);
   return true;
@@ -1577,6 +1723,7 @@ async function toggleInline() {
   await rememberInlineOn(page, true);
   activePage = page;
   selectedUnitKeys = [];
+  openMenu = null;
   collapsedGroupIds = await loadCollapsed(page);
   activeDensity = await loadDensity(page);
   await writeDecorations(text, true);
@@ -1606,6 +1753,9 @@ async function toggleDensity() {
   const next = otherDensity(current);
   await rememberDensity(page, next);
   activeDensity = next;
+  // A popover is anchored to a header whose size the density changes, so it
+  // shuts rather than being redrawn in the wrong place.
+  openMenu = null;
   if (!(await isInlineApplied())) {
     await warnUser(
       "Atomdown density is now " + next + " for this page. The card view is " +
@@ -1842,6 +1992,7 @@ async function restoreInline(pageName) {
     }
     activePage = page;
     selectedUnitKeys = [];
+    openMenu = null;
     collapsedGroupIds = await loadCollapsed(page);
     activeDensity = await loadDensity(page);
     await writeDecorations(text, true);
@@ -1905,20 +2056,65 @@ async function onDecorationClick(event) {
     return await collapseGroup(widgetUnitKey(event) ?? firstUnitKey(event.marks));
   }
 
+  // A ROW OF AN OPEN POPOVER. Checked before the two buttons, because a row
+  // lives inside the same widget the button does.
+  const action = menuActionFromClasses(classes);
+  if (action !== null) {
+    if (openMenu && openMenu.kind === "group") {
+      return await runGroupMenuAction(action, openMenu.unitKey);
+    }
+    return await runCardMenuAction(
+      action,
+      openMenu && openMenu.kind === "card"
+        ? openMenu.boxKey
+        : widgetBoxKey(event) ?? firstBoxKey(event.marks),
+      firstUnitKey(event.marks),
+    );
+  }
+
+  // ANYWHERE ELSE INSIDE THE OPEN POPOVER: the identity label, or the box's
+  // own padding. The popover stays open. Without this a click on the label —
+  // the thing a reader clicks first, because it names the card — would fall
+  // through to the "click outside closes it" rule below and shut the menu.
+  if (
+    classes.indexOf("atomdown-menu-popover") !== -1 ||
+    classes.indexOf("atomdown-menu-label") !== -1 ||
+    classes.indexOf("atomdown-menu-label-text") !== -1 ||
+    classes.indexOf("atomdown-menu-label-note") !== -1
+  ) {
+    return { ok: true, open: true };
+  }
+
   if (classes.indexOf("atomdown-group-menu") !== -1) {
-    return await openGroupMenu(
+    return await toggleGroupMenu(
       widgetUnitKey(event) ?? firstUnitKey(event.marks),
     );
   }
 
   if (classes.indexOf("atomdown-card-menu") !== -1) {
-    return await openCardMenu(
+    return await toggleCardMenu(
       widgetBoxKey(event) ?? firstBoxKey(event.marks),
-      firstUnitKey(event.marks),
     );
   }
 
+  // A CLICK ANYWHERE ELSE SHUTS AN OPEN POPOVER, which is what a popover is
+  // and what the panel does. It happens before the selection rules below, so
+  // the first click after opening a menu dismisses it rather than also
+  // changing the selection.
+  if (await closeMenu()) return { ok: true, closed: true };
+
   const unitKey = firstUnitKey(event.marks);
+  // NOTHING AT ALL WHEN THE CLICK CARRIED NO MARK, and this is the answer to
+  // "is a control outside the card still inside the card's click target?"
+  //
+  // NO, EXPLICITLY. The card's click target is its own line run — the region
+  // the seam covers with the card's mark. Both controls now sit in the page
+  // gutter, which no mark covers, so a click there reports no unit and this
+  // returns. Two reasons that is the right answer rather than an omission.
+  // The gutter is where a reader clicks to put the cursor at the start of a
+  // line, and turning that into "select this card" would take an ordinary
+  // editing gesture away; and a control's own click is already handled above,
+  // so widening the target would only change what a MISS does.
   if (!unitKey) return { ok: true };
   if (event.metaKey || event.ctrlKey) {
     // Add to, or remove from, the selection.
@@ -2085,8 +2281,9 @@ function cardMenuItems(name, id, implicit, inGroup) {
       action: "rename",
     });
     items.push({
-      name: "Show the directive",
-      description: "Put the cursor on this atom's directive line, where its attributes live.",
+      name: "Edit attributes",
+      description:
+        "Put the cursor on this atom's directive line. The line IS the attributes, and the peek shows it while the cursor is there.",
       action: "reveal",
     });
   }
@@ -2106,10 +2303,82 @@ function cardMenuItems(name, id, implicit, inGroup) {
   return items;
 }
 
+/** What a group's popover offers, as a pure list. Same shape as a card's. */
+function groupMenuItems(name, groupId) {
+  return [
+    {
+      name: name + "  -  " + groupId,
+      description: "Identity. Choosing this does nothing.",
+      action: "label",
+    },
+    {
+      name: "Rename group",
+      description: "Change this group's readable name. Its id does not change.",
+      action: "rename-group",
+    },
+    {
+      name: "Ungroup",
+      description: "Remove the two markers; every atom inside stays.",
+      action: "ungroup-group",
+    },
+  ];
+}
+
 /**
- * The card's three-dot menu, in SilverBullet's own filterable picker.
+ * Open or close a card's popover. PRESENTATION ONLY: it writes the decoration
+ * config and nothing else, so opening a menu cannot change a document byte.
  */
-async function openCardMenu(boxKey, unitKey) {
+async function toggleCardMenu(boxKey) {
+  if (!boxKey) return { ok: false, error: "No card under that control" };
+  openMenu = menuOpenForCard(openMenu, boxKey)
+    ? null
+    : { kind: "card", boxKey };
+  const text = await syscall("editor.getText");
+  await writeDecorations(text, false);
+  return { ok: true, open: openMenu !== null };
+}
+
+/** Open or close a group's popover. Presentation only, as above. */
+async function toggleGroupMenu(unitKey) {
+  if (!unitKey || unitKey.indexOf("group:") !== 0) {
+    return { ok: false, error: "No group under that control" };
+  }
+  openMenu = menuOpenForGroup(openMenu, unitKey)
+    ? null
+    : { kind: "group", unitKey };
+  const text = await syscall("editor.getText");
+  await writeDecorations(text, false);
+  return { ok: true, open: openMenu !== null };
+}
+
+/** Shut whatever popover is open, and redraw. Cheap when none is. */
+async function closeMenu() {
+  if (!openMenu) return false;
+  openMenu = null;
+  const text = await syscall("editor.getText");
+  await writeDecorations(text, false);
+  return true;
+}
+
+/** The action class a click carried, or null. `atomdown-mi-<action>`. */
+function menuActionFromClasses(classes) {
+  const list = classes || [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].indexOf("atomdown-mi-") === 0) {
+      return list[i].slice("atomdown-mi-".length);
+    }
+  }
+  return null;
+}
+
+/**
+ * Run one row of a card's popover.
+ *
+ * The document is re-read here rather than trusted from whatever was drawn,
+ * the same "re-read, do not trust the client" rule the drag path uses: the
+ * popover may have been open while the reader typed.
+ */
+async function runCardMenuAction(action, boxKey, unitKey) {
   const atomId = boxKey && boxKey.indexOf("atom:") === 0
     ? boxKey.slice("atom:".length)
     : null;
@@ -2118,7 +2387,6 @@ async function openCardMenu(boxKey, unitKey) {
   const card = scan.cards.find(function (c) {
     return c.atomIds[0] === atomId;
   });
-  const implicit = !atomId || (card && card.implicit === true);
   const slug = card ? card.atomSlug : null;
   const name = slugOrId(slug, atomId);
   // The card's OWN record says which unit holds it. The caller's `unitKey`
@@ -2126,20 +2394,11 @@ async function openCardMenu(boxKey, unitKey) {
   // click landed in a widget next to a folded range, so it is only the
   // fallback for a card this scan cannot find.
   const owner = card ? card.unitKey : unitKey;
-  const inGroup = owner ? owner.indexOf("group:") === 0 : false;
-  const items = cardMenuItems(name, atomId, implicit, inGroup);
-  const choice = await syscall(
-    "editor.filterBox",
-    "Card",
-    items.map(function (i) {
-      return { name: i.name, description: i.description };
-    }),
-    implicit ? "This block has no id" : name + " (" + atomId + ")",
-  );
-  if (!choice) return { ok: true, cancelled: true };
-  const picked = items.find(function (i) { return i.name === choice.name; });
-  if (!picked || picked.action === "label") return { ok: true };
-  switch (picked.action) {
+  // The popover shuts BEFORE the action runs. Every action either opens a
+  // modal of its own, moves the cursor or rewrites the document, and a popover
+  // still on screen over any of those is stale by definition.
+  await closeMenu();
+  switch (action) {
     case "copy-id":
       await copyText(atomId);
       return { ok: true, copied: atomId };
@@ -2151,10 +2410,25 @@ async function openCardMenu(boxKey, unitKey) {
     case "reveal":
       return await revealDirective(atomId);
     case "ungroup":
+      if (!owner || owner.indexOf("group:") !== 0) {
+        return { ok: false, error: "That card is not in a group" };
+      }
       return await ungroupHere(owner.slice("group:".length));
     case "group":
       return await groupSelection();
   }
+  return { ok: true };
+}
+
+/** Run one row of a group's popover. */
+async function runGroupMenuAction(action, unitKey) {
+  const groupId = unitKey && unitKey.indexOf("group:") === 0
+    ? unitKey.slice("group:".length)
+    : null;
+  if (!groupId) return { ok: false, error: "No group under that menu" };
+  await closeMenu();
+  if (action === "ungroup-group") return await ungroupHere(groupId);
+  if (action === "rename-group") return await renameGroupHere(groupId);
   return { ok: true };
 }
 
@@ -2217,31 +2491,6 @@ async function revealDirective(atomId) {
     }
   }
   return { ok: false, error: "Could not find that atom's directive" };
-}
-
-/**
- * The group header's menu, shown in SilverBullet's own filterable picker
- * rather than in a popover of this plug's own. A widget carries HTML with no
- * script, so a hand-built menu inside one could not react to a click anyway,
- * and the host's picker already handles the keyboard and the theme.
- */
-async function openGroupMenu(unitKey) {
-  const groupId = unitKey && unitKey.indexOf("group:") === 0
-    ? unitKey.slice("group:".length)
-    : null;
-  if (!groupId) return { ok: false, error: "No group under that menu" };
-  const choice = await syscall(
-    "editor.filterBox",
-    "Group",
-    [
-      { name: "Rename group", description: "Change this group's readable name" },
-      { name: "Ungroup", description: "Remove the two markers; every atom stays" },
-    ],
-    "Group " + groupId,
-  );
-  if (!choice) return { ok: true, cancelled: true };
-  if (choice.name === "Ungroup") return await ungroupHere(groupId);
-  return await renameGroupHere(groupId);
 }
 
 async function renameGroupHere(groupId) {
@@ -2444,6 +2693,12 @@ const internals = {
   widgetUnitKey,
   widgetBoxKey,
   cardMenuItems,
+  groupMenuItems,
+  menuPopoverHtml,
+  menuActionFromClasses,
+  menuOpenForCard,
+  menuOpenForGroup,
+  MENU_GLYPH,
   removeLineCollapsingSeam,
   minimalEdit,
   newAtomdownId,
