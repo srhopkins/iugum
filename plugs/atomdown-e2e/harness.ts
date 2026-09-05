@@ -1114,10 +1114,12 @@ export async function sweepEach(
   fn: (locator: Locator, key: string, index: number) => Promise<void>,
 ): Promise<string[]> {
   const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
-  const metrics = await view.ev.evaluate((sel) => {
-    const el = document.querySelector(sel) ?? document.scrollingElement!;
-    return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
-  }, scroller);
+  const readMetrics = () =>
+    view.ev.evaluate((sel) => {
+      const el = document.querySelector(sel) ?? document.scrollingElement!;
+      return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    }, scroller);
+  let metrics = await readMetrics();
   const step = Math.max(200, Math.floor(metrics.clientHeight * 0.6));
   const seen: string[] = [];
 
@@ -1195,8 +1197,19 @@ export async function sweepEach(
       await fn(view.ev.locator(selector).nth(i), keys[i], seen.length - 1);
     }
 
+    // RE-READ THE DOCUMENT'S HEIGHT EVERY STOP. `fn` is an interaction, and
+    // several of the interactions this sweep drives change how tall the
+    // document is — expanding a group is the one that matters. Holding the
+    // height from before the sweep started ended the loop on the collapsed
+    // document's height, so "expand every group" reopened the groups realised
+    // at the top of the page and stopped, leaving the rest folded. That looked
+    // exactly like a caret that would not expand, and was not.
+    metrics = await readMetrics();
     if (y + metrics.clientHeight >= metrics.scrollHeight) break;
     if (y > metrics.scrollHeight + metrics.clientHeight) break;
+    // A runaway guard, because the height is now re-read: an interaction that
+    // grew the document every stop would otherwise never end the loop.
+    if (y / step > 200) break;
   }
   return seen;
 }
@@ -1600,6 +1613,26 @@ export type Signature = {
  * Rects are recorded RELATIVE to the scroll container, so a signature taken
  * before a toggle and one taken after are comparable even if the toggle
  * changed the scroll position.
+ *
+ * AND IT SWEEPS THE WHOLE DOCUMENT, for the same reason `sweepBoxes` does.
+ * CodeMirror virtualises, so the elements this selector can find at one scroll
+ * position are the handful realised there — 19 of the fixture's ~190. Two
+ * problems, both real, both measured:
+ *
+ *   - A signature read at the top of the document and one read at the bottom
+ *     describe different subsets of the same correct state. Comparing them
+ *     reported "element count 19 -> 28" on a round trip where nothing was
+ *     wrong except where the editor happened to be scrolled.
+ *   - Even at the SAME scroll position the count moved, 19 to 22, because
+ *     CodeMirror's rendered margin grows after a burst of interaction. Every
+ *     shared entry was identical; there were simply three more of them.
+ *
+ * So the fingerprint is the UNION over an overlapping scroll sweep, keyed by
+ * each element's own content and sorted. That is deterministic — with 40%
+ * overlap every element is inside the viewport at some stop, so the union is
+ * every element whatever the margin did — and it covers all 84 cards and all
+ * 11 groups instead of the five on screen, which is what lets it see a group
+ * left folded 60 atoms down the page.
  */
 export async function signature(view: View): Promise<Signature> {
   const selector =
@@ -1607,44 +1640,90 @@ export async function signature(view: View): Promise<Signature> {
       ? ".atomdown-card-header,.atomdown-group-header,.atomdown-card-line,.atomdown-group-line"
       : ".board-card,.board-group,.board-card-header,.board-group-header";
   const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
-  await settle(view.page);
-  const entries = await view.ev.evaluate(
-    ({ sel, scr }) => {
-      const base = document.querySelector(scr);
-      const origin = base?.getBoundingClientRect() ?? { left: 0, top: 0 };
-      const offset = base?.scrollTop ?? 0;
-      return Array.from(document.querySelectorAll(sel)).map((el) => {
-        const r = el.getBoundingClientRect();
-        const classes = String(el.className).trim().split(/\s+/).sort().join(".");
-        const text = (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
-        const round = (v: number) => Math.round(v);
-        return [
-          classes,
-          round(r.left - origin.left),
-          round(r.top - origin.top + offset),
-          round(r.width),
-          round(r.height),
-          text,
-        ].join("|");
-      });
-    },
-    { sel: selector, scr: scroller },
-  );
+
+  const read = () =>
+    view.ev.evaluate(
+      ({ sel, scr }) => {
+        const base = document.querySelector(scr);
+        const origin = base?.getBoundingClientRect() ?? { left: 0, top: 0 };
+        const offset = base?.scrollTop ?? 0;
+        return Array.from(document.querySelectorAll(sel)).map((el) => {
+          const r = el.getBoundingClientRect();
+          const classes = String(el.className).trim().split(/\s+/).sort()
+            .join(".");
+          const text = (el.textContent ?? "").replace(/\s+/g, " ").trim()
+            .slice(0, 80);
+          const round = (v: number) => Math.round(v);
+          return [
+            classes,
+            round(r.left - origin.left),
+            round(r.top - origin.top + offset),
+            round(r.width),
+            round(r.height),
+            text,
+          ].join("|");
+        });
+      },
+      { sel: selector, scr: scroller },
+    );
+
+  const scrollTo = (top: number) =>
+    view.ev.evaluate(
+      ({ sel, top }) => {
+        const el = document.querySelector(sel) ?? document.scrollingElement!;
+        el.scrollTop = top;
+      },
+      { sel: scroller, top },
+    );
+
+  const metrics = await view.ev.evaluate((sel) => {
+    const el = document.querySelector(sel) ?? document.scrollingElement!;
+    return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  }, scroller);
+
+  const seen = new Set<string>();
+  const step = Math.max(200, Math.floor(metrics.clientHeight * 0.6));
+  for (let y = 0, stops = 0; ; y += step, stops++) {
+    await scrollTo(y);
+    await settle(view.page, 3);
+    for (const entry of await read()) seen.add(entry);
+    if (y + metrics.clientHeight >= metrics.scrollHeight) break;
+    if (stops > 60) break; // a runaway guard, never reached by this fixture
+  }
+  // Leave the view where a reader would find it, and where the next signature
+  // starts, so nothing downstream depends on the sweep's last stop.
+  await scrollTo(0);
+  await settle(view.page, 3);
+
+  // Sorted, because the union's insertion order is the order the stops
+  // happened to realise things in and carries no meaning.
+  const entries = [...seen].sort();
   return { entries, count: entries.length };
 }
 
-/** The first difference between two signatures, for a failure message. */
+/**
+ * The difference between two signatures, for a failure message.
+ *
+ * A SET difference, not a positional one. The entries are the union over a
+ * scroll sweep and are sorted, so one missing element shifts every index after
+ * it and a positional walk prints dozens of lines that all say the same thing.
+ * "Gone" and "appeared" is what a reader needs: a group left folded shows up as
+ * its own member cards gone.
+ */
 export function signatureDiff(a: Signature, b: Signature): string[] {
   const out: string[] = [];
   if (a.count !== b.count) {
     out.push(`element count ${a.count} -> ${b.count}`);
   }
-  const max = Math.min(a.entries.length, b.entries.length);
-  for (let i = 0; i < max && out.length < 10; i++) {
-    if (a.entries[i] !== b.entries[i]) {
-      out.push(`[${i}] before: ${a.entries[i]}`);
-      out.push(`[${i}] after:  ${b.entries[i]}`);
-    }
+  const before = new Set(a.entries);
+  const after = new Set(b.entries);
+  const gone = a.entries.filter((e) => !after.has(e));
+  const appeared = b.entries.filter((e) => !before.has(e));
+  for (const entry of gone.slice(0, 5)) out.push(`gone:     ${entry}`);
+  if (gone.length > 5) out.push(`... and ${gone.length - 5} more gone`);
+  for (const entry of appeared.slice(0, 5)) out.push(`appeared: ${entry}`);
+  if (appeared.length > 5) {
+    out.push(`... and ${appeared.length - 5} more appeared`);
   }
   return out;
 }

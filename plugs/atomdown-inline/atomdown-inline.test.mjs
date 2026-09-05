@@ -31,6 +31,8 @@ const {
   setGroupSlugInSource,
   setAtomSlugInSource,
   firstBoxKey,
+  widgetUnitKey,
+  widgetBoxKey,
   cardMenuItems,
   minimalEdit,
   newAtomdownId,
@@ -49,6 +51,8 @@ const {
   directivePeekHtml,
   toggleAction,
   toggleCollapsed,
+  groupFoldRanges,
+  collapsedFromFolds,
   collapsedKey,
   buildDecorations,
   emptyDecorations,
@@ -568,6 +572,24 @@ test("a peek escapes its text, so a directive cannot inject markup", () => {
   assert.match(html, /&amp;y/);
 });
 
+test("no header widget carries directive text as text, only as an attribute", () => {
+  // The defect: a card header's own text read
+  // `⠿running-todoZE5AMAB7⋯<!-- <atom id="ZE5AMAB7" digest="sha256:…`, so the
+  // directive was back in the page's text for everything that reads text
+  // rather than pixels. The peek paints it with `content: attr(...)` instead,
+  // so the characters are in an attribute value and in no text node.
+  const payload = buildDecorations(PAGE, []);
+  for (const widget of payload.widgets) {
+    // Strip every tag, which leaves exactly the widget's text nodes.
+    const text = widget.html.replaceAll(/<[^>]*>/g, "");
+    assert.equal(
+      /<!--|atom id=|atom-group id=|sha256:/.test(text),
+      false,
+      `widget ${widget.id} carries directive text in a text node: ${text}`,
+    );
+  }
+});
+
 test("an empty or blank directive line produces no peek at all", () => {
   assert.equal(directivePeekHtml(""), "");
   assert.equal(directivePeekHtml("   "), "");
@@ -607,6 +629,90 @@ test("collapsing is a set, so the caret can never desynchronise", () => {
   // Idempotent in the sense that matters: two flips return to the start.
   const once = toggleCollapsed([], "AAAAAAAA");
   assert.deepEqual(toggleCollapsed(once, "AAAAAAAA"), []);
+});
+
+test("a widget control names its own unit, whatever the click's marks say", () => {
+  // THE DEFECT. A header widget is a block element with no text, so the seam
+  // builds its click's mark list from the nearest text position — which is
+  // outside the fold once a neighbouring group is collapsed. The caret then
+  // read the wrong group's `unit:` mark and toggled the wrong group.
+  const wrong = ["unit:group:NEIGHBOUR", "box:atom:AAAAAAAA"];
+  assert.equal(
+    widgetUnitKey({ widget: "unit:group:7K3M9X2D", marks: wrong }),
+    "group:7K3M9X2D",
+  );
+  assert.equal(
+    widgetBoxKey({ widget: "box:atom:AAAAAAAA", marks: wrong }),
+    "atom:AAAAAAAA",
+  );
+  // A click that was not in a widget says so, and the mark list is then the
+  // only answer available.
+  assert.equal(widgetUnitKey({ marks: wrong }), null);
+  assert.equal(widgetUnitKey({ widget: "" }), null);
+  assert.equal(widgetBoxKey({ widget: "unit:group:X" }), null);
+  assert.equal(widgetUnitKey({ widget: "box:atom:X" }), null);
+  assert.equal(widgetUnitKey(null), null);
+});
+
+test("every widget the plug emits is named after the unit or box it draws", () => {
+  // The identity above only works if the widget carries it, so this is the
+  // other half: no header widget may be anonymous.
+  const payload = buildDecorations(PAGE, [], []);
+  for (const widget of payload.widgets) {
+    assert.ok(
+      /^(unit|box):/.test(widget.id),
+      `widget ${widget.class} has no unit or box name: ${widget.id}`,
+    );
+  }
+});
+
+test("a group's foldable range is the one the decorations declare", () => {
+  // The editor reports its fold state by `from` offset, so these two have to
+  // agree to the character or the caret can match no group at all.
+  const payload = buildDecorations(PAGE, [], []);
+  assert.deepEqual(
+    groupFoldRanges(PAGE).map((r) => ({ from: r.from, to: r.to })),
+    payload.folds.map((f) => ({ from: f.from, to: f.to })),
+  );
+  assert.deepEqual(groupFoldRanges(PAGE).map((r) => r.groupId), ["7K3M9X2D"]);
+});
+
+test("the caret decides fold or unfold from the editor's fold set, not memory", () => {
+  const range = groupFoldRanges(PAGE)[0];
+
+  // Nothing folded: the press collapses.
+  assert.deepEqual(collapsedFromFolds(PAGE, [], "7K3M9X2D", []), ["7K3M9X2D"]);
+  // Already folded: the press expands, whatever memory believed.
+  assert.deepEqual(
+    collapsedFromFolds(PAGE, [range.from], "7K3M9X2D", []),
+    [],
+  );
+  // THE DEFECT. The reader folded it from the gutter, so memory says open and
+  // the editor says folded. The old alternation collapsed it again — no
+  // visible change, a caret that looks dead. This expands it.
+  assert.deepEqual(
+    collapsedFromFolds(PAGE, [range.from], "7K3M9X2D", []),
+    [],
+  );
+  // And the mirror case: memory says folded, the editor says open.
+  assert.deepEqual(
+    collapsedFromFolds(PAGE, [], "7K3M9X2D", ["7K3M9X2D"]),
+    ["7K3M9X2D"],
+  );
+  // Two presses return to the start, from any starting memory.
+  const shut = collapsedFromFolds(PAGE, [], "7K3M9X2D", []);
+  assert.deepEqual(collapsedFromFolds(PAGE, [range.from], "7K3M9X2D", shut), []);
+});
+
+test("without a fold report the caret still alternates, so an older client works", () => {
+  assert.deepEqual(
+    collapsedFromFolds(PAGE, undefined, "7K3M9X2D", []),
+    ["7K3M9X2D"],
+  );
+  assert.deepEqual(
+    collapsedFromFolds(PAGE, undefined, "7K3M9X2D", ["7K3M9X2D"]),
+    [],
+  );
 });
 
 test("a collapsed group asks the seam to fold it, and says so in its caret", () => {

@@ -833,12 +833,22 @@ function cardHeaderHtml(unit, nested, directiveText) {
  *
  * Nothing but the cursor shows it. Hover does not, because the only reason to
  * read a directive is that you are editing it.
+ *
+ * THE TEXT IS AN ATTRIBUTE, NOT A TEXT NODE, and that is the whole point of
+ * this shape. A directive rendered as a child text node is part of the header
+ * widget's own `textContent`: a card header then reads
+ * `⠿running-todoZE5AMAB7⋯<!-- <atom id="ZE5AMAB7" digest="sha256:…`, so the
+ * plumbing is back in the page's text for anything that reads text rather than
+ * pixels — a copy of the page, a screen reader, the `title` of a hovered
+ * header, and every DOM signature the front-end suite takes. `content:
+ * attr(data-directive)` paints the same characters in the same box while
+ * leaving the widget's text content to be the name and the id only.
  */
 function directivePeekHtml(directiveText) {
   const text = String(directiveText == null ? "" : directiveText).trim();
   if (text === "") return "";
-  return '<span class="atomdown-directive-peek">' + escapeHtml(text) +
-    "</span>";
+  return '<span class="atomdown-directive-peek" data-directive="' +
+    escapeHtml(text) + '"></span>';
 }
 
 /**
@@ -1108,6 +1118,34 @@ function firstUnitKey(names) {
 }
 
 /**
+ * The unit key a control in a WIDGET belongs to, from the widget's own name.
+ *
+ * A MARK LIST CANNOT ANSWER THIS FOR A WIDGET, and that is a defect, not a
+ * preference. The seam builds a click's mark list from `posAtCoords`, and a
+ * header widget is a block element with no text of its own, so the position it
+ * reports is the nearest text — which is the line above it when that line is
+ * visible, and the nearest line OUTSIDE the fold when it is not. Collapse two
+ * or three groups and a caret's click reported a position inside the previous
+ * group's folded range, so the plug read the previous group's `unit:` mark and
+ * collapsed or expanded the WRONG GROUP. Measured: pressing every caret in
+ * turn to reopen eleven collapsed groups reopened one, re-shut two others and
+ * did nothing at all six times.
+ *
+ * The widget's name is the identity the plug itself put on the widget, so it is
+ * exact and independent of where the click landed.
+ */
+function widgetUnitKey(event) {
+  const name = event && typeof event.widget === "string" ? event.widget : "";
+  return name.indexOf("unit:") === 0 ? name.slice("unit:".length) : null;
+}
+
+/** The same for a card header widget, whose name is its `box:` key. */
+function widgetBoxKey(event) {
+  const name = event && typeof event.widget === "string" ? event.widget : "";
+  return name.indexOf("box:") === 0 ? name.slice("box:".length) : null;
+}
+
+/**
  * Turns one `editor:decorationDrag` payload into a reorder request.
  *
  * The origin is whichever unit mark covered the handle. The target is
@@ -1261,6 +1299,70 @@ function toggleCollapsed(ids, groupId) {
   const at = out.indexOf(groupId);
   if (at === -1) return out.concat([groupId]);
   return out.filter(function (_, i) { return i !== at; });
+}
+
+/**
+ * Every group's foldable range, as the offsets the decorations use.
+ *
+ * The offsets have to be computed exactly the way `buildDecorations` computes
+ * its `folds` entries — the hidden part starts at the END of the group's
+ * opening marker line and ends at the end of its closing marker line — because
+ * the editor reports its fold state by `from` offset, and an offset that
+ * differs by one character matches no group at all.
+ */
+function groupFoldRanges(sourceText) {
+  const scan = computeUnits(sourceText);
+  const lines = scan.lines;
+  const starts = lineStarts(lines);
+  const out = [];
+  scan.units.forEach(function (unit) {
+    if (unit.kind !== "group") return;
+    const from = starts[unit.startLine] + lines[unit.startLine].length;
+    const to = starts[unit.endLine] + lines[unit.endLine].length;
+    if (to > from) out.push({ groupId: unit.groupId, from: from, to: to });
+  });
+  return out;
+}
+
+/**
+ * The collapsed set after one press of one group's caret.
+ *
+ * THIS IS WHY THE CARET CANNOT GO OUT OF STEP. `foldedFroms` is what the
+ * EDITOR reports folded at the moment of the click, so every group other than
+ * the pressed one takes its flag from the editor: a group the reader folded
+ * from the gutter or with the fold command is adopted rather than contradicted.
+ * The pressed group takes the OPPOSITE of what the editor has, so a press
+ * always changes something, and nothing at all is carried over from the last
+ * press. The previous version alternated a remembered flag, which was right
+ * until anything else folded the same range once — after that the caret was
+ * permanently one press behind and the group would not reopen.
+ *
+ * `remembered` is the fallback for a client whose seam does not report the fold
+ * state: the control then alternates as it used to, which is worse but still
+ * works.
+ */
+function collapsedFromFolds(sourceText, foldedFroms, pressedGroupId, remembered) {
+  const known = Array.isArray(foldedFroms);
+  const prior = dedupeKeys(remembered || []);
+  const out = [];
+  let sawPressed = false;
+  groupFoldRanges(sourceText).forEach(function (range) {
+    const folded = known
+      ? foldedFroms.indexOf(range.from) !== -1
+      : prior.indexOf(range.groupId) !== -1;
+    if (range.groupId === pressedGroupId) {
+      sawPressed = true;
+      if (!folded) out.push(range.groupId);
+      return;
+    }
+    if (folded) out.push(range.groupId);
+  });
+  if (!sawPressed && prior.indexOf(pressedGroupId) === -1) {
+    // A group with nothing to fold still draws a caret. Keep its flag
+    // flipping, so the glyph reports what the reader last asked for.
+    out.push(pressedGroupId);
+  }
+  return dedupeKeys(out);
 }
 
 /** True only when this exact page was left with the inline view on. */
@@ -1487,17 +1589,27 @@ async function onDecorationClick(event) {
   if (!(await isInlineOn(page))) return { ok: true };
   const classes = event.classes || [];
 
+  // Every control below lives in a WIDGET, so its unit comes from the
+  // widget's own name and only falls back to the mark list. See
+  // `widgetUnitKey`: a click in a block widget reports the position of the
+  // nearest text, which is the wrong group's range once a neighbouring group
+  // is folded.
   if (classes.indexOf("atomdown-group-collapse") !== -1) {
-    return await collapseGroup(firstUnitKey(event.marks));
+    return await collapseGroup(
+      widgetUnitKey(event) ?? firstUnitKey(event.marks),
+      event.foldedFroms,
+    );
   }
 
   if (classes.indexOf("atomdown-group-menu") !== -1) {
-    return await openGroupMenu(firstUnitKey(event.marks));
+    return await openGroupMenu(
+      widgetUnitKey(event) ?? firstUnitKey(event.marks),
+    );
   }
 
   if (classes.indexOf("atomdown-card-menu") !== -1) {
     return await openCardMenu(
-      firstBoxKey(event.marks),
+      widgetBoxKey(event) ?? firstBoxKey(event.marks),
       firstUnitKey(event.marks),
     );
   }
@@ -1574,26 +1686,31 @@ function onDecorationSelect() {
 /**
  * Collapses or expands one group, through the editor's own folding.
  *
- * The cursor goes to the group's OPENING MARKER LINE, computed from the page
- * text, not to wherever the pointer landed. The header bar is a block widget
- * above that line, so a click in it reports a position on the line before the
- * group, and folding there would fold the wrong thing or nothing. The seam's
- * `folds` entry makes exactly that one line foldable; `editor.fold` and
- * `editor.unfold` then do the collapsing, so there is no collapse state in
- * this plug and none in the document.
+ * The state is DECLARED, not alternated. `foldedFroms` on the click event is
+ * the editor's own fold set, so the press computes "fold this" or "unfold
+ * this" from what the editor actually has rather than from what this plug last
+ * remembered. That is the whole fix for the caret that went dead: a group
+ * folded from the gutter, or by the fold command, used to leave the remembered
+ * flag one press behind for good.
+ *
+ * The new flag goes into the decorations and the seam reconciles the editor's
+ * fold set to it. The cursor is never moved: moving it into the marker line is
+ * what used to reveal the directive on a collapse click.
  */
-async function collapseGroup(unitKey) {
+async function collapseGroup(unitKey, foldedFroms) {
   const groupId = unitKey && unitKey.indexOf("group:") === 0
     ? unitKey.slice("group:".length)
     : null;
   if (!groupId) return { ok: false, error: "No group under that control" };
   const page = await syscall("editor.getCurrentPage").catch(() => undefined);
-  collapsedGroupIds = toggleCollapsed(collapsedGroupIds, groupId);
-  await rememberCollapsed(page, collapsedGroupIds);
-  // Rewrite the decorations with the new flag and let the seam reconcile the
-  // editor's own fold set to it. The cursor is not moved: moving it into the
-  // marker line is what used to reveal the directive on a collapse click.
   const text = await syscall("editor.getText");
+  collapsedGroupIds = collapsedFromFolds(
+    text,
+    foldedFroms,
+    groupId,
+    collapsedGroupIds,
+  );
+  await rememberCollapsed(page, collapsedGroupIds);
   await writeDecorations(text, false);
   return {
     ok: true,
@@ -1671,7 +1788,12 @@ async function openCardMenu(boxKey, unitKey) {
   const implicit = !atomId || (card && card.implicit === true);
   const slug = card ? card.atomSlug : null;
   const name = slugOrId(slug, atomId);
-  const inGroup = unitKey ? unitKey.indexOf("group:") === 0 : false;
+  // The card's OWN record says which unit holds it. The caller's `unitKey`
+  // comes from the click's mark list, which names the wrong unit when the
+  // click landed in a widget next to a folded range, so it is only the
+  // fallback for a card this scan cannot find.
+  const owner = card ? card.unitKey : unitKey;
+  const inGroup = owner ? owner.indexOf("group:") === 0 : false;
   const items = cardMenuItems(name, atomId, implicit, inGroup);
   const choice = await syscall(
     "editor.filterBox",
@@ -1696,7 +1818,7 @@ async function openCardMenu(boxKey, unitKey) {
     case "reveal":
       return await revealDirective(atomId);
     case "ungroup":
-      return await ungroupHere(unitKey.slice("group:".length));
+      return await ungroupHere(owner.slice("group:".length));
     case "group":
       return await groupSelection();
   }
@@ -1962,6 +2084,8 @@ const internals = {
   setAtomSlugInSource,
   serializeAtomLine,
   firstBoxKey,
+  widgetUnitKey,
+  widgetBoxKey,
   cardMenuItems,
   removeLineCollapsingSeam,
   minimalEdit,
@@ -1981,6 +2105,8 @@ const internals = {
   directivePeekHtml,
   toggleAction,
   toggleCollapsed,
+  groupFoldRanges,
+  collapsedFromFolds,
   collapsedKey,
   buildDecorations,
   emptyDecorations,

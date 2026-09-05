@@ -319,15 +319,46 @@ for (const theme of THEMES) {
           async () => await setDensity(view, combo.density),
         );
 
+        // --- The four editor widths, as an INDEPENDENCE property ----------
+        //
+        // The board is a full-screen modal panel with its own layout: the
+        // editor's content-column width is not one of its state machines, and
+        // `plugs/atomdown-board` reads neither `--editor-width` nor
+        // `html[data-editor-width]`. So the round-trip form of this assertion
+        // is not the right one — it requires the DOM to CHANGE on the way out,
+        // and reported "the toggle did nothing" on a panel that is correct.
+        //
+        // What is worth asserting is the property that actually holds, and it
+        // is not weaker: every width leaves the panel byte-identical. That
+        // fails the moment the panel starts depending on the editor width by
+        // accident, which is the regression this cell of the matrix can see.
+        const atStart = await signature(view);
         for (const w of WIDTHS.filter((x) => x !== combo.width)) {
-          await assertRoundTrip(
-            view,
-            combo,
-            `editor width ${combo.width} -> ${w} -> ${combo.width}`,
-            async () => await setWidth(page, w),
-            async () => await setWidth(page, combo.width),
-          );
+          await setWidth(page, w);
+          const now = await signature(view);
+          if (
+            now.count !== atStart.count ||
+            now.entries.join("\n") !== atStart.entries.join("\n")
+          ) {
+            await failWithArtifacts(
+              view.page,
+              4,
+              "state round trip — the editor width moved the board panel",
+              combo,
+              {
+                width: w,
+                diff: signatureDiff(atStart, now),
+                before: atStart.count,
+                after: now.count,
+              },
+              `setting the editor width to ${w} changed the board panel's ` +
+                `DOM. The panel is full-screen and independent of the ` +
+                `editor's content column, so nothing in it may follow that ` +
+                `width. ` + signatureDiff(atStart, now).slice(0, 4).join(" / "),
+            );
+          }
         }
+        await setWidth(page, combo.width);
 
         // --- Reload persistence: ON stays on ------------------------------
         await gotoFixture(page, server);

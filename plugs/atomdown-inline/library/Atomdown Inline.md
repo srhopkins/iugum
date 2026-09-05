@@ -584,7 +584,20 @@ html {
    ABOVE the card's top edge, so its text appeared outside the box.
    The reveal is the peek below instead: a copy of the directive text carried
    by the card's header widget, absolutely positioned, so it costs no layout
-   and is clipped to the card's own padding. */
+   and is clipped to the card's own padding.
+
+   THE TEXT ARRIVES THROUGH `content: attr(data-directive)`, not as a text
+   node. A text node would put the whole directive - id, slug and a
+   64-character sha256 digest - into the header widget's own `textContent`, so
+   the plumbing would be back in the page's text for everything that reads
+   text rather than pixels: a copy of the page, a screen reader, and every DOM
+   signature the front-end suite takes. A pseudo-element paints the same
+   characters in the same box and contributes none of them to the widget's
+   text. */
+.atomdown-directive-peek::after {
+  content: attr(data-directive);
+}
+
 .atomdown-directive-peek {
   display: none;
   position: absolute;
