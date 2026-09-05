@@ -425,9 +425,11 @@ for (const combo of combos()) {
       await menu.scrollIntoViewIfNeeded();
       await settle(page, 3);
       await menu.click({ force: true });
+      // Wait for the popover itself. The plug's click handler crosses the
+      // worker boundary, so it is not bounded by an animation frame.
       await page
         .locator(".atomdown-menu-popover")
-        .waitFor({ state: "visible" });
+        .waitFor({ state: "visible", timeout: 15_000 });
       await page.mouse.move(2, 2);
       await settle(page, 3);
 
