@@ -11,6 +11,77 @@ scripts/atomdown-fe-check.sh --full     # all 16 matrix cells
 scripts/atomdown-fe-check.sh --rule 1   # one rule
 scripts/atomdown-fe-check.sh --defects  # the negative control
 scripts/atomdown-fe-check.sh --probe    # print what the views render
+scripts/atomdown-fe-check.sh --visual   # rule 9, the visual baselines, only
+scripts/atomdown-fe-check.sh --visual --update-snapshots   # re-take them
+```
+
+The default runs **two Playwright projects**: `atomdown` (rules 1 to 8) and
+`visual` (rule 9). They are separate because rule 9 needs its own browser
+policy - see "Rule 9" below.
+
+## Rule 1 has two halves: content and chrome
+
+Rule 1 used to say "nothing a card draws may leave the box that draws it". The
+inline view's per-card controls now sit outside the card's border on purpose
+(the drag grip in the left page gutter, the vertical three-dot menu in the
+right one), so the rule was split rather than relaxed:
+
+- **CONTENT** - lines, list markers, blockquote bars, table cells, fenced code,
+  links - must stay inside the box. That is `CHILD_SELECTOR` in the harness and
+  it has not lost an entry.
+- **CHROME** - the grip, the two three-dot buttons, the collapse caret and the
+  popover - may sit outside, and must instead be (a) PAINTED where its rect
+  says it is, (b) inside the editor's own scroll container, and (c) clear of
+  the group's 2px accent outline. That is `chromeViolations`.
+
+(a) is a hit test, not a measurement: a clipped element still reports its full
+unclipped rect, so only `document.elementFromPoint` can tell the difference.
+
+Board chrome stays inside its card and is still checked as content, so nothing
+about the board's half of rule 1 changed.
+
+Four cases in the negative control prove the chrome half fails: a gutter wide
+enough to push a control off the scroller, an overlay on top of one, a control
+on the group outline, and the clean page. The first draft of the checker passed
+all three broken pages - it counted an ancestor on top as "painted", and it
+gated the geometric checks behind the paint test's own on-screen guard.
+
+## Rule 9: visual regression, in one pinned environment
+
+`9-visual.test.ts`. It exists because no behavioural assertion can see a
+colour: Steve reported a hover that painted a white hole in a saturated blue
+bar while every other rule was green.
+
+**The environment is a hard requirement, not a default.** Headless only,
+Playwright's own bundled Chromium at the version in
+`silverbullet/package-lock.json`, never the system Chrome and never an
+`executablePath`. `--headed` or `PWDEBUG` refuses the run before the first
+capture, so a headed run can neither produce nor update a baseline; nothing
+opens a window, takes focus or appears in anyone's browser. Viewport,
+`deviceScaleFactor`, `colorScheme` per theme case, `reducedMotion`, animations,
+the caret, the timezone and the locale are all pinned, and every wait is on a
+condition rather than a clock.
+
+`ATOMDOWN_FE_CHANNEL`, which switches rules 1 to 8 to a system browser, is
+refused here.
+
+**Fonts.** Not pinned - the space's CSS resolves to whatever the host provides
+and this repo ships no font file - so every glyph in the chrome is coloured
+transparent before a capture. That removes the text's pixels and leaves every
+fill, border, radius and shadow where it was, which is where this defect lives.
+Playwright's own `mask` option is deliberately unused: it paints a box over the
+region, and the first draft masked the two CONTROLS, so a solid white chip on
+the accent fill passed all twelve baselines. Residual limit: transparent text
+still takes its advance width, so a chip's width is font-dependent even though
+its fill is not. Hence per-platform baselines (`-darwin.png`), a recorded
+browser build in `visual-baselines/browser.txt`, and rule 8h asserting the
+same property numerically - composited colours, which run anywhere.
+
+**Zero tolerance** (`maxDiffPixels: 0`), and updating is one command, so nobody
+is tempted to raise a threshold instead:
+
+```sh
+scripts/atomdown-fe-check.sh --visual --update-snapshots
 ```
 
 ## Why it exists
@@ -25,7 +96,7 @@ function can see any of them, because none of them is a wrong return value.
 
 So this suite measures the rendered document in a real browser.
 
-## The six rules, and the defect each one reproduces
+## The rules, and the defect each one reproduces
 
 | # | Rule | The defect it exists for |
 |---|------|--------------------------|
@@ -35,6 +106,33 @@ So this suite measures the rendered document in a real browser.
 | 4 | **State machine round trips.** Collapse, view on/off, raw/rendered, density (through the command AND through the header button) and the four editor widths each return to an identical DOM signature; reload persistence keeps on ON, off OFF and the density where it was left, scoped per page. | A group that would not expand after collapse. The header toggle doing nothing on first press while the command worked. Close-then-reload reopening the board. |
 | 5 | **Rendering fidelity.** No `<!-- <atom`, no `sha256:`, no `](http`, no bare `##` or `**` outside code. Positively: one `<ol>` with six `<li>`, one `<table>` with 10 rows, an `<a href>` in every ticket cell. | Raw markdown reaching the reader. An ordered list rendering as a run-on paragraph. |
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
+
+## Rule 8: the card's controls
+
+`8-card-controls.test.ts`, one assertion per defect Steve found on the live
+page, each stated as the property that was violated:
+
+| | |
+|---|---|
+| 8a | The three-dot control opens a POPOVER anchored to the card, and no filter picker appears. It used to call `editor.filterBox`, which is the command palette's own surface. |
+| 8b | The popover's first child is an inert name-and-id label. Clicking it, or the popover's own padding, keeps the menu open; a click elsewhere closes it. |
+| 8c | The glyph is U+22EE VERTICAL ELLIPSIS, asserted by CODE POINT. Never from an image: a screenshot cannot say which character it is, and U+22EE and U+22EF differ by one bit. |
+| 8d | Both card controls sit OUTSIDE the card's border, measured against the card head's own border rect, at all four widths and both densities, for a top-level card and a card inside a group. |
+| 8e | Both are hidden at rest and revealed by hover AND by keyboard focus. An open popover keeps its own button lit. |
+| 8f | None of it writes a document byte: hover, open, click the label, close, switch density twice, compare the file. |
+| 8g | The popover holds NO text input. |
+| 8h | The group control's hover is a translucent wash, not an opaque chip, measured as a composited colour rather than as pixels. |
+
+**8g is a negative assertion with a measured reason.** The decoration seam's
+`widgetPressGuard` calls `preventDefault` on a plain `mousedown` inside any
+widget, so an input in a popover takes no focus from a click - and the
+keystrokes that follow go INTO THE DOCUMENT. `input-probe.test.ts` records
+that: after clicking an input inside a card header widget,
+`document.activeElement` was `.cm-content` and the typed text appeared in the
+page. So the popover is buttons only, and 8g is the guard rail that says why.
+
+**8h and rule 9 cover the same defect from two sides.** 8h is font-free and
+runs on any machine; rule 9 sees the thing a number cannot describe.
 
 ## Area 7: the components
 
@@ -80,7 +178,14 @@ That is the trade, stated plainly: the fast subset is a gate people keep, and
 shows up in one combination.
 
 Area 7 is in the fast subset on purpose - those are the assertions most likely
-to catch a regression on an ordinary change.
+to catch a regression on an ordinary change. So is rule 9: twelve captures on
+the fast matrix cost about 24 seconds, and the defect it exists for is
+invisible to everything else. `--full` takes rule 9 to the full 16 cells with
+the rest.
+
+Rule 8d walks all four widths and both densities on its own, outside the combo
+matrix, because a control's clearance from the card border is exactly the
+measurement that changes with width.
 
 ## The negative control
 
@@ -156,11 +261,14 @@ Stated rather than hidden.
   drag produces no change rather than failing. Its assertions about the result
   - that a reorder moves lines and changes no id, slug or digest, and that one
   undo reverts it - are real whenever the drag lands.
-- **The browser.** The suite prefers Playwright's pinned Chromium and falls
-  back to the installed Google Chrome when that download is missing. Chrome
-  auto-updates, so pixel measurements are marginally less stable on the
-  fallback. `ATOMDOWN_FE_CHANNEL=chromium` forces the pinned build; the runner
-  prints which one it used.
+- **The browser, for rules 1 to 8 only.** Those rules prefer Playwright's
+  pinned Chromium and fall back to the installed Google Chrome when that
+  download is missing. Chrome auto-updates, so measurements are marginally
+  less stable on the fallback. `ATOMDOWN_FE_CHANNEL=chromium` forces the
+  pinned build; the runner prints which one it used. **Rule 9 has no
+  fallback**: it refuses to run without the bundled build, because a browser
+  that auto-updates is how two machines silently disagree about a pixel. The
+  runner checks for it and prints the one-time install command.
 - **Save timing.** Rules 6 and 7 wait for a fixed period after an edit before
   reading the file, because SilverBullet's autosave has no completion event a
   test can await from outside. The waits are generous; a slow machine could
@@ -174,10 +282,11 @@ Stated rather than hidden.
 
 ## Status
 
-**Green on the fast matrix, both views, both densities: 79 of 79, every rule
-and every component test.** No `test.fixme` is left in the suite. One test
-still skips with a reason rather than failing — the grip drag, when a synthetic
-pointer drag produces no change; see "what is not deterministic" above.
+**Green on the fast matrix, both views, both densities: every rule, every
+component test, rule 8's eight properties and rule 9's twelve baselines.** No
+`test.fixme` is left in the suite. One test still skips with a reason rather
+than failing — the grip drag, when a synthetic pointer drag produces no change;
+see "what is not deterministic" above.
 
 **Three things the density work found, worth knowing before changing the
 suite.** A page load resets `html[data-editor-width]`, so any test that

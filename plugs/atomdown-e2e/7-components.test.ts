@@ -193,7 +193,11 @@ function sel(view: View) {
     groupCollapse: ".atomdown-group-collapse",
     groupCards: "",
     menuButton: ".atomdown-group-menu",
-    menuPopover: ".atomdown-group-menu",
+    // The inline view HAS a popover of its own now (iugum-caj). This used to
+    // name the button, because the control opened the host's filter picker
+    // and there was no popover element to name. Rule 8 is where the popover's
+    // own behaviour is asserted.
+    menuPopover: ".atomdown-menu-popover",
     grip: ".atomdown-grip",
     rename: ".atomdown-group-rename, .atomdown-group-btn",
     ungroup: ".atomdown-group-ungroup, .atomdown-group-btn",
@@ -852,7 +856,13 @@ for (const theme of THEMES) {
             );
           } else if (
             place.distanceFromLeft >= place.distanceFromRight ||
-            place.crossesLeft
+            // CROSSING THE LEFT BORDER IS EXPECTED IN THE INLINE VIEW and a
+            // defect in the board. Inline puts the grip in the page gutter,
+            // OUTSIDE the card (iugum-caj item 4): a negative distance from
+            // the left border is the design, and rule 1's chrome half is what
+            // holds it to not being clipped or on the group's outline. The
+            // board's grip stays inside its card, so there it still fails.
+            (view.kind === "board" && place.crossesLeft)
           ) {
             await failWithArtifacts(
               view.page,
@@ -865,10 +875,26 @@ for (const theme of THEMES) {
                 `border and ${place.distanceFromRight.toFixed(1)}px from its ` +
                 `right` +
                 (place.crossesLeft ? `, and it crosses the left border` : ``) +
-                `. It belongs at the top LEFT, nearer the left border than ` +
-                `the right. This regressed to the right side in the inline ` +
-                `view with the class still correct, which is why the side is ` +
+                `. It belongs at the LEFT, nearer the left border than the ` +
+                `right. This regressed to the right side in the inline view ` +
+                `with the class still correct, which is why the side is ` +
                 `measured.`,
+            );
+          } else if (view.kind === "inline" && !place.crossesLeft) {
+            // THE OTHER DIRECTION, so the inline exemption above cannot
+            // silently become "any position passes". The grip is supposed to
+            // be OUTSIDE the card now; one back inside it is a regression of
+            // Steve's change, not a return to a safe state.
+            await failWithArtifacts(
+              view.page,
+              7,
+              "component GRIP — back inside the card",
+              combo,
+              { view: view.kind, ...place },
+              `inline: the grip is ${place.distanceFromLeft.toFixed(1)}px ` +
+                `INSIDE the card's left border. It belongs in the page ` +
+                `gutter, outside it, so the card keeps its full width. ` +
+                `Rule 8d measures the same thing against the card head.`,
             );
           }
 

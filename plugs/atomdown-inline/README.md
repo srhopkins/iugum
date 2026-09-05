@@ -14,12 +14,14 @@ and the plug only decorates what is already there.
 |---|---|
 | **The icons** | Two action buttons in the header bar, next to home and terminal: `grid` turns the card view on, `align-justify` switches the display density. Both are per page, and both are remembered across a reload. The **plug registers them itself** - see "The header buttons" below. |
 | **Cards** | One closed rounded box per atom: 1px border, the card surface, padding, and a clear gap to the next card. |
-| **Card header** | At comfortable density, a strip at the top of each box: drag grip, the readable name in body text, the id in small grey monospace. Compact removes it. |
+| **Card header** | At comfortable density, a strip at the top of each box: the readable name in body text, the id in small grey monospace. Compact removes it. |
+| **The card's two controls** | OUTSIDE the card, in the page gutter: the braille drag grip on the left, a vertical three-dot menu on the right. Hover-only, at both densities. See "The controls sit outside the card" below. |
 | **Groups** | One closed rounded 2px accent box around the member cards, which are inset inside it on all four sides. |
-| **Group header** | A bar inside the top of that box: collapse caret, drag grip, GROUP, the name, the id, the card count, and a menu holding Rename and Ungroup. Compact thins it to caret, name, a bare count and the menu. |
+| **Group header** | A bar inside the top of that box: collapse caret, drag grip, GROUP, the name, the id, the card count, and a menu holding Rename and Ungroup. Compact thins it to caret, name, a bare count and the menu. The group's menu stays ON the bar, because the bar is the group's own top edge. |
+| **The menu** | A popover anchored to the card or the bar it belongs to, with an inert name-and-id label as its first row. NOT the host's filter picker. See "The popover" below. |
 | **Density** | Comfortable (the default) and compact, the panel's own two. `Atomdown: Toggle Inline Density`, or the `align-justify` button. |
 | **Editing** | Ordinary typing. There is nothing to open and nothing to save. |
-| **Drag to reorder** | Drag the grip that appears at the left of a hovered block. |
+| **Drag to reorder** | Drag the grip that appears in the gutter left of a hovered block. |
 | **Lasso** | Alt-drag a band over several blocks to select them. |
 | **Group / Ungroup** | `Atomdown: Group Selection` on a lassoed run, `Atomdown: Ungroup` with the cursor in a group, or the group header's menu. |
 | **Collapse** | The header caret, through the editor's own folding. |
@@ -312,7 +314,7 @@ node --test plugs/atomdown-inline/    # directly (needs node 20 or later)
 go test ./plugs/atomdown-inline       # same tests, through go test ./...
 ```
 
-113 cases. They import the real plug file with only the worker globals stubbed,
+124 cases. They import the real plug file with only the worker globals stubbed,
 and most of them are about the decoration payload: every offset in it is
 checked against the page text it was built from, because a wrong offset there is
 the whole bug class this feature can have.
@@ -355,6 +357,112 @@ construct is not a link. Plain SilverBullet with the view off and the
 `atomdown-board` panel both show the same row raw, because all three use one
 parser. The fix is to escape the inner brackets in the page.
 
+## The controls sit outside the card
+
+The drag grip is in the LEFT page gutter and the vertical three-dot menu is in
+the RIGHT one, both outside the card's own border. Steve's change: it gives the
+card its full column width back, it is what makes the compact density actually
+compact, and it leaves the header row free for whatever goes there next.
+
+**The offset is 22px from the card head's border box** (`--board-chrome-gutter`),
+and the number is measured rather than chosen. The space outside a card's
+border is CodeMirror's own content padding (20px) plus the page margin, and the
+page margin is narrowest at the `full` editor width: `min(1600px, 96%)` on a
+1440px viewport leaves 28.8px, so the budget at the worst width is 48.8px. A
+22px offset with a ~16px control ends 6px clear of the card and 26.8px clear of
+the scroller's own edge.
+
+**One rule covers both nesting cases.** A member card's head is inset by the
+group's interior padding and sits inside the group's 2px outline, so the same
+-22px lands 12px OUTSIDE that outline. A top-level card's head has no inset, so
+it lands 22px outside the card border.
+
+**Nothing is clipped, and that was verified rather than assumed.** The controls
+are CodeMirror line decorations, so the obvious risk was the editor's own
+overflow. Measured on the real fixture at all four widths, by rect AND by
+`document.elementFromPoint` - a clipped element still reports its full
+unclipped rect, so only a hit test is proof. `.cm-scroller` is the one ancestor
+between a card and the body whose overflow is not `visible` (it is `auto`), and
+it spans the whole viewport while the content column is centred inside it, so a
+control 22px outside the column is well inside the clipper. No horizontal
+scrollbar appears either: `scrollWidth` equals `clientWidth` at every width.
+The probe that recorded this is `plugs/atomdown-e2e/clip-probe.test.ts`.
+
+**A control in the gutter is NOT part of the card's click target.** Decided
+explicitly. The card's click target is its own line run - the region the seam
+covers with the card's mark - and the gutter is covered by no mark, so a click
+there reports no unit and changes no selection. Two reasons that is right
+rather than an omission: the gutter is where a reader clicks to put the cursor
+at the start of a line, and turning that into "select this card" would take an
+ordinary editing gesture away; and each control's own click is handled before
+the selection rules, so widening the target would only change what a MISS does.
+
+Rule 1 of the front-end suite enforces all of it. It distinguishes CONTENT,
+which must stay inside the card, from CHROME, which may sit outside and must
+instead be painted where its rect says it is, stay inside the editor's scroll
+container, and not land on the group's accent outline.
+
+## The popover
+
+The three-dot control opens **this plug's own popover**, anchored to the card,
+with an inert `name  -  id` label as its first row. It used to call
+`editor.filterBox`, which is the command palette's own surface: a centred box
+with a search field, listing the card's identity and its actions as palette
+rows. That read as "a command palette opened", not "this card's menu opened",
+and it is not what the board panel does.
+
+**How it works with no script.** A seam widget's HTML is set with `innerHTML`,
+so it carries no listeners - but a click inside a widget comes back to the plug
+as `editor:decorationClick` carrying the class list of the element that was
+hit. Every row names its own action in a class, `atomdown-mi-<action>`, and the
+click handler reads it. A click on the label, or on the popover's own padding,
+matches no action and leaves the menu open; a click anywhere else closes it.
+
+**There is no text input in it, and that is measured, not stylistic.** The
+seam's `widgetPressGuard` returns true for a plain press inside any widget,
+which makes CodeMirror call `preventDefault` on `mousedown`, and a prevented
+`mousedown` moves no focus. Measured on the real fixture
+(`plugs/atomdown-e2e/input-probe.test.ts`): a click on an input inside a card
+header widget left `document.activeElement` on `.cm-content`, and **the
+characters typed next went into the document**. An in-popover attribute form
+would therefore type the reader's attribute values into the page, which is the
+one thing this view may never do. So every row is a button, text entry goes
+through `editor.prompt` - a modal dialog with a focused field of its own - and
+the row that edits attributes puts the cursor on the directive line, where the
+peek shows the raw bytes. Rule 8g asserts the popover holds no input, so the
+day someone adds one, the suite says why they cannot.
+
+**No Escape key.** A plug cannot listen for a keystroke, and binding a command
+to Escape would consume it everywhere else in the editor. The popover closes on
+a second press of its button, on any click outside it, and on any action.
+
+## Visual baselines, and how to update them
+
+Rule 9 of the front-end suite compares images, because no behavioural
+assertion can see that a hover paints a white hole in a coloured bar - which is
+exactly the defect it was written for.
+
+**One command, after an intended change:**
+
+```sh
+scripts/atomdown-fe-check.sh --visual --update-snapshots
+```
+
+That is deliberately cheap. A baseline that is expensive to re-take is a
+baseline someone eventually silences by raising the threshold, and the
+threshold here is zero (`maxDiffPixels: 0`) precisely so it cannot drift
+quietly.
+
+The environment is pinned and is a hard requirement: headless only, Playwright's
+own bundled Chromium at the version in `silverbullet/package-lock.json`, never
+the system Chrome and never an `executablePath`. A headed run, `--headed` or
+`PWDEBUG` refuses before the first capture, so it can neither produce nor
+update a baseline. The resolved browser build is recorded beside the images in
+`plugs/atomdown-e2e/visual-baselines/browser.txt`, so a browser upgrade reports
+itself in words instead of as a mysterious pixel diff. Full detail, including
+how fonts are handled and what the residual limit is:
+`plugs/atomdown-e2e/9-visual.test.ts`.
+
 ## Known limits
 
 - The card padding rules carry a `#sb-main .cm-editor` prefix. The client's own
@@ -380,9 +488,9 @@ scripts/atomdown-fe-check.sh
 
 It measures the rendered document in a real browser: containment, directive
 invisibility, layout stability, state round trips, rendering fidelity,
-document immutability, and each primary component's existence, position and
-behaviour - across both densities, all four editor widths and both themes.
-Green at 79 of 79 on the fast matrix.
+document immutability, each primary component's existence, position and
+behaviour, the card's own two controls, and a set of visual baselines -
+across both densities, all four editor widths and both themes.
 
 A pre-push hook runs it automatically when a push touches this directory. Full
 detail, the matrix split and the escape hatch: `plugs/atomdown-e2e/README.md`.
