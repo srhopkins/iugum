@@ -174,10 +174,21 @@ Stated rather than hidden.
 
 ## Status
 
-**Green on the fast matrix, both views: every rule and every component test.**
-No `test.fixme` is left in the suite. One test still skips with a reason rather
-than failing — the grip drag, when a synthetic pointer drag produces no change;
-see "what is not deterministic" above.
+**Green on the fast matrix, both views, both densities: 79 of 79, every rule
+and every component test.** No `test.fixme` is left in the suite. One test
+still skips with a reason rather than failing — the grip drag, when a synthetic
+pointer drag produces no change; see "what is not deterministic" above.
+
+**Three things the density work found, worth knowing before changing the
+suite.** A page load resets `html[data-editor-width]`, so any test that
+reloads has to call `setWidth` again before it measures a width. `locator
+.hover()` cannot put a pointer on a compact card header — the header is a
+`pointer-events: none` layer with no height of its own — so the pointer goes
+onto the CARD and `hoverBox` does it. And `sweepEach` addresses the element it
+chose by a stamped attribute rather than by `nth(index)`: the interaction
+before it rebuilds the line elements, so the index no longer named the element
+the key named, and a sweep over eleven carets clicked one twice and another
+never.
 
 The six area 7 tests that were pending on the first run are all in. What each
 one needed:

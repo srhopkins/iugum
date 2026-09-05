@@ -54,11 +54,18 @@ fit more of the document on screen, not to shrink the document.
 from a mark's `lineClasses`, and the seam uses `marks[].class` as the STEM of
 the classes it derives - so a second class in that string would produce
 `atomdown-card atomdown-compact-line` rather than two classes. The plug
-therefore emits a THIRD kind of mark, `dens:<key>`, over exactly the same span
-as each box mark, carrying nothing but `atomdown-comfortable` or
-`atomdown-compact`. Widgets take the class directly, because `widgets[].class`
-is used verbatim. The class is present at both densities, so the DOM says which
-density is showing instead of leaving it to an absence.
+therefore emits a THIRD kind of mark, `dens:<unit>`, carrying nothing but
+`atomdown-comfortable` or `atomdown-compact`. Widgets take the class directly,
+because `widgets[].class` is used verbatim. The class is present at both
+densities, so the DOM says which density is showing instead of leaving it to an
+absence.
+
+**One density mark per TOP-LEVEL UNIT, never one per card.** A unit's span
+already covers every line of every card inside it. One per card as well put
+`atomdown-comfortable-line` on a member card's line twice, with `-first`,
+`-mid` and `-last` together, and how many of the overlapping marks the editor
+had realised varied with the scroll position - so an editor-width round trip
+came back with a different class string for a state that had not changed.
 
 Switching density needs **no** `editor.rebuildEditorState`: mark classes and
 widget classes live in one StateField the seam rebuilds whenever the config
@@ -80,13 +87,37 @@ whose command was "not found" in one tab and a page with no styling at all in
 another. A plug loads by file discovery with no index involved, which is why
 the COMMANDS always worked when the button did not.
 
-Registration runs on `editor:init` and again on every page load, and skips a
-button whose command is already in the list. Both halves matter.
-`Config.clear()` wipes every config value each time Space Lua reloads
-(`silverbullet/client/client_system.ts`, `loadLuaScripts`), and the boot order
-is plugs → `plugs:loaded` → Space Lua → `editor:init`, so a button registered
-on the earlier event would be wiped before the header bar ever read the key.
-The skip is what stops a reload from producing two grid icons.
+Registration runs on `editor:init`, on every page load, and on a **heartbeat**
+every five seconds, and it skips a button whose command is already in the list.
+All of that is needed, and each piece is a measured failure rather than
+caution:
+
+* `Config.clear()` wipes every config value each time Space Lua reloads
+  (`silverbullet/client/client_system.ts`, `loadLuaScripts`), and the boot
+  order is plugs → `plugs:loaded` → Space Lua → `editor:init`, so a button
+  registered on the earlier event is gone before the header bar reads the key.
+* Space Lua reloads AGAIN when a space finishes its first index
+  (`client/data/object_index.ts` dispatches `editor:reloadState`), which is
+  after `editor:init` has been and gone. Hence the heartbeat. Listening to
+  `editor:reloadState` cannot serve instead: `EventHook.dispatchEvent` queues
+  plug handlers and the client's own local listeners as concurrent promises, so
+  this plug's first syscall and that listener's `config.clear()` race, and the
+  clear wins.
+* **The whole array cannot cross the worker boundary.** The standard library
+  defines the back and forward buttons with a `run` CALLBACK, so a
+  `config.get("actionButtons")` had to structuredClone Lua functions into the
+  worker and threw `could not be cloned`. The plug caught its own failure and
+  registered nothing, and the header bar had no Atomdown button while both
+  commands worked. It reads `actionButtons.length` and
+  `actionButtons.<i>.command` instead - one clonable scalar at a time.
+* **Nothing subscribes to config**, so the header bar renders from a value it
+  read earlier. The plug nudges exactly one re-render (`editor.showProgress`
+  with no arguments, which sets the progress indicator to what it already is)
+  and only when it actually appended something.
+
+The skip is what stops a reload, or the heartbeat, from producing two grid
+icons; the appends are also serialized, so a page load and a tick in flight
+together cannot both append.
 
 The CSS still lives on the library page, in one `space-style` block, and the
 density's rules are in that same block - so they cannot arrive separately from
@@ -263,20 +294,25 @@ Nothing this plug remembers reaches the document.
 | where | what |
 |---|---|
 | `clientStore`, `atomdown-inline.on:<page>` | `true` while the view is on for that page |
-| module memory | the lasso selection, and which groups this session folded |
+| `clientStore`, `atomdown-inline.collapsed:<page>` | the ids of that page's collapsed groups |
+| `clientStore`, `atomdown-inline.density:<page>` | `"compact"` when that page was left compact; absent means comfortable |
+| module memory | the lasso selection |
 
-The selection and the fold state are deliberately not persisted: a stale
-selection on reload would be a lie about what is selected, and a page draws
-every group open after a rebuild, which is the truthful state.
+One store, one key shape, one mechanism. Comfortable is the ABSENCE of a
+density value rather than a value, so a page never switched and a page switched
+back read identically.
+
+The lasso selection is deliberately not persisted: a stale selection on reload
+would be a lie about what is selected.
 
 ## Tests
 
 ```sh
-node --test plugs/atomdown-inline/    # directly
+node --test plugs/atomdown-inline/    # directly (needs node 20 or later)
 go test ./plugs/atomdown-inline       # same tests, through go test ./...
 ```
 
-59 cases. They import the real plug file with only the worker globals stubbed,
+113 cases. They import the real plug file with only the worker globals stubbed,
 and most of them are about the decoration payload: every offset in it is
 checked against the page text it was built from, because a wrong offset there is
 the whole bug class this feature can have.
@@ -346,6 +382,7 @@ It measures the rendered document in a real browser: containment, directive
 invisibility, layout stability, state round trips, rendering fidelity,
 document immutability, and each primary component's existence, position and
 behaviour - across both densities, all four editor widths and both themes.
+Green at 79 of 79 on the fast matrix.
 
 A pre-push hook runs it automatically when a push touches this directory. Full
 detail, the matrix split and the escape hatch: `plugs/atomdown-e2e/README.md`.
