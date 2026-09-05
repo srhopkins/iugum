@@ -43,15 +43,21 @@ func TestRegisteredAssetSet(t *testing.T) {
 	for _, a := range assets {
 		byRel[a.Rel] = len(a.Data)
 	}
-	for _, rel := range []string{
+	want := []string{
 		"Plugs/atomdown-board.plug.js",
 		"Plugs/atomdown-inline.plug.js",
 		"Inline.md",
-		"Editor Width.md",
-	} {
+	}
+	for _, rel := range want {
 		if byRel[rel] == 0 {
 			t.Errorf("the asset set has no %q", rel)
 		}
+	}
+	// The bundle stays limited to what the atomdown views need. Anything else
+	// reaches every space with no way to switch it off, so a new asset is a
+	// deliberate decision, not a drive-by addition.
+	if len(assets) != len(want) {
+		t.Errorf("the asset set holds %d files, want %d: %v", len(assets), len(want), assets)
 	}
 }
 

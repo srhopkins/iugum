@@ -1,6 +1,5 @@
-// Package spaceassets carries the wiki space assets that this program owns:
-// the two atomdown plug bundles, the atomdown library page, and the editor
-// width page.
+// Package spaceassets carries the atomdown wiki space assets: the two plug
+// bundles and the library page that holds their header button and their CSS.
 //
 // The assets do not go into a space folder. They go into SilverBullet's
 // client_bundle/base_fs, the read-only underlay that rust-embed compiles into
@@ -14,15 +13,27 @@
 // on disk with the same name wins, and a file that exists only in the underlay
 // cannot be written or deleted from the space.
 //
-// Two asset sources meet here. Assets with another home in this repository
-// arrive through Set, the way embedbin takes the SilverBullet binary: the plug
-// bundles are build outputs under plugs/, so root package main embeds them.
-// Assets that exist only to be a space page live in library/ in this package.
+// The assets arrive through Set, the way embedbin takes the SilverBullet
+// binary: they are build outputs under plugs/, so root package main embeds
+// them.
+//
+// # What does not belong here
+//
+// Only files the atomdown views cannot work without. The bundle exists so the
+// feature can never look broken, not as a place to ship conveniences.
+//
+// A page that changes global editor behaviour must not be bundled. A base_fs
+// page can be overridden only at its own exact path, so a page that also
+// exists in a space under a different name gives two copies with no way to
+// turn either off. That was measured: bundling an editor-width page put two
+// width buttons in the top bar of a space that had its own copy, and the two
+// system:ready listeners raced over one html attribute and one clientStore
+// key. The atomdown pages carry no such risk, because nothing else defines
+// them.
 package spaceassets
 
 import (
 	"bytes"
-	"embed"
 	"fmt"
 	"io"
 	"os"
@@ -45,12 +56,9 @@ const Namespace = "Library/Atomdown"
 const baseFsDir = "client_bundle/base_fs"
 
 // Marker is one staged path. A SilverBullet binary built with these assets
-// holds the string; one built without them does not. resolveBinary uses it to
-// tell a stale binary from a current one.
+// holds the string; one built without them does not. The wiki adapter uses it
+// to tell a stale binary from a current one.
 const Marker = Namespace + "/Inline.md"
-
-//go:embed library
-var libraryFS embed.FS
 
 // Asset is one file to stage. Rel is the path inside Namespace, with forward
 // slashes.
@@ -71,28 +79,12 @@ func Set(a []Asset) {
 	set = a
 }
 
-// All returns every asset, sorted by Rel: the ones from Set, then the pages in
-// this package's library directory.
+// All returns every asset, sorted by Rel.
 func All() ([]Asset, error) {
 	mu.Lock()
 	out := make([]Asset, len(set))
 	copy(out, set)
 	mu.Unlock()
-
-	entries, err := libraryFS.ReadDir("library")
-	if err != nil {
-		return nil, fmt.Errorf("spaceassets: read library: %w", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		data, err := libraryFS.ReadFile(path.Join("library", e.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("spaceassets: read library/%s: %w", e.Name(), err)
-		}
-		out = append(out, Asset{Rel: e.Name(), Data: data})
-	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Rel < out[j].Rel })
 	return out, nil
 }

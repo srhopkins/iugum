@@ -9,55 +9,6 @@ import (
 	"testing"
 )
 
-func TestAllHoldsTheLibraryPages(t *testing.T) {
-	Set(nil)
-	assets, err := All()
-	if err != nil {
-		t.Fatalf("All: %v", err)
-	}
-	if len(assets) == 0 {
-		t.Fatal("All returned nothing; the library directory must hold at least one page")
-	}
-	var found bool
-	for _, a := range assets {
-		if a.Rel == "Editor Width.md" {
-			found = true
-			if !bytes.Contains(a.Data, []byte("space-lua")) {
-				t.Error("the editor width page carries no space-lua block")
-			}
-		}
-	}
-	if !found {
-		t.Error("All did not return the editor width page")
-	}
-}
-
-func TestAllMergesSetAndSorts(t *testing.T) {
-	t.Cleanup(func() { Set(nil) })
-	Set([]Asset{
-		{Rel: "Plugs/z.plug.js", Data: []byte("z")},
-		{Rel: "Inline.md", Data: []byte("i")},
-	})
-	assets, err := All()
-	if err != nil {
-		t.Fatalf("All: %v", err)
-	}
-	for i := 1; i < len(assets); i++ {
-		if assets[i-1].Rel > assets[i].Rel {
-			t.Fatalf("All is not sorted: %q before %q", assets[i-1].Rel, assets[i].Rel)
-		}
-	}
-	names := map[string]bool{}
-	for _, a := range assets {
-		names[a.Rel] = true
-	}
-	for _, want := range []string{"Plugs/z.plug.js", "Inline.md", "Editor Width.md"} {
-		if !names[want] {
-			t.Errorf("All dropped %q", want)
-		}
-	}
-}
-
 func TestStageWritesUnderTheNamespace(t *testing.T) {
 	t.Cleanup(func() { Set(nil) })
 	Set([]Asset{{Rel: "Plugs/atomdown-inline.plug.js", Data: []byte("plug")}})
@@ -70,8 +21,8 @@ func TestStageWritesUnderTheNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stage: %v", err)
 	}
-	if len(written) < 2 {
-		t.Fatalf("Stage wrote %d files, want the plug and the library pages", len(written))
+	if len(written) != 1 {
+		t.Fatalf("Stage wrote %d files, want the one registered asset", len(written))
 	}
 	for _, rel := range written {
 		if !strings.HasPrefix(rel, Namespace+"/") {
