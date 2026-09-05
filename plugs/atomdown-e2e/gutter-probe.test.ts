@@ -83,6 +83,50 @@ test("probe: where the gutter controls land", async ({ page }) => {
           ),
           groupMenuGlyph:
             document.querySelector(".atomdown-group-menu")?.textContent ?? null,
+          // THE GROUP'S OWN TWO CONTROLS (iugum-938), measured against the
+          // group header widget's border box - which is the group container's
+          // top edge and carries the 2px accent outline.
+          group: (function () {
+            const bar = pick(".sb-decoration-widget.atomdown-group-header");
+            if (!bar) return { missing: true };
+            const grip = bar.querySelector(
+              ":scope > .atomdown-group-grip",
+            ) as HTMLElement;
+            const menu = bar.querySelector(
+              ":scope > .atomdown-group-menu",
+            ) as HTMLElement;
+            const caret = bar.querySelector(
+              ".atomdown-group-collapse",
+            ) as HTMLElement;
+            const br = bar.getBoundingClientRect();
+            const gr = grip?.getBoundingClientRect();
+            const mr = menu?.getBoundingClientRect();
+            const memberHead = pick(".atomdown-card-head.atomdown-nested");
+            const mg = memberHead
+              ?.querySelector(".atomdown-grip")
+              ?.getBoundingClientRect();
+            const mm = memberHead
+              ?.querySelector(".atomdown-card-menu")
+              ?.getBoundingClientRect();
+            return {
+              bar: { l: +br.left.toFixed(1), r: +br.right.toFixed(1) },
+              gripClearOfBarLeft: gr ? +(br.left - gr.right).toFixed(1) : null,
+              menuClearOfBarRight: mr ? +(mr.left - br.right).toFixed(1) : null,
+              gripClearOfScrollerLeft: gr ? +(gr.left - sr.left).toFixed(1) : null,
+              menuClearOfScrollerRight: mr
+                ? +(sr.right - mr.right).toFixed(1)
+                : null,
+              // The lane gap against a member card's own gutter controls.
+              memberGripLaneGap: gr && mg ? +(mg.left - gr.left).toFixed(1) : null,
+              memberMenuLaneGap: mr && mm
+                ? +(mr.right - mm.right).toFixed(1)
+                : null,
+              caretInBar: caret
+                ? +(caret.getBoundingClientRect().left - br.left).toFixed(1)
+                : null,
+              caretOpacity: caret ? getComputedStyle(caret).opacity : null,
+            };
+          })(),
         };
       });
       console.log(`${density}/${width}: ` + JSON.stringify(out, null, 2));
