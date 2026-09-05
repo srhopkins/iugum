@@ -1110,18 +1110,42 @@ test("every decorated line carries the density class, at both densities", () => 
   });
 });
 
-test("a density mark covers exactly the span of the box mark beside it", () => {
-  // The line classes have to land on the card's own lines and no others, or
-  // the knob values reach a line that is not in a card.
+test("exactly one density mark per unit, spanning the whole unit", () => {
+  // NO OVERLAP. Two density marks over one line make the seam derive
+  // `-line` twice and `-first`, `-mid` and `-last` together, and how many of
+  // the overlapping marks the editor has realised varies with the scroll
+  // position — so the same correct state produced two different class
+  // strings. A unit's span already covers every card inside it.
   const payload = buildDecorations(PAGE, [], [], "compact");
+  const dens = payload.marks.filter((m) => m.id.startsWith("dens:"));
+  const units = payload.marks.filter((m) => m.id.startsWith("unit:"));
+  assert.equal(dens.length, units.length);
+  units.forEach((unit) => {
+    const twin = dens.find((m) =>
+      m.id === "dens:" + unit.id.slice("unit:".length)
+    );
+    assert.ok(twin, `no density mark for ${unit.id}`);
+    assert.equal(twin.from, unit.from);
+    assert.equal(twin.to, unit.to);
+  });
+  // And no two of them overlap.
+  const sorted = dens.slice().sort((a, b) => a.from - b.from);
+  for (let i = 1; i < sorted.length; i++) {
+    assert.ok(
+      sorted[i].from > sorted[i - 1].to,
+      `${sorted[i - 1].id} and ${sorted[i].id} overlap`,
+    );
+  }
+});
+
+test("every card line is inside a density mark, so the knobs reach it", () => {
+  const payload = buildDecorations(PAGE, [], [], "compact");
+  const dens = payload.marks.filter((m) => m.id.startsWith("dens:"));
   payload.marks
     .filter((m) => m.id.startsWith("box:"))
     .forEach((box) => {
-      const wanted = "dens:" + box.id.slice("box:".length);
-      const twin = payload.marks.find((m) => m.id === wanted);
-      assert.ok(twin, `no density mark for ${box.id}`);
-      assert.equal(twin.from, box.from);
-      assert.equal(twin.to, box.to);
+      const covering = dens.find((m) => m.from <= box.from && m.to >= box.to);
+      assert.ok(covering, `${box.id} is not covered by a density mark`);
     });
 });
 
@@ -1256,6 +1280,30 @@ test("the buttons fit the actionButtons schema, which forbids extra keys", () =>
       assert.ok(allowed.includes(key), `${key} is not in the schema`);
     });
   });
+});
+
+test("the heartbeat looks every fifth tick, not every tick", () => {
+  const { shouldReassertButtons, BUTTON_CHECK_TICKS } = plug.internals;
+  assert.equal(BUTTON_CHECK_TICKS, 5);
+  const looked = [];
+  for (let tick = 1; tick <= 12; tick++) {
+    if (shouldReassertButtons(tick)) looked.push(tick);
+  }
+  assert.deepEqual(looked, [5, 10]);
+});
+
+test("the heartbeat is wired to the client's own cron tick", () => {
+  // The self-healing half of the button registration. Without it a config
+  // clear after `editor:init` — which is what the first index of a space
+  // causes — leaves the commands registered and the header bar empty.
+  assert.deepEqual(
+    plug.manifest.functions.heartbeatActionButtons.events,
+    ["cron:secondPassed"],
+  );
+  assert.deepEqual(
+    plug.manifest.functions.registerActionButtons.events,
+    ["editor:init"],
+  );
 });
 
 test("the library page registers no action button of its own", () => {

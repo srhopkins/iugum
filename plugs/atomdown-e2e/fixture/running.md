@@ -65,7 +65,7 @@ The feature reads a state case system through `GET /resea-status` and shows the 
 
 <!-- <atom-group id="QP41ZR8T" slug="editor"> -->
 
-<!-- <atom id="EH5ZNMFG" slug="editor" digest="sha256:90dfdc74de8ec936a54de91d1f15e94538e96a727b44c0de9d88bcae2a830b83"/> -->
+<!-- <atom id="EH5ZNMFG" slug="editor-2" digest="sha256:90dfdc74de8ec936a54de91d1f15e94538e96a727b44c0de9d88bcae2a830b83"/> -->
 ## editor
 
 <!-- <atom id="FVT4CR8S" slug="note-0-editor-holds-at-the-current" digest="sha256:14d32e5156be6c1abbed3e8e626363050ba7d7ad609c4182f531ec5f22904234"/> -->
@@ -91,7 +91,7 @@ Check 1. Read `editor/step-1.md` before the next change. The path is relative to
 
 <!-- <atom-group id="VD07KHM2" slug="parser"> -->
 
-<!-- <atom id="XSC4AH8N" slug="parser" digest="sha256:52354ec7d497f980e2eae58d1e9921eaa44923773016922097c2cf6d7649324f"/> -->
+<!-- <atom id="XSC4AH8N" slug="parser-2" digest="sha256:52354ec7d497f980e2eae58d1e9921eaa44923773016922097c2cf6d7649324f"/> -->
 ## parser
 
 <!-- <atom id="0C0YC3D1" slug="note-0-parser-holds-at-the-current" digest="sha256:f27a6072cbb763826fbbd8e4921116fa3e1196208d294aa576fde7f6d581992c"/> -->
@@ -117,7 +117,7 @@ Check 1. Read `parser/step-1.md` before the next change. The path is relative to
 
 <!-- <atom-group id="WX53BCN9" slug="board-view"> -->
 
-<!-- <atom id="J01DH8PF" slug="board-view" digest="sha256:e47f766962e8506c89940f8a88b4e1c8ff849f909293ae64a50f99840ec50b41"/> -->
+<!-- <atom id="J01DH8PF" slug="board-view-2" digest="sha256:e47f766962e8506c89940f8a88b4e1c8ff849f909293ae64a50f99840ec50b41"/> -->
 ## board view
 
 <!-- <atom id="BDVX60WG" slug="note-0-board-view-holds-at-the" digest="sha256:26b01d82b944dd0d1e75bb0c850480935ab1bb19d2009b7b5b75c041fe22f67a"/> -->
@@ -143,7 +143,7 @@ Check 1. Read `board-view/step-1.md` before the next change. The path is relativ
 
 <!-- <atom-group id="YT26FGK4" slug="inline-view"> -->
 
-<!-- <atom id="MKE7VAHN" slug="inline-view" digest="sha256:83d7d6e7b9633c305e5dbf9987434d2329ee0d0bb4cc2c6539efef9c3a006d2c"/> -->
+<!-- <atom id="MKE7VAHN" slug="inline-view-2" digest="sha256:83d7d6e7b9633c305e5dbf9987434d2329ee0d0bb4cc2c6539efef9c3a006d2c"/> -->
 ## inline view
 
 <!-- <atom id="R50DKZJF" slug="note-0-inline-view-holds-at-the" digest="sha256:934c6e0a0ed14e52842afe94d02b0e6a5ce90e1c5188e04cf5939d8fa2fc6d64"/> -->
@@ -169,7 +169,7 @@ Check 1. Read `inline-view/step-1.md` before the next change. The path is relati
 
 <!-- <atom-group id="ZR89PSD1" slug="database"> -->
 
-<!-- <atom id="P519BFBA" slug="database" digest="sha256:021c8667b7dd26b8d6fd456eb044cca5d068bd42ae7df930d3bf27d9c3c43660"/> -->
+<!-- <atom id="P519BFBA" slug="database-2" digest="sha256:021c8667b7dd26b8d6fd456eb044cca5d068bd42ae7df930d3bf27d9c3c43660"/> -->
 ## database
 
 <!-- <atom id="707646YR" slug="note-0-database-holds-at-the-current" digest="sha256:2cc3218f845be9eea61fb81d5fc64bbe7851f10c693ba9c4c475cbca2e79749a"/> -->
@@ -192,7 +192,7 @@ Check 1. Read `database/step-1.md` before the next change. The path is relative 
 
 <!-- <atom-group id="BH14QWM7" slug="delivery"> -->
 
-<!-- <atom id="04Y899TM" slug="delivery" digest="sha256:fa65ec268ce62fe99b12b6f220decd90f9829907924e57953a88fe274beb5be5"/> -->
+<!-- <atom id="04Y899TM" slug="delivery-2" digest="sha256:fa65ec268ce62fe99b12b6f220decd90f9829907924e57953a88fe274beb5be5"/> -->
 ## delivery
 
 <!-- <atom id="1RMYA8T1" slug="note-0-delivery-holds-at-the-current" digest="sha256:22c984bf567661a12f588edb73c32f7f68c4d8bb20a2111991c0d83a90e4e1db"/> -->
@@ -215,7 +215,7 @@ Check 1. Read `delivery/step-1.md` before the next change. The path is relative 
 
 <!-- <atom-group id="CJ62MVX3" slug="agents"> -->
 
-<!-- <atom id="NJC83EZ3" slug="agents" digest="sha256:f943e43d2b5d3148d498a29c5b56666f0a0918180db58a78aba4f04510409e44"/> -->
+<!-- <atom id="NJC83EZ3" slug="agents-2" digest="sha256:f943e43d2b5d3148d498a29c5b56666f0a0918180db58a78aba4f04510409e44"/> -->
 ## agents
 
 <!-- <atom id="ZQV57PKX" slug="note-0-agents-holds-at-the-current" digest="sha256:c79a7d5af1b44e61b2d283a876ab0ea6f296dde93d27340bab86f82b28db7216"/> -->
@@ -238,7 +238,7 @@ Check 1. Read `agents/step-1.md` before the next change. The path is relative to
 
 <!-- <atom-group id="DK75NRT8" slug="notes"> -->
 
-<!-- <atom id="XQF94X1Y" slug="notes" digest="sha256:b8c01b61c7a3a84c2caa61d43ef946572b1cc7af9e856106726cb48c7d04f954"/> -->
+<!-- <atom id="XQF94X1Y" slug="notes-2" digest="sha256:b8c01b61c7a3a84c2caa61d43ef946572b1cc7af9e856106726cb48c7d04f954"/> -->
 ## notes
 
 <!-- <atom id="YSGZYT60" slug="note-0-notes-holds-at-the-current" digest="sha256:e04ae8185359cb2106ba9a6bb7d4f1eab8c2cf75bdff21f151e7e84569574f81"/> -->
@@ -261,7 +261,7 @@ Check 1. Read `notes/step-1.md` before the next change. The path is relative to 
 
 <!-- <atom-group id="EK38HYZ6" slug="backlog"> -->
 
-<!-- <atom id="J04YRES6" slug="backlog" digest="sha256:5da0f9d612dc4b483a57a7a5f3e73b55b04b1cde2093b152c75f6dac3113d4cc"/> -->
+<!-- <atom id="J04YRES6" slug="backlog-2" digest="sha256:5da0f9d612dc4b483a57a7a5f3e73b55b04b1cde2093b152c75f6dac3113d4cc"/> -->
 ## backlog
 
 <!-- <atom id="JYZKBRNT" slug="note-0-backlog-holds-at-the-current" digest="sha256:fadbb710a360eddb24c735e07114d8e212ce66d6bb58cd32943ac61c2a296703"/> -->
@@ -301,7 +301,7 @@ Check 1. Read `loose/step-1.md` before the next change. The path is relative to 
 <!-- <atom id="2Y0H8J24" slug="a-quoted-line-for-loose-step-3" digest="sha256:34ce6d21d111add6ea90ba78d51c901a1c5fe1e18d64c84fa3eb076aee282e12"/> -->
 > A quoted line for loose, step 3. It wraps far enough to make the blockquote bar measurable against the card border.
 
-<!-- <atom id="X20T23Q9" slug="loose-step-4" digest="sha256:eb69eccf94429169845ed213660cfb2e829e4c8daeb04ec4e6145bf05d0f144d"/> -->
+<!-- <atom id="X20T23Q9" slug="loose-step-4" digest="sha256:2fb0acf8d462e37bd13be1065d0211c41f7e6390470db8c7c1477b9561b41a00"/> -->
 ### loose step 4
 
 ```sh
@@ -334,7 +334,7 @@ Check 9. Read `loose/step-9.md` before the next change. The path is relative to 
 <!-- <atom id="VZE8J4ZM" slug="a-quoted-line-for-loose-step-11" digest="sha256:cb5dc3f0ec0c0eaf363b42267c3bd07f6e3d7d526d9c8084c1098b4ba58749e9"/> -->
 > A quoted line for loose, step 11. It wraps far enough to make the blockquote bar measurable against the card border.
 
-<!-- <atom id="GDQEZPPN" slug="loose-step-12" digest="sha256:1c52dfae98e4e736685118bfff177440e1f9771e87cd3f25493cb106f709cfec"/> -->
+<!-- <atom id="GDQEZPPN" slug="loose-step-12" digest="sha256:f290b5562926b6431aab813942e6f55c8a7975fe3d7fe2ac0d924d7417fb2cf9"/> -->
 ### loose step 12
 
 ```bash
@@ -348,7 +348,7 @@ iugum wiki --port 0 ./space-13
 2. second for loose 14
 3. third for loose 14
 
-<!-- <atom id="KS1YRB87" slug="a-long-reference-for-loose-a-link" digest="sha256:0316a7d25af3786d0f9927df5f3e01f77138214fcd3c99ed086263a0d5f4e3d9"/> -->
+<!-- <atom id="KS1YRB87" slug="a-long-reference-for-loose-a-link-2" digest="sha256:0316a7d25af3786d0f9927df5f3e01f77138214fcd3c99ed086263a0d5f4e3d9"/> -->
 A long reference for loose: [a link label that is deliberately long enough to wrap inside a narrow card and reach the right border](https://example.invalid/atomdown/fixture/reference/loose/step-15?verbose=1&trace=1) and then some trailing prose.
 
 <!-- <atom id="NP9896Y1" slug="note-16-loose-holds-at-the-current" digest="sha256:bc2e923bda653670b636d1890cbddb238ecd2f87b9bc74e90b2b760fb828bc18"/> -->

@@ -114,11 +114,15 @@ export const WIDTH_PX: Record<Width, number> = {
 };
 
 /**
- * The board panel's two densities. This is a board-only knob: the inline view
- * draws in the page's own type scale and has no density of its own, so an
- * inline test parameterised over density would run the same assertion twice.
- * Persisted by the plug in clientStore under `atomdown-board-density` and
- * reflected on the panel root as `data-board-density`.
+ * The two display densities. BOTH VIEWS HAVE THEM.
+ *
+ * The panel persists its choice in clientStore under
+ * `atomdown-board.density:<page>` and reflects it on the panel root as
+ * `data-board-density`. The inline view persists its own under
+ * `atomdown-inline.density:<page>` and reflects it as a class on every
+ * decorated line and widget, `atomdown-comfortable` or `atomdown-compact` —
+ * inline has no panel root to hang an attribute on, so the class is the
+ * readout. `setDensity` and `viewDensity` below hide that difference.
  */
 export const DENSITIES = ["comfortable", "compact"] as const;
 export type Density = (typeof DENSITIES)[number];
@@ -566,7 +570,10 @@ export async function boardFrame(
  * reads the attribute, never the label.
  */
 export async function setDensity(view: View, density: Density) {
-  if (view.kind !== "board") return; // inline has no density knob
+  if (view.kind === "inline") {
+    await setInlineDensity(view, density);
+    return;
+  }
   const btn = view.ev.locator("#atomdown-board-density");
   for (let i = 0; i < 3; i++) {
     const now = await btn.getAttribute("data-board-density");
@@ -578,6 +585,61 @@ export async function setDensity(view: View, density: Density) {
   }
   await expect(btn).toHaveAttribute("data-board-density", density);
   await settle(view.page);
+}
+
+/**
+ * The inline view's density, read from the DOM the reader is looking at.
+ *
+ * Not from clientStore, and not from the plug: the class on the line elements
+ * is what the CSS keys off, so it is the only readout that can disagree with
+ * what is on screen — which is exactly the disagreement a test has to catch.
+ * `null` means the view is off, or no decorated line is rendered yet (the
+ * editor is virtualised, so only a window of the document exists).
+ */
+export async function inlineDensity(view: View): Promise<Density | null> {
+  return await view.page.evaluate(() => {
+    if (document.querySelector(".cm-line.atomdown-compact-line")) {
+      return "compact";
+    }
+    if (document.querySelector(".cm-line.atomdown-comfortable-line")) {
+      return "comfortable";
+    }
+    return null;
+  }) as Density | null;
+}
+
+/**
+ * Set the inline view's density through the real command, then wait for the
+ * DOM to agree.
+ *
+ * The command and not the header button, for the same reason `openInline`
+ * uses the command: `client.runCommandByName` is the entry point both the
+ * palette and the button end up in, and the button's own path is asserted
+ * separately in rule 4.
+ */
+async function setInlineDensity(view: View, density: Density) {
+  for (let i = 0; i < 3; i++) {
+    if ((await inlineDensity(view)) === density) break;
+    await runCommand(view.page, "Atomdown: Toggle Inline Density");
+    await view.page
+      .locator(`.cm-line.atomdown-${density}-line`)
+      .first()
+      .waitFor({ state: "attached", timeout: 10_000 });
+  }
+  expect(
+    await inlineDensity(view),
+    `the inline view would not switch to ${density} density`,
+  ).toBe(density);
+  await settle(view.page);
+}
+
+/** Either view's density, as the DOM reports it. */
+export async function viewDensity(view: View): Promise<Density | null> {
+  if (view.kind === "inline") return await inlineDensity(view);
+  const now = await view.ev
+    .locator("#atomdown-board-density")
+    .getAttribute("data-board-density");
+  return (now as Density | null) ?? null;
 }
 
 /** Read the board's raw/rendered state from the toolbar's own attribute. */
@@ -1249,6 +1311,22 @@ export async function sweepEach(
           for (let i = 0; i < all.length; i++) {
             const k = key(all[i]);
             if (seenHere.has(k)) continue;
+            // STAMP THE ONE THAT WAS CHOSEN, so the caller can address it by
+            // identity rather than by position.
+            //
+            // The choice happens here and `fn` runs in the caller, and `fn`
+            // is an interaction: the click before it rebuilt the group's line
+            // elements, so `nth(i)` in the caller was no longer the element
+            // `key(all[i])` named. Measured on the fixture's eleven groups:
+            // the expand sweep recorded eleven distinct keys while clicking
+            // one caret twice and another never, so the round trip came back
+            // with groups still folded and it read as "the caret would not
+            // expand". The suite's own note says an index is not an identity;
+            // this is the half of that fix that was missing.
+            document
+              .querySelectorAll("[data-fe-sweep]")
+              .forEach((el) => el.removeAttribute("data-fe-sweep"));
+            all[i].setAttribute("data-fe-sweep", "1");
             return { key: k, index: i };
           }
           return null;
@@ -1260,11 +1338,14 @@ export async function sweepEach(
       const next = await takeNext();
       if (next === null) break;
       seen.push(next.key);
-      await fn(
-        view.ev.locator(selector).nth(next.index),
-        next.key,
-        seen.length - 1,
-      );
+      // The stamped element, falling back to the index only if the stamp is
+      // gone — which means CodeMirror rebuilt the element between the choice
+      // and the interaction, and the index is then the best guess there is.
+      const stamped = view.ev.locator(`${selector}[data-fe-sweep="1"]`);
+      const target = (await stamped.count()) === 1
+        ? stamped
+        : view.ev.locator(selector).nth(next.index);
+      await fn(target, next.key, seen.length - 1);
     }
 
     // RE-READ THE DOCUMENT'S HEIGHT EVERY STOP. `fn` is an interaction, and
@@ -1281,6 +1362,14 @@ export async function sweepEach(
     // grew the document every stop would otherwise never end the loop.
     if (y / step > 200) break;
   }
+  // Leave no mark on the document. A DOM signature is taken right after some
+  // of these sweeps, and a stray attribute would be a difference the sweep
+  // itself introduced.
+  await view.ev.evaluate(() => {
+    document
+      .querySelectorAll("[data-fe-sweep]")
+      .forEach((el) => el.removeAttribute("data-fe-sweep"));
+  });
   return seen;
 }
 

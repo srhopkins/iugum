@@ -148,6 +148,7 @@ for (const theme of THEMES) {
         await gotoFixture(page, server);
         await setWidth(page, combo.width);
         const view = await openInline(page);
+        await setDensity(view, combo.density);
         const id = await referenceId(view);
         const baseline = await cardTop(view, id);
         expect(baseline, `reference card ${id} was not found`).not.toBeNull();
@@ -160,6 +161,10 @@ for (const theme of THEMES) {
                 view,
                 ".atomdown-card-header",
                 async (card) => {
+                  // A real mouse move, not `hover`. At compact density the
+                  // header is a zero-height `pointer-events: none` layer by
+                  // design, so a hit-target check can never pass; and the
+                  // element is rebuilt under the locator anyway.
                   await hoverBox(view, card);
                 },
               );
@@ -216,6 +221,20 @@ for (const theme of THEMES) {
                 },
               );
               expect(expanded.length).toBe(FIXTURE.groups);
+            },
+          },
+          {
+            // Compact lifts the card header out of the layout and moves the
+            // card's top edge onto its first line. Both are the kind of
+            // change that can nudge everything below, which is exactly what
+            // this rule exists to catch — so the round trip is measured here
+            // and not only asserted as a DOM signature in rule 4.
+            what: "switch density to the other one and back",
+            run: async () => {
+              const start = combo.density;
+              const other = start === "compact" ? "comfortable" : "compact";
+              await setDensity(view, other);
+              await setDensity(view, start);
             },
           },
           {
