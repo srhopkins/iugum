@@ -130,7 +130,21 @@ async function checkContainment(view: View, combo: Combo) {
   for (const kind of kindsFor(view)) {
     const sweep = await sweepBoxes(view, kind.spec);
 
-    if (kind.expect !== undefined && sweep.boxes.length !== kind.expect) {
+    // Count the boxes that carry an Atomdown ID, not every box.
+    //
+    // The sweep's job here is to prove it reached the end of the document, and
+    // 82 distinct atom ids proves that completely. Counting every box dragged
+    // a fragile key into the assertion: the two implicit cards a fenced code
+    // block produces have no id, so they are keyed by their own text, and at
+    // narrow width that text wraps differently enough that one of them keyed
+    // twice and the sweep reported 85 of 84. The implicit cards are still
+    // MEASURED — every box goes through the containment check below — they
+    // just no longer decide whether the sweep was complete.
+    const identified = sweep.ids.filter((id) => /^[0-9A-Z]{8}$/.test(id));
+    const wanted =
+      kind.expect === EXPECT_CARDS ? FIXTURE.atoms : kind.expect;
+
+    if (wanted !== undefined && identified.length !== wanted) {
       await failWithArtifacts(
         view.page,
         1,
@@ -138,12 +152,14 @@ async function checkContainment(view: View, combo: Combo) {
         combo,
         {
           kind: kind.name,
-          found: sweep.boxes.length,
-          wanted: kind.expect,
+          boxes: sweep.boxes.length,
+          identified: identified.length,
+          wanted,
           stops: sweep.stops,
           ids: sweep.ids,
         },
-        `${view.kind} ${kind.name}: found ${sweep.boxes.length} boxes, expected ${kind.expect}. ` +
+        `${view.kind} ${kind.name}: found ${identified.length} box(es) with an ` +
+          `Atomdown id, expected ${wanted} (${sweep.boxes.length} boxes in all). ` +
           `Either the fixture changed shape or the scroll sweep stopped early — ` +
           `a containment pass over the wrong number of boxes proves nothing.`,
       );
