@@ -30,6 +30,8 @@ const {
   removeGroupMarkers,
   setGroupSlugInSource,
   setAtomSlugInSource,
+  setAtomAttrsInSource,
+  attrFormHtml,
   firstBoxKey,
   widgetUnitKey,
   widgetBoxKey,
@@ -434,6 +436,9 @@ test("the card menu leads with identity and that entry does nothing", () => {
     "copy-id",
     "copy-slug",
     "rename",
+    // "Edit attributes" opens the form (iugum-etz); "Show the directive
+    // line" is what that row used to do and keeps doing under its own name.
+    "attrs",
     "reveal",
     "group",
   ]);
@@ -656,6 +661,174 @@ test("renaming an atom to nothing removes the slug attribute", () => {
 test("renaming an atom that is gone fails instead of guessing", () => {
   const result = setAtomSlugInSource(PAGE, "NOSUCHID", "x");
   assert.equal(result.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// THE ATTRIBUTE FORM (iugum-etz).
+//
+// The write half is pure, so every refusal is testable here rather than only
+// through a browser. The FOCUS half cannot be tested here - it is a property
+// of a real DOM - and lives in rule 8j of the front-end suite.
+// ---------------------------------------------------------------------------
+
+const ATTR_PAGE = '<!-- <atom id="AAAAAAAA" slug="old" acme-x="1" ' +
+  'digest="sha256:abc"/> -->\nhi\n';
+
+test("saving attributes rewrites one line, id first then slug", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "slug", value: "New Name!" },
+    { name: "acme-x", value: "2" },
+    { name: "digest", value: "sha256:abc" },
+  ]);
+  assert.equal(result.ok, true);
+  assert.match(
+    result.text,
+    /<atom id="AAAAAAAA" slug="new-name" acme-x="2" digest="sha256:abc" \/>/,
+  );
+  const before = ATTR_PAGE.split("\n");
+  const changed = result.text.split("\n").filter((l, i) => l !== before[i]);
+  assert.equal(changed.length, 1, "one line changed");
+  assert.ok(result.text.includes("hi"), "the block's own text is untouched");
+});
+
+test("editing an unrelated attribute changes neither the id nor the digest", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "slug", value: "old" },
+    { name: "acme-x", value: "9" },
+    { name: "digest", value: "sha256:abc" },
+  ]);
+  assert.equal(result.ok, true);
+  assert.match(result.text, /id="AAAAAAAA"/);
+  assert.match(result.text, /digest="sha256:abc"/);
+});
+
+test("the form cannot edit the id: an id row in the payload is ignored", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "id", value: "ZZZZZZZZ" },
+    { name: "slug", value: "old" },
+  ]);
+  assert.equal(result.ok, true);
+  assert.match(result.text, /<atom id="AAAAAAAA" slug="old" \/>/);
+  assert.equal(result.text.includes("ZZZZZZZZ"), false);
+});
+
+test("adding and removing an attribute both work", () => {
+  const added = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "slug", value: "old" },
+    { name: "acme-x", value: "1" },
+    { name: "digest", value: "sha256:abc" },
+    { name: "owner", value: "steve" },
+  ]);
+  assert.match(added.text, /owner="steve"/);
+  const removed = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "slug", value: "old" },
+    { name: "digest", value: "sha256:abc" },
+  ]);
+  assert.equal(removed.text.includes("acme-x"), false);
+  assert.match(removed.text, /id="AAAAAAAA" slug="old" digest="sha256:abc"/);
+});
+
+test("an emptied attribute set still keeps the atom's id", () => {
+  // The inline counterpart of the board's "an empty block is rejected": the
+  // directive can never be emptied of its identity.
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", []);
+  assert.equal(result.ok, true);
+  assert.match(result.text, /<atom id="AAAAAAAA" \/>/);
+});
+
+test("a pasted directive in a value is REFUSED, not escaped", () => {
+  for (
+    const bad of [
+      '<!-- <atom id="BBBBBBBB"/> -->',
+      "a > b",
+      'say "hi"',
+      "en--dash",
+    ]
+  ) {
+    const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+      { name: "acme-x", value: bad },
+    ]);
+    assert.equal(result.ok, false, JSON.stringify(bad) + " must be refused");
+    assert.match(result.error, /attribute value|line break/);
+  }
+});
+
+test("a line break in a value is refused: an attribute is one line", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "acme-x", value: "one\ntwo" },
+  ]);
+  assert.equal(result.ok, false);
+});
+
+test("an invalid attribute name and a duplicate name are both refused", () => {
+  assert.equal(
+    setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [{ name: "9bad", value: "" }])
+      .ok,
+    false,
+  );
+  assert.equal(
+    setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+      { name: "x", value: "1" },
+      { name: "x", value: "2" },
+    ]).ok,
+    false,
+  );
+});
+
+test("a blank row is dropped rather than failing the save", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "slug", value: "old" },
+    { name: "  ", value: "" },
+  ]);
+  assert.equal(result.ok, true);
+  assert.match(result.text, /<atom id="AAAAAAAA" slug="old" \/>/);
+});
+
+test("an empty slug removes the slug attribute", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", [
+    { name: "slug", value: "   " },
+    { name: "acme-x", value: "1" },
+  ]);
+  assert.match(result.text, /<atom id="AAAAAAAA" acme-x="1" \/>/);
+});
+
+test("saving attributes for an atom that is gone fails instead of guessing", () => {
+  const result = setAtomAttrsInSource(ATTR_PAGE, "NOSUCHID", []);
+  assert.equal(result.ok, false);
+  assert.equal(setAtomAttrsInSource(ATTR_PAGE, "AAAAAAAA", "nope").ok, false);
+});
+
+test("the form presents the slug FIRST and labelled, and the id as inert", () => {
+  const form = attrFormHtml({
+    id: "AAAAAAAA",
+    slug: "old",
+    attrs: [
+      { name: "id", value: "AAAAAAAA" },
+      { name: "slug", value: "old" },
+      { name: "acme-x", value: "1" },
+    ],
+  });
+  const slugAt = form.html.indexOf("ad-attr-slug-input");
+  const listAt = form.html.indexOf("ad-attr-list");
+  assert.ok(slugAt > 0 && slugAt < listAt, "the slug row comes before the list");
+  assert.match(form.html, /Name \(slug\) - readable alias, not the id/);
+  assert.match(form.html, /value="old"/);
+  // The id and the slug are not ALSO generic rows: the id is added by the
+  // script as a disabled row and the slug has its own labelled field.
+  assert.match(form.script, /addRow\("id", DATA\.id, true\)/);
+  assert.equal(/"acme-x"/.test(form.script), true);
+  assert.equal(form.script.includes('{"name":"slug"'), false);
+  // It focuses its own field, which is the whole reason it is not in the
+  // popover: in a widget a click focuses nothing and the typing goes into the
+  // document (rule 8g, input-probe.test.ts).
+  assert.match(form.script, /slugEl\.focus\(\)/);
+});
+
+test("the form's markup escapes the values it renders", () => {
+  const form = attrFormHtml({ id: 'A"B', slug: "<script>", attrs: [] });
+  assert.equal(form.html.includes("<script>"), false);
+  assert.match(form.html, /&lt;script&gt;/);
+  assert.equal(form.html.includes('value="A"B"'), false);
 });
 
 test("no inline grip widget: the grip lives in the card header row", () => {

@@ -121,7 +121,6 @@ page, each stated as the property that was violated:
 | 8e | Both are hidden at rest and revealed by hover AND by keyboard focus. An open popover keeps its own button lit. |
 | 8f | None of it writes a document byte: hover, open, click the label, close, switch density twice, compare the file. |
 | 8g | The popover holds NO text input. |
-| 8h | The group control's hover is a translucent wash, not an opaque chip, measured as a composited colour rather than as pixels. |
 | 8i | A drop from the grip lands WHERE THE POINTER IS, asserted as the resulting unit order. `8-drag-drop.test.ts`, at all four widths and both densities. |
 
 **8i is in its own file because it WRITES**, and 8f asserts that nothing in
@@ -137,6 +136,56 @@ is the plainest gesture there is: press the first card's grip and let go a
 little way down the gutter, in the blank SEAM under the card. That release
 covers no unit mark, and an unresolved release used to mean "the end of the
 document". `drag-probe.test.ts` prints the seam payload that says so.
+| 8h | The hover of a control ON THE GROUP BAR is a translucent wash, not an opaque chip, measured as a composited colour rather than as pixels. |
+| 8d-group | BOTH GROUP CONTROLS SIT OUTSIDE THE GROUP CONTAINER, measured against the group header widget's own border rect, at all four widths and both densities. It also asserts the collision rule with a member card's controls, the chevron the bar keeps, and no clipping - by hit test, because a clipped element still reports its full rect. |
+| 8e-group | Both are hidden at rest and revealed by a hover ANYWHERE INSIDE THE GROUP - including over a member card - and by keyboard focus. The chevron is the exception and must be visible at rest. |
+| 8j | TYPING IN THE ATTRIBUTE FORM KEEPS FOCUS IN THE FORM, and the document's bytes are unchanged until Save. `8-attribute-form.test.ts`. |
+| 8k | The form presents the slug first and labelled, the id is shown and disabled, add and remove both work, Save is ONE undo step, and no id or digest moves. |
+| 8l | A pasted directive in an attribute value is REFUSED, the form stays open and says why, and no byte changes. |
+
+**8j, 8k and 8l are in their own file because they WRITE**, and 8f asserts that
+nothing in `8-card-controls.test.ts` writes a byte - the same split, and the
+same reason, as the drag rule's. Each of them boots its own space.
+
+**8j is the whole point of the attribute form, not a detail of it** (iugum-etz).
+Steve reported that "Edit attributes" showed the raw atomdown instead of a
+form. The form could not go in the popover for the measured reason 8g states,
+so it lives in a SilverBullet panel - an iframe outside the editor's DOM, which
+is the surface the board panel's own attribute form has always run in. 8j
+proves the choice with the two assertions that would have failed in the
+popover: while typing, the form's own field is `activeElement` and `.cm-content`
+is not, and the page's bytes are unchanged until Save. **Its keystrokes are
+real** - `locator.fill()` sets a value through the DOM and would pass on the
+broken arrangement too, because the broken arrangement's failure is where the
+KEYS go.
+
+**8d-group and 8e-group are iugum-938**, Steve's report that "the cards and
+groups were supposed to have same behavior, groups still show inside the
+container". The group's grip and menu moved out of the bar into the same two
+page gutters the card's controls use. Three decisions came with that, asserted
+rather than described:
+
+- **Vertical alignment is the group header bar's row**, not the container's
+  centre, and that is also the collision rule: the bar is a row of its own
+  above every member card, so a group control and a member card's control can
+  never share a row - not for the first member and not for the last. A second,
+  independent separation makes that forgiving rather than exact: a member
+  card's head is inset by the group's padding plus the 2px outline, so its
+  controls sit in a lane about 10px inboard of the group's. 8d-group asserts
+  the rows are disjoint AND that the lanes differ.
+- **The bar keeps** the collapse chevron, the GROUP label, the name, the id and
+  the member count. The chevron stays INSIDE the bar, at full size and always
+  visible at both densities - already a rule, and now with an assertion.
+- **The hover-contrast fix survived, retargeted, and that is a deliberate trade
+  recorded here.** The translucent wash exists because an opaque chip on the
+  saturated accent fill reads as a hole punched through the bar. The three-dot
+  menu is not on that fill any more, so it takes the card menu's
+  opacity-and-colour treatment instead; the collapse chevron IS still on the
+  fill and was the same solid white chip, so it keeps the wash. 8h therefore
+  measures the chevron. The property 8h asserts did not change - only the
+  control it is asserted of - and 8h gained a second assertion that the menu
+  out in the gutter paints no opaque chip either, which is the same defect in a
+  new place.
 
 **8g is a negative assertion with a measured reason.** The decoration seam's
 `widgetPressGuard` calls `preventDefault` on a plain `mousedown` inside any
