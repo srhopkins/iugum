@@ -122,6 +122,21 @@ page, each stated as the property that was violated:
 | 8f | None of it writes a document byte: hover, open, click the label, close, switch density twice, compare the file. |
 | 8g | The popover holds NO text input. |
 | 8h | The group control's hover is a translucent wash, not an opaque chip, measured as a composited colour rather than as pixels. |
+| 8i | A drop from the grip lands WHERE THE POINTER IS, asserted as the resulting unit order. `8-drag-drop.test.ts`, at all four widths and both densities. |
+
+**8i is in its own file because it WRITES**, and 8f asserts that nothing in
+`8-card-controls.test.ts` writes a byte. Each 8i test gets its own space.
+
+**Why 8i asserts the ORDER.** The grip drag regressed once already
+(`iugum-uuv`: the first card, dragged down one position, landed at the bottom
+of the document) and no test noticed, because the drag test that existed
+asserts that the file CHANGED and that no line was added or lost - and a card
+at the bottom of the page satisfies both. So 8i computes the expected order
+from the order before the drag and compares the whole list. Its central case
+is the plainest gesture there is: press the first card's grip and let go a
+little way down the gutter, in the blank SEAM under the card. That release
+covers no unit mark, and an unresolved release used to mean "the end of the
+document". `drag-probe.test.ts` prints the seam payload that says so.
 
 **8g is a negative assertion with a measured reason.** The decoration seam's
 `widgetPressGuard` calls `preventDefault` on a plain `mousedown` inside any
@@ -185,7 +200,9 @@ the rest.
 
 Rule 8d walks all four widths and both densities on its own, outside the combo
 matrix, because a control's clearance from the card border is exactly the
-measurement that changes with width.
+measurement that changes with width. Rule 8i walks the same eight cells for the
+same reason: the grip lives in the page gutter, and the gutter's width is the
+page margin, which moves with the content column.
 
 ## The negative control
 

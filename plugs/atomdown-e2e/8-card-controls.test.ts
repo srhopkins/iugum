@@ -30,6 +30,10 @@
  * the one thing this view may never do. 8g asserts the popover holds no input,
  * so the day someone adds one, this rule says why they cannot.
  *
+ * WHERE THE GRIP'S DROP LANDS IS 8i, in `8-drag-drop.test.ts`. It is a
+ * separate file because every test in it WRITES the document, and 8f here
+ * asserts that nothing in this file writes a byte.
+ *
  * THE GROUP CONTROL IS THE SAME CONTROL. Its hover state is checked here for
  * geometry and by rule 9 for colour: no behavioural assertion can see that a
  * hover paints a white hole in a saturated blue bar, which is exactly what
