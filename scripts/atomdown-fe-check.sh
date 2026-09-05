@@ -80,14 +80,15 @@ if [ "$needs_build" = 1 ]; then
   # in. Same sequence as scripts/build-wiki-blob.sh, without installing the
   # result as the //go:embed blob.
   ( cd "$SB" && npm run build >/dev/null )
-  stager="$ROOT/iugum"
-  if [ ! -x "$stager" ]; then
-    say "no ./iugum to stage the space assets; building a static one"
-    CGO_ENABLED=0 go build -o "$ROOT/iugum-fe-stager" "$ROOT"
-    stager="$ROOT/iugum-fe-stager"
-  fi
-  "$stager" stage-wiki-assets "$SB"
-  [ -x "$ROOT/iugum-fe-stager" ] && rm -f "$ROOT/iugum-fe-stager"
+  # ALWAYS A FRESH STAGER, never ./iugum. The assets are //go:embed-ed into
+  # package main, so `iugum stage-wiki-assets` stages the plug bundles that
+  # were in the tree when THAT binary was built. Reusing an existing ./iugum
+  # staged a plug from hours earlier and the suite then measured the old one,
+  # silently: the fix under test was simply not in the binary.
+  say "building a stager so the staged plugs are the ones in this tree"
+  CGO_ENABLED=0 go build -o "$ROOT/iugum-fe-stager" "$ROOT"
+  "$ROOT/iugum-fe-stager" stage-wiki-assets "$SB"
+  rm -f "$ROOT/iugum-fe-stager"
   ( cd "$SB" && cargo build --release -p silverbullet )
   say "build took $(( $(date +%s) - build_start ))s"
 else

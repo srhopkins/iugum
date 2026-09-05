@@ -163,36 +163,58 @@ Stated rather than hidden.
   with a loud reason if none is found. The byte comparisons still run. A gate
   that fails because a sibling repo is missing gets switched off.
 
-## First-run status, honestly
+## Status
 
-The suite was written and landed in one session. This is where each part
-actually stands, measured, not assumed.
+**Green on the fast matrix, both views: every rule and every component test.**
+No `test.fixme` is left in the suite. One test still skips with a reason rather
+than failing — the grip drag, when a synthetic pointer drag produces no change;
+see "what is not deterministic" above.
 
-**Green on the fast matrix, both views:** rule 1 (containment), rule 2
-(directive invisibility), rule 5 (rendering fidelity).
+The six area 7 tests that were pending on the first run are all in. What each
+one needed:
 
-**Green:** rule 3 for the BOARD, including the edit-mode exception - the
-edited card grows downward and content below moves by exactly its height
-delta. Rule 6's edit-then-undo byte comparison. Area 7's card selection, group
-box and collapse round trip, and the grip drag reorder.
+| Pending test | What it was |
+|---|---|
+| The card's closed box | The probe read the header widget and its siblings and never its CHILDREN, and the inline card's TOP edge is drawn on `.atomdown-card-head` inside the widget. It reported `top: 0` on a card whose top border is plainly visible. |
+| The card menu | It measured `.board-card-menu`, the positioning box that deliberately stays laid out so nothing reflows when the button appears. The control is `.board-menu-btn` inside it. And `:focus-visible` alone left a focused button invisible, because it does not match a focus set by script or by a click — that one was the panel's, and the panel now uses `:focus` too. |
+| The grip's resting state | The duplicate plug. Nothing else. |
+| The group header controls | Three things: `.board-slug-input` matches three hidden forms, so the rename input had to be scoped to the group's own; at compact density Rename and Ungroup fold into the menu and the direct buttons are `display: none`, so the test has to check VISIBLE rather than present; and ungroup takes a loose group's marker line WITH its blank line, which is deliberate and unit-tested, so the comparison normalises blank-line runs. |
+| The card editor | The duplicate plug. |
+| The stale-digest indicator | It needs a page with no drift and it creates drift, and the editor test above had already edited the shared one. It boots its own space now, as the editor and the group-controls tests do. |
 
-**Red for a real reason:** rule 3 for the INLINE view, at the "collapse and
-expand every group" step. The reference card is gone afterwards because a
-group is left FOLDED, which is the inline caret's documented fold/unfold drift
-- it alternates from memory because the host offers `editor.fold` and
-`editor.unfold` but no read of the fold state (that plug's README, "Known
-limits"). The board's caret round-trips correctly, which is what makes this a
-view difference rather than a suite bug. Fix the caret and this goes green; the
-assertion is correct as written.
+**The duplicate plug** was the largest single cause, and it was the suite's own
+doing. Both plugs are compiled into the server binary's read-only underlay, and
+`Space.listPlugs` returns every `*.plug.js` a space can see, so the copy the
+harness wrote into `_plug/` did not override the compiled one — it added a
+SECOND instance, with its own memory, answering every click and writing the same
+config key. The harness seeds no plug copy now, and `scripts/atomdown-fe-check.sh`
+stages this tree's plugs into the binary before it runs. `iugum wiki` warns when
+a space still holds a hand-copied bundle.
 
-**Pending triage:** six area 7 tests are marked `test.fixme` with a reason
-each - the card box, the card menu, the grip's resting state, the group header
-controls, the card editor and the stale-digest indicator. Each is either a real
-finding or a selector of mine that does not match this build, and telling those
-apart needs one pass per test against the artifacts the runner writes. They are
-marked rather than deleted so they show up as named pending tests in every run,
-and tracked as `iugum-w6y.15`. Two known-good
-fixes already landed from that triage and are worth knowing before continuing
-it: `cardTop` has to scroll a virtualised card into view before it can measure
-it, and `.board-card-body` matches THREE elements per card (rendered, raw,
-editor) so every locator has to name `[data-card-rendered]` instead.
+**Two known-good fixes** from the same triage, worth knowing before changing the
+suite: `cardTop` has to scroll a virtualised card into view before it can
+measure it, and `.board-card-body` matches THREE elements per card (rendered,
+raw, editor) so every locator has to name `[data-card-rendered]`.
+
+## What a virtualised editor does to a measurement
+
+Four failures in this suite were the measurement rather than the view, and all
+four have the same root: CodeMirror renders a window of the document and
+estimates the rest.
+
+- **A rect in a whole-document signature is not a state.** The same line's
+  document-relative top moved 14px between two stops of one sweep, because the
+  height estimate for the lines above it improved. `signature` therefore records
+  classes, left edge, size and text, and leaves vertical position to rule 3,
+  which measures it against a card it scrolls to, with a tolerance.
+- **`scrollHeight` is an estimate too.** A sweep that held the first reading
+  ended early and missed the last group of the document. Every sweep re-reads it
+  at every stop.
+- **`locator.hover()` waits out its timeout on a rebuilt element.** Putting
+  `hoverClasses` on a group rebuilds every line element in it, so the element a
+  locator resolved a moment ago is detached; at 84 cards that is eleven minutes
+  and it reads as a three-minute test timeout. Hovers in a sweep are real mouse
+  moves — `hoverBox` in the harness.
+- **An index is not an identity.** `sweepEach` chooses the next key in the page,
+  next to the list it chose from, rather than reading the list in one call and
+  acting on `nth(i)` in another.
