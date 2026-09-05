@@ -113,8 +113,8 @@ binary, set `IUGUM_WIKI_SB_SRC` (or `IUGUM_WIKI_SB_BIN` for a binary you already
 have). See `docs/silverbullet-vendor.md`.
 
 Every space also gets the atomdown assets the wiki binary carries: the two plug
-bundles, the library page with the header button and the card CSS, and the
-editor width page. Nothing is copied into the space folder. The assets are
+bundles, and the library page with the header button and the card CSS. Nothing
+is copied into the space folder. The assets are
 compiled into the SilverBullet binary as a read-only layer under the space, so
 they cannot be lost or deleted, and a page you write with the same name still
 wins. See `docs/wiki-space-assets.md`.

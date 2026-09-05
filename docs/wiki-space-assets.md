@@ -1,8 +1,9 @@
 # The wiki space assets
 
-Every SilverBullet space that `iugum wiki` serves has the atomdown plugs, their
-CSS, and the editor width page. No space holds a copy of them. They are
-compiled into the SilverBullet binary, which iugum embeds in turn.
+Every SilverBullet space that `iugum wiki` serves has the atomdown plugs and
+the page that carries their header button and their CSS. No space holds a copy
+of them. They are compiled into the SilverBullet binary, which iugum embeds in
+turn.
 
 Before this, the assets were source files under `plugs/`, and every space needed
 a hand copy. That broke four times. The last time, a space had both plug
@@ -16,7 +17,6 @@ were absent and the feature looked broken rather than uninstalled.
 | `Library/Atomdown/Plugs/atomdown-board.plug.js` | `plugs/atomdown-board/atomdown-board.plug.js` | the full-screen board panel |
 | `Library/Atomdown/Plugs/atomdown-inline.plug.js` | `plugs/atomdown-inline/atomdown-inline.plug.js` | the card view on the page |
 | `Library/Atomdown/Inline.md` | `plugs/atomdown-inline/library/Atomdown Inline.md` | the header-bar button (`space-lua`) and the card CSS (`space-style`) |
-| `Library/Atomdown/Editor Width.md` | `spaceassets/library/Editor Width.md` | the four-step editor width cycle and its top-bar button |
 
 `Library/Atomdown` is outside upstream's `Library/Std` tree on purpose. A
 `git subtree pull` of SilverBullet rewrites `Library/Std`, so it can never
@@ -123,17 +123,32 @@ removed. Copies in spaces are the drift that caused the four breakages: a copy
 goes stale, or somebody deletes half of it, and the space then disagrees with
 the program. The underlay has no copy to go stale.
 
-## Which style pages ship
+## What the bundle does not carry
 
-`Library/Atomdown/Editor Width` ships. It is a generic capability, it needs no
-plug, and it is the answer to the wide tables that an atomdown board produces. A
-space that never presses the button keeps SilverBullet's own width: the CSS
-rules apply only when a step is set, so the page changes nothing until asked.
-The version in this repository differs from the one in Steve's FFAI space in
-exactly that: the FFAI copy forces 900px on an unset space.
+Only files the atomdown views cannot work without. The bundle exists so the
+feature can never look broken, not as a place to ship conveniences.
 
-`Library/Styles/Notion.md` does **not** ship. It restyles every theme token with
-`!important` and embeds a company logo as a data URI. That is one person's taste
-and one company's brand, not a product default, and it would fight both the
-atomdown card CSS and any theme a user chooses. It stays in the space that wants
-it.
+**No page that changes global editor behaviour.** A `base_fs` page can be
+overridden only at its own exact path, so a page that also exists in a space
+under a different name gives two live copies with no way to turn either off.
+
+This was measured, not guessed. An editor-width page
+(`Library/Styles/EditorWidth.md`, a four-step `--editor-width` cycle from
+Steve's FFAI space) was bundled first and then removed. A space that already
+had its own copy showed **two** width buttons in the top bar, and the two
+`system:ready` listeners raced over one `html` attribute and one `clientStore`
+key, so which width survived a reload depended on load order. The two spaces
+that already own such a page are Steve's FFAI space and the front-end test
+fixture. The page stays in the spaces that want it.
+
+The atomdown pages carry no such risk, because nothing else defines them, and
+a space that wants to change one writes the same path and wins.
+
+`Library/Styles/Notion.md` is not bundled for a second reason as well: it
+restyles every theme token with `!important` and embeds a company logo as a data
+URI. That is one person's taste and one company's brand, not a product default.
+
+**A leftover hand copy is a duplicate, not an override.** A plug bundle still
+sitting in a space's `_plug/` does not shadow the compiled one — the loader has
+no idea the two files are the same plug, so it runs both. `iugum wiki` warns
+about that and names the files to delete.
