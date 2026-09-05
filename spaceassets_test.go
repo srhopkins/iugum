@@ -2,15 +2,14 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/srhopkins/iugum/spaceseed"
+	"github.com/srhopkins/iugum/spaceassets"
 )
 
 // The program must carry every file a space needs. A space with the plugs and
-// no library page draws the decorations with no stylesheet.
+// no library page draws the decorations with no stylesheet, which reads as a
+// broken feature rather than an absent one.
 func TestEmbeddedSpaceAssets(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -33,24 +32,41 @@ func TestEmbeddedSpaceAssets(t *testing.T) {
 	}
 }
 
-// The registered asset set seeds an empty space with all three files.
-func TestSeedFromEmbeddedAssets(t *testing.T) {
-	dir := t.TempDir()
-	res, err := spaceseed.Seed(dir, spaceseed.Options{})
+// init registers the embedded assets, so the staging step and the marker check
+// both see the full set.
+func TestRegisteredAssetSet(t *testing.T) {
+	assets, err := spaceassets.All()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"_plug/atomdown-board.plug.js",
-		"_plug/atomdown-inline.plug.js",
-		"Library/Atomdown Inline.md",
+	byRel := map[string]int{}
+	for _, a := range assets {
+		byRel[a.Rel] = len(a.Data)
 	}
-	if len(res.Wrote) != len(want) {
-		t.Fatalf("wrote %v, want %v", res.Wrote, want)
-	}
-	for _, rel := range want {
-		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
-			t.Fatalf("%s: %v", rel, err)
+	for _, rel := range []string{
+		"Plugs/atomdown-board.plug.js",
+		"Plugs/atomdown-inline.plug.js",
+		"Inline.md",
+		"Editor Width.md",
+	} {
+		if byRel[rel] == 0 {
+			t.Errorf("the asset set has no %q", rel)
 		}
 	}
+}
+
+// The marker names a path that the set really stages. A marker that no asset
+// produces would report every SilverBullet binary as stale.
+func TestMarkerNamesAStagedAsset(t *testing.T) {
+	assets, err := spaceassets.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := spaceassets.Marker
+	for _, a := range assets {
+		if spaceassets.Namespace+"/"+a.Rel == want {
+			return
+		}
+	}
+	t.Fatalf("no asset stages the marker path %q", want)
 }

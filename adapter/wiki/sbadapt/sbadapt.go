@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 	"github.com/srhopkins/iugum/contract"
 	"github.com/srhopkins/iugum/embedbin"
 	"github.com/srhopkins/iugum/plugin"
-	"github.com/srhopkins/iugum/spaceseed"
+	"github.com/srhopkins/iugum/spaceassets"
 )
 
 // Environment switches. The embedded release binary stays the default, so a
@@ -28,13 +29,6 @@ const (
 	envBin     = "IUGUM_WIKI_SB_BIN"
 	envSrc     = "IUGUM_WIKI_SB_SRC"
 	envRebuild = "IUGUM_WIKI_SB_REBUILD"
-	// envSeed controls the atomdown space assets that the program carries.
-	//
-	//	off    do not touch the space
-	//	force  take the built-in copy, even over a changed file
-	//
-	// The default is additive: write a missing file, keep a changed one.
-	envSeed = "IUGUM_WIKI_SEED"
 )
 
 func init() {
@@ -63,9 +57,6 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	if err := os.MkdirAll(opts.Space, 0o755); err != nil {
 		return err
 	}
-	if err := seedSpace(opts.Space); err != nil {
-		return err
-	}
 	path, cleanup, err := resolveBinary()
 	if cleanup != nil {
 		defer cleanup()
@@ -73,6 +64,7 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	if err != nil {
 		return err
 	}
+	warnIfNoSpaceAssets(os.Stderr, path)
 	args := []string{"-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space}
 	// SilverBullet 2.10.0 and later need --single for one-space mode. Version
 	// 2.9.0 and earlier reject the flag, so ask the binary what it accepts.
@@ -87,21 +79,20 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	return nil
 }
 
-// seedSpace writes the compiled-in atomdown assets into the space. It runs
-// once per space per process, so the supervised restart in `iugum up` does
-// not repeat the log. A seed failure stops the server: a half-seeded space
-// draws the cards with no CSS, which looks like a broken feature.
-func seedSpace(space string) error {
-	switch os.Getenv(envSeed) {
-	case "off", "0", "no":
-		return nil
-	case "force":
-		_, err := spaceseed.Seed(space, spaceseed.Options{Force: true, Once: true, Log: os.Stdout})
-		return err
-	default:
-		_, err := spaceseed.Seed(space, spaceseed.Options{Once: true, Log: os.Stdout})
-		return err
+// warnIfNoSpaceAssets says what to do when the SilverBullet binary was built
+// without the atomdown space assets. The assets are compiled into that binary,
+// not written into the space, so a binary from before the assets existed draws
+// the cards with no CSS and shows no toggle button. That reads as a broken
+// feature. Name the cause and the one command that fixes it.
+//
+// This is a warning, not an error: SilverBullet itself is fine, and a space
+// that does not use atomdown does not care.
+func warnIfNoSpaceAssets(w io.Writer, bin string) {
+	if spaceassets.BinaryHasAssets(bin) {
+		return
 	}
+	fmt.Fprintf(w, "wiki: this SilverBullet binary carries no %s assets, so the atomdown card view has no CSS and no header button.\n", spaceassets.Namespace)
+	fmt.Fprintf(w, "wiki: rebuild the embedded binary with scripts/build-wiki-blob.sh, then rebuild iugum.\n")
 }
 
 // resolveBinary finds a SilverBullet binary to run. The second result removes
@@ -162,8 +153,19 @@ func buildFromSource(src string) (string, error) {
 			return "", err
 		}
 	}
-	// build-rs makes the client bundle, then the release server binary.
-	if err := run(dir, "make", "build-rs"); err != nil {
+	// `make build-rs` is `npm run build` and then `cargo build --release`. The
+	// atomdown assets have to land between the two: the npm step writes
+	// client_bundle/base_fs, and the cargo step compiles it into the binary.
+	// So run the two halves here instead of the one make target.
+	if err := run(dir, "npm", "run", "build"); err != nil {
+		return "", err
+	}
+	staged, err := spaceassets.Stage(dir)
+	if err != nil {
+		return "", fmt.Errorf("wiki: stage space assets: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "wiki: staged %d space assets into %s/client_bundle/base_fs\n", len(staged), dir)
+	if err := run(dir, "cargo", "build", "--release", "-p", "silverbullet"); err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(out); err != nil {
