@@ -135,6 +135,19 @@ html {
   --board-group-header-padding: 5px 8px;
   --board-group-quiet-border: 40%;
   --board-group-quiet-header: 16%;
+  /* THE PAGE GUTTER THE CARD'S TWO CONTROLS SIT IN, outside the card's own
+     border. Steve's change, iugum-caj.
+
+     22px, and the number is measured rather than chosen. The space available
+     outside a card's border is the editor's own content padding (20px) plus
+     the page margin, and the page margin is narrowest at the `full` editor
+     width, where `min(1600px, 96%)` on a 1440px viewport leaves 28.8px. So the
+     budget at the worst width is 48.8px. A 22px offset with a ~16px control
+     ends 6px clear of the card, 26px clear of the scroller's own edge, and
+     never reaches the point where CodeMirror's `.cm-scroller` (overflow-x:
+     auto) would grow a horizontal scrollbar. Rule 1's chrome check measures
+     exactly this at all four widths. */
+  --board-chrome-gutter: 22px;
   --board-grip-size: 14px;
   --board-id-size: 11px;
   --board-header-quiet-color: var(--subtle-color, #888);
@@ -493,11 +506,30 @@ html {
   user-select: none;
 }
 
-/* Hover inverts the two accent tokens rather than mixing in a new value. */
+/* HOVER ON THE ACCENT FILL, and this is a fix (iugum-caj item 2).
+
+   It used to paint a SOLID `--ui-accent-contrast-color` chip, which is white
+   in both themes. On the group bar's resting tint that is a light pill on a
+   pale ground and reads fine; on the saturated accent fill the bar takes when
+   the pointer is inside the group, it reads as a hole punched through the bar.
+   Steve reported exactly that.
+
+   The treatment is a translucent wash of the contrast colour with the text
+   colour left alone, so the control lifts off whatever is behind it instead of
+   replacing it. It works on both of the bar's two states and on either theme,
+   because it is relative to the fill rather than an absolute colour. A browser
+   with no color-mix() drops the declaration and the control is simply not
+   tinted - never a white hole. */
 .atomdown-group-collapse:hover,
-.atomdown-group-menu:hover {
-  background: var(--ui-accent-contrast-color, #fff);
-  color: var(--board-accent-color);
+.atomdown-group-collapse:focus-visible,
+.atomdown-group-menu:hover,
+.atomdown-group-menu:focus-visible {
+  background: color-mix(
+    in srgb,
+    var(--ui-accent-contrast-color, #fff) 24%,
+    transparent
+  );
+  color: inherit;
 }
 
 /* --------------------------------------------------------- */
@@ -515,27 +547,54 @@ html {
   user-select: none;
 }
 
+/* :focus AND :focus-visible, the panel's own lesson: :focus-visible does not
+   match a focus set by script or by a click, so a control that HAS focus was
+   still at opacity 0. A focused control the reader cannot see is a control
+   they cannot use, whichever way the focus arrived. */
 .atomdown-card-head:hover .atomdown-grip,
 .sb-decoration-widget.atomdown-card-header:has(+ .cm-line.atomdown-card-hover)
   .atomdown-grip,
 .atomdown-group-header:hover .atomdown-grip,
+.atomdown-grip:focus,
 .atomdown-grip:focus-visible {
   opacity: 0.5;
 }
 
 /* ------------------------------------------------------------------ */
-/* THE CARD'S TWO CONTROLS: grip top-LEFT, three-dot menu top-RIGHT,   */
-/* the same sides the panel uses.                                      */
+/* THE CARD'S TWO CONTROLS, OUTSIDE THE CARD: grip in the LEFT page    */
+/* gutter, vertical three-dot menu in the RIGHT one. Steve's change,   */
+/* iugum-caj item 4.                                                   */
 /*                                                                     */
-/* Both are absolutely positioned inside the header's own padding, and  */
-/* that is what reconciles two rules that otherwise fight: the grip has */
-/* to be on the left (this rule) while the slug still starts on the     */
-/* same left edge as the body text (R2). An in-flow grip ahead of the   */
-/* slug pushes the slug right by the grip's width even at opacity 0,    */
-/* because its box is still laid out. Out of flow, it pushes nothing -  */
-/* which is also why neither control moves anything when it appears.    */
-/* --board-card-padding is 14px so the gutter is wide enough to hold    */
-/* the glyph without it crossing the card's border.                    */
+/* WHAT MOVED AND WHY. They used to be pinned inside the header's own   */
+/* --board-card-padding. That worked but spent 14px of card width on    */
+/* each side that the content could not use, and at compact - where the */
+/* header row has no height at all - the menu had to float over the     */
+/* card's first line, which is why compact reserved                    */
+/* --board-card-chrome-space at the top right. Outside the border there */
+/* is nothing to float over, so that reservation is gone and a compact  */
+/* card is the full column wide.                                        */
+/*                                                                      */
+/* STILL OUT OF FLOW, and that has not changed for the original reason:  */
+/* an in-flow grip ahead of the slug pushes the slug right by the grip's */
+/* width even at opacity 0, because its box is still laid out, and the   */
+/* slug has to start on the same left edge as the body text (R2). Out of */
+/* flow, neither control moves anything when it appears on hover.       */
+/*                                                                      */
+/* THE OFFSET IS FROM THE CARD HEAD'S OWN BORDER BOX, which is what      */
+/* makes one rule right for both a top-level and a member card. A        */
+/* member card's head is inset by the group's padding and sits inside    */
+/* the group's 2px outline, so the same -22px lands 12px OUTSIDE that    */
+/* outline; a top-level card's head has no inset, so it lands 22px       */
+/* outside the card border. Neither can touch the group's outline, and   */
+/* rule 1's chrome check measures both.                                  */
+/*                                                                      */
+/* NOT CLIPPED, measured rather than assumed. `.cm-scroller` is the only */
+/* ancestor between a card and the body with a non-visible overflow      */
+/* (`auto`), and it spans the whole viewport while the content column is  */
+/* centred inside it - so a control 22px outside the column is still     */
+/* well inside the clipper. Verified at all four editor widths on the    */
+/* real fixture, by rect AND by `elementFromPoint`, because a clipped     */
+/* element still reports its unclipped rect.                             */
 /* ------------------------------------------------------------------ */
 
 .atomdown-card-head .atomdown-grip,
@@ -544,14 +603,108 @@ html {
   top: 50%;
   transform: translateY(-50%);
   line-height: 1;
+  /* The controls are the one thing in the header layer that must stay
+     clickable: compact sets `pointer-events: none` on the layer itself so a
+     click on a card's top strip falls through to the card. */
+  pointer-events: auto;
 }
 
 .atomdown-card-head .atomdown-grip {
-  left: 1px;
+  left: calc(-1 * var(--board-chrome-gutter));
 }
 
 .atomdown-card-head .atomdown-card-menu {
-  right: 1px;
+  right: calc(-1 * var(--board-chrome-gutter));
+}
+
+/* ------------------------------------------------------------------ */
+/* THE POPOVER. The card's own menu, anchored to the card, NOT the      */
+/* host's command palette. iugum-caj item 1.                            */
+/*                                                                     */
+/* It hangs from the three-dot button, which is in the right gutter, so */
+/* the popover opens back over the card rather than further out of the  */
+/* column: `right: 0` on a box whose containing block is the card head  */
+/* puts its right edge on the card's right border and grows it inward.  */
+/* At the narrow width that is the only placement that fits.            */
+/*                                                                     */
+/* IT LEAVES THE CARD ON PURPOSE, downward, the way every popover does. */
+/* Rule 1 knows: chrome may sit outside the box it belongs to, and is    */
+/* checked for clipping and for overlap instead of for containment.     */
+/* ------------------------------------------------------------------ */
+
+.atomdown-menu-popover {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 6px;
+  background: var(--ui-surface-background-color, #fff);
+  border: 1px solid var(--board-card-border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  color: var(--board-header-active-color);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  /* The card head is out of flow and its text is centred vertically; the
+     popover is a block of rows and inherits neither. */
+  transform: none;
+  pointer-events: auto;
+  user-select: none;
+}
+
+/* The identity label: the popover's FIRST child and inert, the same shape the
+   panel's popover has. `cursor: default`, no hover state, and the click
+   handler treats a hit on it as "keep the menu open" rather than as an
+   action - a reader clicks the thing that names the card first. */
+.atomdown-menu-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--board-card-border-color);
+  cursor: default;
+}
+
+.atomdown-menu-label-text {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.atomdown-menu-label-note {
+  font-size: 11px;
+  color: var(--board-header-quiet-color);
+}
+
+.atomdown-menu-item {
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.atomdown-menu-item:hover,
+.atomdown-menu-item:focus-visible {
+  background: var(--ui-surface-hover-background-color, #eee);
+}
+
+/* An open menu keeps its own button visible, or the control the popover
+   belongs to disappears the moment the pointer moves onto the popover. */
+.atomdown-menu-open .atomdown-card-menu,
+.atomdown-menu-open .atomdown-group-menu {
+  opacity: 1 !important;
+}
+
+/* The group's popover hangs from the bar's right end, inside the bar's own
+   colour rather than inheriting the accent fill's white text. */
+.atomdown-group-header .atomdown-menu-popover {
+  color: var(--board-header-active-color);
 }
 
 .atomdown-card-menu,
@@ -571,11 +724,13 @@ html {
 .atomdown-card-head:hover .atomdown-card-menu,
 .sb-decoration-widget.atomdown-card-header:has(+ .cm-line.atomdown-card-hover)
   .atomdown-card-menu,
+.atomdown-card-menu:focus,
 .atomdown-card-menu:focus-visible {
   opacity: 0.6;
 }
 
 .atomdown-card-menu:hover,
+.atomdown-card-menu:focus,
 .atomdown-card-menu:focus-visible {
   opacity: 1 !important;
   color: var(--board-header-active-color);
@@ -590,6 +745,7 @@ html {
 }
 
 .atomdown-group-header:hover .atomdown-group-menu,
+.atomdown-group-menu:focus,
 .atomdown-group-menu:focus-visible {
   opacity: 1;
 }
@@ -798,24 +954,17 @@ html {
   display: none;
 }
 
-/* With the name and the id gone, the flex row itself puts the grip at the
-   left and the menu at the right, so the two controls come back INTO flow
-   here rather than being pinned into a padding gutter that compact no
-   longer has. An opaque chip behind each one, so a control never smears
-   the line of text it floats over on the way in. */
-.atomdown-compact .atomdown-card-head .atomdown-grip,
-.atomdown-compact .atomdown-card-head .atomdown-card-menu {
-  position: static;
-  transform: none;
-  pointer-events: auto;
-  background: var(--board-card-surface);
-  border-radius: 3px;
-  padding: 0 2px;
-}
+/* COMPACT USES THE SAME GUTTER, so there is one rule for both densities and
+   nothing to restate here.
 
-.atomdown-compact .atomdown-card-head .atomdown-card-menu {
-  margin-left: auto;
-}
+   It used to be different: with no header row to pin them into, the two
+   controls came back INTO flow and floated over the card's first line, behind
+   an opaque chip so they would not smear the text. Outside the border there is
+   no text to smear and no chip is needed, so both of those rules are gone -
+   and so is the padding compact used to reserve inside the card for the
+   three-dot button (--board-card-chrome-space, below). That reservation was
+   the last thing spending card width on chrome at compact, which is the
+   density where width matters most. */
 
 /* THE CARD'S TOP EDGE AND TOP CORNERS MOVE ONTO THE CARD'S FIRST LINE,
    because the header widget that carried them is out of the layout now.
@@ -827,16 +976,13 @@ html {
   border-top-right-radius: var(--board-card-radius);
 }
 
-/* Room reserved at the top right of the first line, so the three-dot
-   button never lands on top of the content. Four classes and !important
-   for the same two reasons the comfortable padding rule has them - the
-   client's own `.cm-line { padding: 0 }` and its inline list indent. */
-#sb-main .cm-editor .cm-line.atomdown-compact-line.atomdown-card-first {
-  padding-right: calc(
-    var(--ad-inset) + var(--board-card-padding) +
-      var(--board-card-chrome-space)
-  ) !important;
-}
+/* NO ROOM IS RESERVED AT THE TOP RIGHT ANY MORE. The three-dot button used to
+   float over the card's first line at this density, so that line carried an
+   extra --board-card-chrome-space of right padding to keep the content out
+   from under it. The button is outside the card's border now, so there is
+   nothing to reserve for and a compact card's first line is as wide as every
+   other line of it. --board-card-chrome-space is kept as a knob because the
+   board panel still has it and the two views share their knob names. */
 
 /* --- COMPACT: a thin group bar -------------------------------------
    Chevron, name, a bare member count, one three-dot menu. The GROUP label
