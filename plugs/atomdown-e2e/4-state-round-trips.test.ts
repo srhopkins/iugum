@@ -235,6 +235,13 @@ for (const theme of THEMES) {
           `the density is remembered per page, so ${otherDens} must survive a reload`,
         ).toBe(otherDens);
         await setDensity(view, combo.density);
+        // THE EDITOR WIDTH DOES NOT SURVIVE A RELOAD, and the width round
+        // trips are next. `setWidth` writes `html[data-editor-width]`, which
+        // a page load resets to the default, so without this the width loop
+        // took its "before" signature at the default width and its "after"
+        // at this cell's width and reported 292 elements gone.
+        await setWidth(page, combo.width);
+        await settle(page, 4);
 
         // --- The view off and on, through the command --------------------
         await assertRoundTrip(
