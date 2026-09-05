@@ -584,12 +584,34 @@ export function widgetPressGuard(config: DecorationConfig): Extension {
         const target = event.target as
           | { closest?: (selector: string) => unknown }
           | null;
-        if (!target || typeof target.closest !== "function") return false;
-        if (target.closest(".sb-decoration-widget") == null) return false;
-        return !probe.movesCursor(event);
+        return pressGuardTakesPress(event, target, probe);
       },
     }),
   );
+}
+
+/**
+ * Should the widget press guard swallow this press?
+ *
+ * Exported so the button rule is testable on its own: the guard itself returns
+ * an extension, and the rule below is the part that can be wrong.
+ *
+ * ONLY THE PRIMARY BUTTON. A secondary press is the browser's own context menu
+ * and a middle press is paste or autoscroll depending on the platform. Both
+ * arrive here whenever a widget covers the point, and returning true makes
+ * CodeMirror call `preventDefault`, which silently removes the native menu -
+ * so the page appears to have hijacked right-click. Guarding the text cursor
+ * is never a reason to take a gesture that was never ours.
+ */
+export function pressGuardTakesPress(
+  event: MouseEvent,
+  target: { closest?: (selector: string) => unknown } | null,
+  probe: DecorationWidget,
+): boolean {
+  if (event.button !== 0) return false;
+  if (!target || typeof target.closest !== "function") return false;
+  if (target.closest(".sb-decoration-widget") == null) return false;
+  return !probe.movesCursor(event);
 }
 
 /** Name a mark or widget carries on an event. */
