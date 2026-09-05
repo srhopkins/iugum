@@ -189,16 +189,30 @@ for (const theme of THEMES) {
             // only compares once both are back open.
             what: "collapse and expand every group",
             run: async () => {
-              await sweepEach(
+              // TWO SWEEPS, not one caret clicked twice. Collapsing a group
+              // shortens the document, which realises more group headers, so
+              // `nth(i)` between the two clicks no longer points at the same
+              // caret and the second click collapsed a DIFFERENT group. One
+              // sweep that collapses everything and a second that expands
+              // everything drives each caret by its own group's key.
+              const collapsed = await sweepEach(
                 view,
                 ".atomdown-group-collapse",
                 async (caret) => {
                   await caret.click();
                   await settle(page, 4);
+                },
+              );
+              expect(collapsed.length).toBe(FIXTURE.groups);
+              const expanded = await sweepEach(
+                view,
+                ".atomdown-group-collapse",
+                async (caret) => {
                   await caret.click();
                   await settle(page, 4);
                 },
               );
+              expect(expanded.length).toBe(FIXTURE.groups);
             },
           },
           {
@@ -234,7 +248,12 @@ for (const theme of THEMES) {
                 view,
                 ".board-card-header",
                 async (c) => {
-                  await c.hover().catch(() => {});
+                  // `force`: at compact density the header is a
+                  // `pointer-events: none` overlay by design, so the
+                  // hit-target check can never pass and a plain hover sits
+                  // there until the test times out. The move still lands where
+                  // a reader's pointer lands.
+                  await c.hover({ force: true }).catch(() => {});
                 },
               );
               expect(visited.length).toBe(FIXTURE.cards);
@@ -243,9 +262,14 @@ for (const theme of THEMES) {
           {
             what: "collapse and expand every group",
             run: async () => {
+              // Two sweeps, for the same reason as the inline case above: a
+              // caret clicked twice through an index is not necessarily the
+              // same caret both times.
               await sweepEach(view, ".board-group-collapse", async (caret) => {
                 await caret.click();
                 await settle(page);
+              });
+              await sweepEach(view, ".board-group-collapse", async (caret) => {
                 await caret.click();
                 await settle(page);
               });

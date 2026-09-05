@@ -1,11 +1,14 @@
+import { codeFolding, foldEffect, unfoldEffect } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { expect, test } from "vitest";
 import {
   buildFoldRanges,
   buildMarkRanges,
   buildRangeDecorations,
+  DecorationWidget,
   type DecorationConfig,
   emptyDecorationConfig,
+  foldedConfiguredFroms,
   marksIn,
   normalizeDecorationConfig,
 } from "./decoration_seam.ts";
@@ -339,4 +342,133 @@ test("marks map through an edit instead of going stale", () => {
   const cursor = mapped.iter();
   expect(cursor.from).toBe(6);
   expect(cursor.to).toBe(9);
+});
+
+// ---------------------------------------------------------------------------
+// The fold read.
+//
+// `collapsed` lets a caller declare a fold; this is the other half, and a
+// collapse control needs both. Without a read, a control has to remember what
+// it last did, and it is wrong from the first fold anyone makes from the
+// gutter — which is exactly how the Atomdown group caret went dead.
+// ---------------------------------------------------------------------------
+
+test("the fold read reports only the ranges the caller configured", () => {
+  const cfg = config({
+    folds: [
+      { from: 3, to: 7 },
+      { from: 11, to: 15 },
+    ],
+  });
+  const state = EditorState.create({
+    doc: "aaa\nbbb\naaa\nbbb",
+    extensions: [codeFolding()],
+  });
+
+  expect(foldedConfiguredFroms(state, undefined, cfg)).toEqual([]);
+
+  // Fold the first configured range, and one range nobody configured.
+  const folded = state.update({
+    effects: [
+      foldEffect.of({ from: 3, to: 7 }),
+      foldEffect.of({ from: 0, to: 3 }),
+    ],
+  }).state;
+  expect(foldedConfiguredFroms(folded, undefined, cfg)).toEqual([3]);
+
+  const both = folded.update({
+    effects: [foldEffect.of({ from: 11, to: 15 })],
+  }).state;
+  expect(foldedConfiguredFroms(both, undefined, cfg)).toEqual([3, 11]);
+
+  const undone = both.update({
+    effects: [unfoldEffect.of({ from: 3, to: 7 })],
+  }).state;
+  expect(foldedConfiguredFroms(undone, undefined, cfg)).toEqual([11]);
+});
+
+test("a fold of a different range than the configured one does not count", () => {
+  // The offsets have to match exactly, because a partial overlap is a fold of
+  // something else that happens to sit inside the same lines.
+  const cfg = config({ folds: [{ from: 3, to: 7 }] });
+  const state = EditorState.create({
+    doc: "aaa\nbbb",
+    extensions: [codeFolding()],
+  }).update({ effects: foldEffect.of({ from: 3, to: 6 }) }).state;
+  expect(foldedConfiguredFroms(state, undefined, cfg)).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// A widget's events.
+//
+// A widget is chrome. It must receive the click that is the only reason it
+// exists, and it must NOT move the text cursor — CodeMirror places the cursor
+// on mousedown at the nearest text, which is inside a neighbouring folded
+// range once anything nearby is collapsed, and CodeMirror then unfolds
+// whatever covers the selection head. That is how pressing one group's
+// collapse caret reopened a different group.
+// ---------------------------------------------------------------------------
+
+function widgetWith(handle?: string) {
+  return new DecorationWidget(
+    "<span class=grip>x</span>",
+    "hdr",
+    "unit:g",
+    handle,
+  );
+}
+
+/** A stand-in for an event target: `closest` is all `ignoreEvent` reads. */
+function target(matches: string[]) {
+  return {
+    closest: (selector: string) => matches.includes(selector) ? {} : null,
+  };
+}
+
+function press(on: unknown, mods: Record<string, boolean> = {}) {
+  return { type: "mousedown", target: on, ...mods } as unknown as Event;
+}
+
+test("a widget takes the press and the click, and nothing else", () => {
+  const w = widgetWith("grip");
+  const chrome = target([]);
+  expect(w.ignoreEvent({ type: "click", target: chrome } as unknown as Event))
+    .toBe(false);
+  expect(w.ignoreEvent(press(chrome))).toBe(false);
+  // Typing was never editor input inside a widget and still is not.
+  expect(w.ignoreEvent({ type: "keydown", target: chrome } as unknown as Event))
+    .toBe(true);
+});
+
+test("only a drag or a modified press may move the cursor from a widget", () => {
+  const w = widgetWith("grip");
+  const grip = target([".grip"]);
+  const chrome = target([]);
+
+  // A press on the drag handle: the gesture plugin starts a drag there.
+  expect(w.movesCursor(press(grip) as unknown as MouseEvent)).toBe(true);
+  // A press on the chrome itself: no cursor placement, so no fold gets
+  // cleared out from under a collapse caret.
+  expect(w.movesCursor(press(chrome) as unknown as MouseEvent)).toBe(false);
+  // A modifier is held — the lasso and a modifier-click are the reader's.
+  for (const mod of ["altKey", "shiftKey", "ctrlKey", "metaKey"]) {
+    expect(
+      w.movesCursor(press(chrome, { [mod]: true }) as unknown as MouseEvent),
+    ).toBe(true);
+  }
+});
+
+test("with no drag handle configured, no plain press moves the cursor", () => {
+  const w = widgetWith(undefined);
+  expect(w.movesCursor(press(target([".grip"])) as unknown as MouseEvent))
+    .toBe(false);
+  expect(w.ignoreEvent({ type: "click", target: target([]) } as unknown as Event))
+    .toBe(false);
+});
+
+test("the drag handle is part of a widget's identity", () => {
+  // Otherwise a config change that only moves the handle leaves the old
+  // widget in place, with the old event behaviour.
+  expect(widgetWith("grip").eq(widgetWith("grip"))).toBe(true);
+  expect(widgetWith("grip").eq(widgetWith("other"))).toBe(false);
 });

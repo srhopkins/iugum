@@ -298,7 +298,16 @@ for (const theme of THEMES) {
         // is. Sample the hovers, check the whole DOM after each.
         for (const i of [0, 1, Math.floor(cardCount / 2), cardCount - 1]) {
           await cards.nth(i).scrollIntoViewIfNeeded();
-          await cards.nth(i).hover();
+          // `force`, because at COMPACT density the card header is an overlay
+          // the panel gives `pointer-events: none` on purpose, so that a click
+          // on the top strip of a card falls through and still selects the
+          // card. Playwright's hit-target check then refuses to hover it
+          // forever and the test times out. A reader's pointer does reach that
+          // place, and `force` is what dispatches the move to that place: the
+          // browser delivers the event to whatever is topmost, exactly as it
+          // does for a real pointer. Without it this assertion could only ever
+          // run at one of the two densities.
+          await cards.nth(i).hover({ force: true });
           await check(`pointer over card ${i + 1}`);
         }
 

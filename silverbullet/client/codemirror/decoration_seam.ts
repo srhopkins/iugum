@@ -49,6 +49,7 @@
 import {
   type EditorState,
   type Extension,
+  Prec,
   type Range,
   StateEffect,
   StateField,
@@ -255,6 +256,23 @@ export type DecorationClickEvent = {
   marks: string[];
   /** `id` (or `class`) of the widget clicked, when the click was in one. */
   widget?: string;
+  /**
+   * The `from` offset of every configured fold range that is folded RIGHT NOW.
+   *
+   * This is the read of the fold state the syscall surface does not offer, and
+   * a collapse control needs it. `collapsed` makes the seam reconcile the
+   * editor to the caller's flag, which makes the control idempotent — but a
+   * caller that keeps the flag in its own memory still has to guess the
+   * current state, and it guesses wrong the moment the reader folds the same
+   * range from the gutter or with a command. A control that reads this decides
+   * fold-or-unfold from the editor rather than from memory, so it can never go
+   * one press out of step.
+   *
+   * Offsets, not indices: the caller's own list can be rebuilt between the
+   * click and the handler, and a `from` is a position in the document both
+   * sides compute the same way.
+   */
+  foldedFroms: number[];
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
@@ -483,6 +501,7 @@ export class DecorationWidget extends WidgetType {
     readonly html: string,
     readonly cssClass: string | undefined,
     readonly id: string | undefined,
+    readonly dragHandleClass?: string,
   ) {
     super();
   }
@@ -504,7 +523,8 @@ export class DecorationWidget extends WidgetType {
       other instanceof DecorationWidget &&
       other.html === this.html &&
       other.cssClass === this.cssClass &&
-      other.id === this.id
+      other.id === this.id &&
+      other.dragHandleClass === this.dragHandleClass
     );
   }
 
@@ -518,10 +538,75 @@ export class DecorationWidget extends WidgetType {
    * event and the drag gesture never reach the seam's own handlers at all.
    * Every other event type stays ignored, so typing and pasting inside a
    * widget still are not editor input.
+   *
+   * Letting the press through does NOT mean letting it move the text cursor:
+   * `widgetPressGuard` below is what stops that, and it has to be a handler
+   * rather than this method, because a press this method ignores still moves
+   * the browser's own selection inside `contentDOM` and CodeMirror reads that
+   * back.
    */
   override ignoreEvent(event: Event): boolean {
     return event.type !== "mousedown" && event.type !== "click";
   }
+
+  /**
+   * Should a press here be allowed to move the text cursor?
+   *
+   * NO, unless it starts a drag or carries a modifier — and that is a fix, not
+   * a tidy-up. CodeMirror places the text cursor on `mousedown`, and a widget
+   * is a block element with no text of its own, so the position it picks is
+   * the nearest text. Once anything nearby is collapsed that position is
+   * inside a NEIGHBOURING FOLDED RANGE, and CodeMirror's own fold state
+   * unfolds any range covering the selection head — so pressing one group's
+   * collapse caret silently reopened a different group. Measured on an
+   * 11-group page with every group collapsed: pressing each caret in turn to
+   * reopen them left three groups shut and reopened two nobody pressed.
+   *
+   * The two exceptions are the two presses that mean something: a drag from
+   * the handle, and a modified press, which is the lasso's and the
+   * modifier-click's.
+   */
+  movesCursor(event: MouseEvent): boolean {
+    if (event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) {
+      return true;
+    }
+    if (!this.dragHandleClass) return false;
+    // Duck-typed rather than `instanceof Element`, so this stays testable
+    // without a DOM. The only thing it needs of the target is `closest`.
+    const target = event.target as
+      | { closest?: (selector: string) => unknown }
+      | null;
+    if (!target || typeof target.closest !== "function") return false;
+    return target.closest(`.${this.dragHandleClass}`) != null;
+  }
+}
+
+/**
+ * Stop a press on widget chrome from placing the text cursor.
+ *
+ * Returning true makes CodeMirror call `preventDefault`, which is the only
+ * thing that actually stops both its own mouse selection AND the browser's
+ * native selection inside `contentDOM`. See `DecorationWidget.movesCursor` for
+ * why chrome must not move the cursor at all.
+ *
+ * `Prec.low`, so the gesture plugin's own `mousedown` gets first refusal: a
+ * drag or a lasso that starts on a widget is still that plugin's to claim.
+ */
+export function widgetPressGuard(config: DecorationConfig): Extension {
+  const handle = config.gestures.drag?.handleClass;
+  const probe = new DecorationWidget("", undefined, undefined, handle);
+  return Prec.low(
+    EditorView.domEventHandlers({
+      mousedown: (event: MouseEvent) => {
+        const target = event.target as
+          | { closest?: (selector: string) => unknown }
+          | null;
+        if (!target || typeof target.closest !== "function") return false;
+        if (target.closest(".sb-decoration-widget") == null) return false;
+        return !probe.movesCursor(event);
+      },
+    }),
+  );
 }
 
 /** Name a mark or widget carries on an event. */
@@ -573,7 +658,12 @@ export function buildRangeDecorations(
     const at = Math.min(widget.at, docLength);
     const before = widget.side !== "after";
     const spec = {
-      widget: new DecorationWidget(widget.html, widget.class, widget.id),
+      widget: new DecorationWidget(
+        widget.html,
+        widget.class,
+        widget.id,
+        config.gestures.drag?.handleClass,
+      ),
       side: before ? -1 : 1,
     };
     if (widget.inline) {
@@ -714,6 +804,31 @@ function liveMarks(
   return state.field(field, false)?.marks ?? buildMarkRanges(state, config);
 }
 
+/**
+ * The `from` offset of every configured fold range the editor has folded now.
+ *
+ * Exported because it is the read half of the fold contract, and a test that
+ * cannot call it can only assert the reconciler's own behaviour.
+ */
+export function foldedConfiguredFroms(
+  state: EditorState,
+  field: StateField<SeamState> | undefined,
+  config: DecorationConfig,
+): number[] {
+  const ranges = (field ? state.field(field, false)?.folds : undefined) ??
+    buildFoldRanges(state, config);
+  if (ranges.length === 0) return [];
+  const folded: { from: number; to: number }[] = [];
+  foldedRanges(state).between(0, state.doc.length, (from, to) => {
+    folded.push({ from, to });
+  });
+  return ranges
+    .filter((range) =>
+      folded.some((r) => r.from === range.from && r.to === range.to)
+    )
+    .map((range) => range.from);
+}
+
 function clickHandler(
   client: Client,
   pageName: string,
@@ -758,6 +873,7 @@ function clickHandler(
           marksIn(liveMarks(view.state, field, config), pos, pos),
         ),
         ...(widget !== undefined ? { widget } : {}),
+        foldedFroms: foldedConfiguredFroms(view.state, field, config),
         metaKey: event.metaKey,
         ctrlKey: event.ctrlKey,
         altKey: event.altKey,
@@ -841,16 +957,13 @@ function foldReconciler(field: StateField<SeamState>) {
         const state = this.view.state;
         const seam = state.field(field, false);
         if (!seam) return;
-        const folded: { from: number; to: number }[] = [];
-        foldedRanges(state).between(0, state.doc.length, (from, to) => {
-          folded.push({ from, to });
-        });
-        const isFolded = (fold: DecorationFoldRule) =>
-          folded.some((r) => r.from === fold.from && r.to === fold.to);
+        const folded = new Set(
+          foldedConfiguredFroms(state, field, seam.config),
+        );
         const effects = [];
         for (const fold of seam.folds) {
           const want = fold.collapsed === true;
-          const have = isFolded(fold);
+          const have = folded.has(fold.from);
           if (want && !have) {
             effects.push(foldEffect.of({ from: fold.from, to: fold.to }));
           } else if (!want && have) {
@@ -1329,6 +1442,10 @@ export function decorationSeam(client: Client, pageName: string): Extension[] {
   const field = seamStateField(client);
   if (wantsField) {
     extensions.push(field);
+  }
+  if (config.widgets.length > 0) {
+    // Widget chrome must not place the text cursor. See `widgetPressGuard`.
+    extensions.push(widgetPressGuard(config));
   }
   if (config.marks.some((mark) => mark.hoverClasses)) {
     extensions.push(hoverClassField(config), hoverWatcher(config, field));

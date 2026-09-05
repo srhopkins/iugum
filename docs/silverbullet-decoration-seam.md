@@ -59,7 +59,13 @@ All eight are delivered.
    `editor:decorationSelect` app events. Interactive features share one DOM
    listener.
 5. **Folds.** `folds` names a source range the editor's own folding can
-   collapse, for a region that is not a syntax node.
+   collapse, for a region that is not a syntax node. Collapsing is
+   **declarative in both directions**: `folds[].collapsed` says what the caller
+   wants and the seam makes the editor's fold set match it, and
+   `foldedFroms` on the click event says what the editor actually has. A
+   collapse control needs both. With only the write half, a control has to
+   remember what it last did, and it is wrong from the first fold anyone makes
+   from the gutter.
 6. **Gestures.** `gestures` turns on a drag of one decorated range onto another
    (`editor:decorationDrag`) and a rubber-band sweep over decorated ranges
    (`editor:decorationLasso`).
@@ -122,6 +128,7 @@ config.set("editorDecorations", {
 | `widgets[].id` | string | name reported on a click in the widget |
 | `activeLine` | boolean | put `cm-activeLine` on the cursor's line |
 | `folds[].from`, `.to` | integer | source range the editor's folding can collapse |
+| `folds[].collapsed` | boolean | fold it now. The seam reconciles the editor's fold set to this |
 | `events.click` | boolean | dispatch `editor:decorationClick` |
 | `events.selection` | boolean | dispatch `editor:decorationSelect` |
 | `gestures.drag.handleClass` | string | a press on an element with this class starts a drag |
@@ -135,13 +142,20 @@ Event payloads:
 
 | Event | Fields |
 |---|---|
-| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
+| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `foldedFroms`, `metaKey`, `ctrlKey`, `altKey` |
 | `editor:decorationSelect` | `page`, `from`, `to`, `marks` |
 | `editor:decorationDrag` | `page`, `from`, `to`, `marks`, `targetFrom`, `targetTo`, `targetMarks`, `targetLine`, `placement`, modifier flags |
 | `editor:decorationLasso` | `page`, `from`, `to`, `fromLine`, `toLine`, `marks`, `ranges`, modifier flags |
 
 `marks` lists are **outermost first**, so a caller that nests ranges reads
 element 0 and gets the outer one.
+
+`foldedFroms` is the `from` offset of every configured fold range that is
+folded at the moment of the click. Offsets rather than indices, because the
+caller's own list can be rebuilt between the click and the handler while a
+`from` is a document position both sides compute the same way. A caret that
+reads it decides fold-or-unfold from the editor rather than from memory, so it
+can never go one press out of step.
 
 Mark, widget and fold offsets are read once, at editor state build time. The
 seam then maps them through your edits, so a mark stays on the text it was put

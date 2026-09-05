@@ -23,6 +23,24 @@ and the plug only decorates what is already there.
 | **Group / Ungroup** | `Atomdown: Group Selection` on a lassoed run, `Atomdown: Ungroup` with the cursor in a group, or the group header's menu. |
 | **Collapse** | The header caret, through the editor's own folding. |
 
+## The collapse caret, and why it cannot go out of step
+
+The caret does not alternate. Each press reads the editor's own fold set —
+`foldedFroms` on the seam's click event, the `from` offset of every configured
+fold range that is folded right now — and declares the opposite for the group
+that was pressed. Every other group's flag is taken from that same report, so a
+fold the reader made from the gutter, or with the fold command, is adopted
+rather than contradicted. Nothing is carried over from the last press.
+
+That is the fix for a caret that went dead. The earlier version alternated a
+remembered flag, which was correct until anything else folded the same range
+once; after that the caret was permanently one press behind and the group would
+not reopen. The flag still reaches the editor declaratively through the seam's
+`collapsed`, so applying the same value twice is the same result.
+
+The set is remembered per page in `clientStore`, so a reload draws the groups
+the reader left shut.
+
 ## Install
 
 Three files, all copies into the space:
@@ -191,9 +209,6 @@ parser. The fix is to escape the inner brackets in the page.
 - A group whose chrome should stay forward because it *holds* a selected member
   card does not: only a selected group itself stays forward. The panel uses
   `:has()` on a real container element, which inline does not exist.
-- The collapse caret alternates fold and unfold from memory, because the host
-  offers `editor.fold` and `editor.unfold` but no read of the fold state. Fold a
-  group from the gutter instead and the caret's next press is out of step once.
 - A new block typed into the page gets its card on the next autosave
   (`editor:pageSaved`), not on the keystroke.
 
