@@ -532,6 +532,142 @@ test("8e-open: an open popover keeps its own button visible", async ({
 });
 
 // ---------------------------------------------------------------------------
+// 8h — the hover treatment on the accent fill
+// ---------------------------------------------------------------------------
+
+/**
+ * Steve's defect 2, asserted WITHOUT pixels.
+ *
+ * What he saw: hovering the three-dot control inside the saturated blue group
+ * bar painted a white background, which reads as a hole punched in the bar.
+ * The old rule was `background: var(--ui-accent-contrast-color)`, which is
+ * white in both themes: fine on the bar's pale resting tint, wrong on the
+ * accent fill the bar takes when the pointer is inside the group.
+ *
+ * WHY THIS IS HERE AS WELL AS IN RULE 9. A screenshot sees the hole, which is
+ * why rule 9 exists at all - but a screenshot is font-dependent and
+ * platform-suffixed, and this property is neither. A composited colour is a
+ * number: an opaque chip is `alpha == 1` and far from the bar's own fill, and
+ * a wash is translucent and near it. That holds on any machine, in either
+ * theme, whatever font is installed.
+ */
+test("8h: the group control's hover works on the accent fill, not against it", async ({
+  page,
+}) => {
+  await gotoFixture(page, server);
+  const view = await openInline(page);
+
+  const bar = page.locator(".atomdown-group-header").first();
+  await bar.scrollIntoViewIfNeeded();
+  await settle(page);
+
+  const control = bar.locator(".atomdown-group-menu");
+  await control.hover({ force: true });
+  await settle(page);
+
+  const measured = await view.ev.evaluate(() => {
+    /**
+     * Parse a computed colour, in BOTH forms Chrome produces.
+     *
+     * `color-mix(in srgb, ...)` does not compute to `rgba()`: Chrome resolves
+     * it to `color(srgb 1 1 1 / 0.24)`, with components 0..1 rather than
+     * 0..255. A parser that only knew `rgba()` returned null for exactly the
+     * declaration this test exists to check.
+     */
+    function rgba(v: string) {
+      const srgb = v.match(
+        /color\(\s*srgb\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)(?:\s*\/\s*([\d.eE+-]+))?\s*\)/,
+      );
+      if (srgb) {
+        return {
+          r: parseFloat(srgb[1]) * 255,
+          g: parseFloat(srgb[2]) * 255,
+          b: parseFloat(srgb[3]) * 255,
+          a: srgb[4] === undefined ? 1 : parseFloat(srgb[4]),
+        };
+      }
+      const m = v.match(/rgba?\(([^)]+)\)/);
+      if (!m) return null;
+      const parts = m[1].split(/[,\s/]+/).filter(Boolean).map((n) =>
+        parseFloat(n)
+      );
+      return {
+        r: parts[0],
+        g: parts[1],
+        b: parts[2],
+        a: parts.length > 3 ? parts[3] : 1,
+      };
+    }
+    const barEl = document.querySelector(".atomdown-group-header")!;
+    const menuEl = barEl.querySelector(".atomdown-group-menu")!;
+    const caretEl = barEl.querySelector(".atomdown-group-collapse")!;
+    return {
+      bar: rgba(getComputedStyle(barEl).backgroundColor),
+      menu: rgba(getComputedStyle(menuEl).backgroundColor),
+      caret: rgba(getComputedStyle(caretEl).backgroundColor),
+    };
+  });
+
+  expect(measured.bar, "the bar has a background to sit on").not.toBeNull();
+  expect(measured.menu, "the hovered control has a background").not.toBeNull();
+
+  // The bar under the pointer is the SATURATED fill, not the resting tint.
+  // Without this the assertion below could pass on the wrong state.
+  expect(
+    measured.bar!.a,
+    "the bar is at full strength while the pointer is inside the group",
+  ).toBeGreaterThan(0.9);
+
+  // A WASH, NOT A FILL. Anything opaque replaces the bar rather than lifting
+  // off it, and that is the hole.
+  if (measured.menu!.a >= 0.9) {
+    await failWithArtifacts(
+      page,
+      8,
+      "the hovered control paints an opaque chip on the accent fill",
+      { width: "comfort", theme: "light", density: "comfortable" } as Combo,
+      measured,
+      `the hovered .atomdown-group-menu background is opaque ` +
+        `(alpha ${measured.menu!.a}) over a bar at alpha ${measured.bar!.a}. ` +
+        `On the saturated accent fill an opaque chip reads as a hole punched ` +
+        `through the bar, which is the defect. Use a translucent wash of the ` +
+        `contrast colour instead.`,
+    );
+  }
+
+  // ...and it is a wash of the CONTRAST colour, so it lifts rather than
+  // darkening: a translucent black would also pass the alpha test and would
+  // read as a smudge.
+  const menu = measured.menu!;
+  expect(
+    (menu.r + menu.g + menu.b) / 3,
+    "the wash is light, so the control lifts off the fill",
+  ).toBeGreaterThan(160);
+
+  // The collapse caret shares the rule and must share the fix: it is on the
+  // same bar and was the same solid white chip.
+  await control.page().locator(".atomdown-group-collapse").first().hover({
+    force: true,
+  });
+  await settle(page);
+  const caret = await view.ev.evaluate(() => {
+    const v = getComputedStyle(
+      document.querySelector(".atomdown-group-header .atomdown-group-collapse")!,
+    ).backgroundColor;
+    const srgb = v.match(/color\(\s*srgb\s+\S+\s+\S+\s+\S+\s*\/\s*([\d.eE+-]+)\s*\)/);
+    if (srgb) return parseFloat(srgb[1]);
+    const m = v.match(/rgba?\(([^)]+)\)/);
+    if (!m) return 1;
+    const parts = m[1].split(/[,\s/]+/).filter(Boolean).map((n) => parseFloat(n));
+    return parts.length > 3 ? parts[3] : 1;
+  });
+  expect(
+    caret,
+    "the collapse caret's hover is a wash too, not an opaque chip",
+  ).toBeLessThan(0.9);
+});
+
+// ---------------------------------------------------------------------------
 // 8f — none of this writes a document byte
 // ---------------------------------------------------------------------------
 

@@ -75,10 +75,73 @@ export default defineConfig({
       args: ["--disable-dev-shm-usage"],
     },
   },
+  /**
+   * Where a visual baseline lives. Its own directory beside the suite, not
+   * inside Playwright's default `__screenshots__`, so the recorded browser
+   * version (`visual-baselines/browser.txt`) sits next to the images it
+   * belongs to. Playwright still appends the platform, so a Linux run writes
+   * its own set instead of failing against a Mac's.
+   */
+  snapshotPathTemplate:
+    "{testDir}/visual-baselines/{arg}-{platform}{ext}",
   projects: [
     {
+      // Rules 1 to 8. NOT 9: `\d-` would match `9-visual.test.ts`, and the
+      // visual rule needs a different browser policy from the rest.
       name: "atomdown",
-      testMatch: /\d-.*\.test\.ts$/,
+      testMatch: /[1-8]-.*\.test\.ts$/,
+    },
+    {
+      /**
+       * RULE 9 — VISUAL REGRESSION, in the one pinned environment.
+       *
+       * Steve's hard requirement (see `9-visual.test.ts` for the quote and the
+       * whole list). What is pinned HERE rather than in the test:
+       *
+       *  - `channel: undefined`. Playwright's own bundled Chromium, at the
+       *    version in `silverbullet/package-lock.json`. The `browserChannel()`
+       *    fallback above deliberately does not apply: an installed Chrome
+       *    auto-updates, and that is how two machines silently disagree about
+       *    a pixel. `guardEnvironment` in the test refuses the run if the
+       *    bundled build is missing rather than quietly using another one.
+       *  - `headless: true`, stated rather than left to the default, so the
+       *    guard has something to read. A headed run cannot produce or update
+       *    a baseline.
+       *  - A fixed viewport and `deviceScaleFactor: 1`, as the other project
+       *    has, because these are pixel comparisons.
+       *  - `reducedMotion` and a fixed timezone and locale, so a transition
+       *    mid-capture or a date rendered in another region cannot move a
+       *    pixel. `colorScheme` is forced per theme case inside the test.
+       *  - `maxDiffPixels: 0`. Zero tolerance, on purpose: the escape from a
+       *    failing baseline is to look at the diff and re-take it in one
+       *    command, never to raise a threshold until the rule sees nothing.
+       */
+      name: "visual",
+      testMatch: /9-visual\.test\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        channel: undefined,
+        headless: true,
+        viewport: { width: 1440, height: 900 },
+        deviceScaleFactor: 1,
+        reducedMotion: "reduce",
+        timezoneId: "UTC",
+        locale: "en-US",
+        screenshot: "only-on-failure",
+        trace: "retain-on-failure",
+        video: "off",
+        launchOptions: {
+          args: ["--disable-dev-shm-usage", "--force-color-profile=srgb"],
+        },
+      },
+      expect: {
+        timeout: 20_000,
+        toHaveScreenshot: {
+          maxDiffPixels: 0,
+          animations: "disabled",
+          caret: "hide",
+        },
+      },
     },
     {
       // The negative control: these tests reintroduce real defects and assert

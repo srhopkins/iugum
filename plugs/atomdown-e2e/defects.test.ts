@@ -297,6 +297,55 @@ test.describe("rule 1 — containment", () => {
   });
 });
 
+test.describe("rule 8 — the card's controls", () => {
+  test("fails when the group control's hover paints an opaque white chip", async ({
+    page,
+  }) => {
+    // Steve's defect 2, reintroduced exactly as it was written: a solid
+    // --ui-accent-contrast-color chip, which is white in both themes. On the
+    // bar's saturated accent fill that reads as a hole punched through it.
+    const server: SBServer = await startSpace();
+    try {
+      await gotoFixture(page, server);
+      const view = await openInline(page);
+      await injectDefect(
+        page,
+        `.atomdown-group-menu:hover {
+           background: var(--ui-accent-contrast-color, #fff) !important;
+           color: var(--board-accent-color) !important;
+         }`,
+      );
+      const bar = page.locator(".atomdown-group-header").first();
+      await bar.scrollIntoViewIfNeeded();
+      await bar.locator(".atomdown-group-menu").hover({ force: true });
+      await settle(page);
+
+      const alpha = await view.ev.evaluate(() => {
+        const v = getComputedStyle(
+          document.querySelector(".atomdown-group-header .atomdown-group-menu")!,
+        ).backgroundColor;
+        const srgb = v.match(
+          /color\(\s*srgb\s+\S+\s+\S+\s+\S+\s*\/\s*([\d.eE+-]+)\s*\)/,
+        );
+        if (srgb) return parseFloat(srgb[1]);
+        const m = v.match(/rgba?\(([^)]+)\)/);
+        if (!m) return 1;
+        const parts = m[1].split(/[,\s/]+/).filter(Boolean).map((n) =>
+          parseFloat(n)
+        );
+        return parts.length > 3 ? parts[3] : 1;
+      });
+      expect(
+        alpha,
+        "rule 8h's own measurement must see the opaque chip: the whole point " +
+          "is that an alpha of 1 over the accent fill is the defect",
+      ).toBeGreaterThanOrEqual(0.9);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 test.describe("rule 2 — directive invisibility", () => {
   test("fails when a directive line is visible at rest", async ({ page }) => {
     // The defect: 82 sha256 digests back on the page. Undoing the collapse is
