@@ -212,6 +212,25 @@ and most of them are about the decoration payload: every offset in it is
 checked against the page text it was built from, because a wrong offset there is
 the whole bug class this feature can have.
 
+## Why the page is in a monospace face
+
+It is SilverBullet's, not this plug's. `--editor-font` defaults to
+`"iA-Mono", "Menlo"` in the client's own theme, so a markdown page in
+SilverBullet's editor is monospace before any plug is installed. Neither
+atomdown view sets a family of its own, and rule 5 of the front-end suite holds
+that: a card's body font has to be exactly the space's `--editor-font`, so the
+two views cannot drift from each other or ignore a space that sets it.
+
+To read prose in a proportional face, set it once in your own `space-style`
+page and both views follow:
+
+```css
+html { --editor-font: Charter, Georgia, serif; }
+```
+
+Monospace stays where it belongs on its own: the id chip, inline code and a
+fenced block are all spans inside a card.
+
 ## A wide table
 
 A table is constrained to the card's content width - `table-layout: fixed` with

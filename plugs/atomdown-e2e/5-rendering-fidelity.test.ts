@@ -298,6 +298,62 @@ async function assertStructures(view: View, combo: Combo) {
   await assertShape(view, combo, "decisions");
   await bringGroupIntoView(view, FIXTURE.tableGroupId, "table");
   await assertShape(view, combo, "table");
+  await assertBodyTypeface(view, combo);
+}
+
+/**
+ * NEITHER VIEW CHOOSES THE READER'S TYPEFACE. The space does.
+ *
+ * ONE OF STEVE'S OWN FINDINGS was "one whole page rendered in monospace, which
+ * nobody configured". Measured: the card body font is `iA-Mono, Menlo` in both
+ * views — and that is SilverBullet's own `--editor-font` default
+ * (`client/styles/theme.scss`), not anything atomdown does. A page of markdown
+ * in SilverBullet's editor is monospace out of the box, so a rule asserting
+ * proportional prose would be asserting the opposite of the host's default and
+ * would fail on a correct build. Changing it is a space's choice: set
+ * `--editor-font` in a `space-style` page and both views follow.
+ *
+ * What IS worth holding is that neither view imposes a family of its own, so
+ * the two cannot drift from each other or from the space. Monospace appears
+ * deliberately in three places — an id chip, inline code, a fenced block — and
+ * every one of those is a small span inside a card, never the body.
+ */
+async function assertBodyTypeface(view: View, combo: Combo) {
+  const bodySelector = view.kind === "inline"
+    ? ".cm-line.atomdown-card-line"
+    : ".board-card [data-card-rendered]";
+  const measured = await view.ev.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const normalise = (v: string) =>
+      v.replaceAll('"', "").replaceAll("'", "").split(",").map((p) => p.trim())
+        .filter(Boolean).join(",").toLowerCase();
+    return {
+      body: normalise(getComputedStyle(el).fontFamily),
+      editorFont: normalise(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--editor-font",
+        ),
+      ),
+    };
+  }, bodySelector);
+
+  if (!measured || !measured.editorFont) return;
+  if (measured.body !== measured.editorFont) {
+    await failWithArtifacts(
+      view.page,
+      5,
+      "rendering fidelity — the view picked its own typeface",
+      combo,
+      { ...measured, selector: bodySelector },
+      `${view.kind}: a card's body text is set in "${measured.body}" while the ` +
+        `space's --editor-font is "${measured.editorFont}". Neither view may ` +
+        `choose the reader's typeface: the two would drift from each other and ` +
+        `from the space, and a space that sets --editor-font would be ignored. ` +
+        `Monospace belongs in an id chip, inline code and a fenced block, all ` +
+        `of which are spans inside a card.`,
+    );
+  }
 }
 
 async function assertShape(

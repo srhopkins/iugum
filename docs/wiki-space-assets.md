@@ -26,6 +26,20 @@ Plug discovery does not care about the directory. `client/space.ts` picks every
 file in the space list whose name ends in `.plug.js`, so a plug under
 `Library/Atomdown/Plugs` loads the same way one in `_plug` would.
 
+**A copy in `_plug` is a SECOND plug, not an override.** SilverBullet's
+`Space.listPlugs` returns every `*.plug.js` a space can see and loads all of
+them, and it has no way to know two files are the same plug. So a hand-copied
+bundle left over from the old install instructions runs alongside the compiled
+one: two instances, each with its own memory, both answering every click and
+both writing the same config key. Measured on an 11-group page, collapsing
+every group and expanding every group left nine of them shut, and which nine
+moved between runs. `iugum wiki` warns and names the files. Delete them.
+
+To override a compiled asset deliberately, put your copy at the SAME path the
+binary uses - `Library/Atomdown/Plugs/atomdown-inline.plug.js`, or
+`Library/Atomdown/Inline.md` - so the space file shadows the underlay instead of
+joining it.
+
 The `*.plug.yaml` files are build inputs and `plugs/atomdown-e2e` is a test
 suite, so neither one ships.
 
