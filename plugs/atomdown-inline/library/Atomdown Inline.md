@@ -61,14 +61,32 @@ A soft-wrapped paragraph is ONE line element with several visual rows, and a
 border on a block element encloses the whole box, so a wrapped block is
 enclosed by construction rather than by a special case.
 
-## Why the card is a pseudo-element and the group is a border
+## Why both boxes are pseudo-elements and the real border is the inset
 
 A line inside a group carries **both** ranges' line classes, and one element
-can only have one `border-left`. The group is the outer box, so the group takes
-the real `border`; the card is drawn by an absolutely positioned `::before`
-inset by `--board-group-padding`, which is what makes a member card float
-inside the group with a gap on all four sides. A top-level card sets that inset
-to zero and is otherwise the identical box.
+can only have one `border-left`. So neither box can have it - and the line's
+real border is spent on something else now: it IS the card's horizontal inset.
+See "The horizontal inset is a transparent border" below for why it has to be.
+
+That leaves a line's two pseudo-elements, and a line has exactly two:
+
+* the **card** is the `::before` it always was, pulled back out of the inset by
+  the card's own horizontal padding,
+* the **group** is the `::after`, pulled back out by the whole inset, so its
+  left edge lands on the content column where the real border used to draw.
+
+A member card therefore floats inside the group with a gap on all four sides,
+and a top-level card has no group frame and is otherwise the identical box.
+
+## The three horizontal measurements, by name
+
+Every rule below uses these, and they are set on the line:
+
+| | |
+|---|---|
+| `--ad-inset` | the group's interior padding: `0` for a top-level card, `--board-group-padding-x` for a member card |
+| `--ad-frame` | the group box's outer edge to the card box's own border: the group's stroke plus that padding |
+| `--ad-lead` | the line's own transparent border width: the frame plus `--board-card-padding-x`. `0` on a group's own marker lines, which carry no card |
 
 ## Why the group's hover scope needs a class from the client
 
@@ -95,6 +113,21 @@ views and both densities together.
 full rendered size at both densities, because the point is to fit more of the
 document on screen, not to shrink the document.
 
+**Compact compresses the VERTICAL axis only.** `--board-card-padding` and
+`--board-group-padding` each carried both axes, so compact used to move the
+horizontal distance from a card's border to its first glyph as well - 14px to
+6px - and the distance from a group's border to a member card's border with it.
+Each knob is now two, `-x` and `-y`, both derived from the original, and
+compact overrides the `-y` half only. The horizontal distances are IDENTICAL at
+both densities, because that distance is what a reader's eye uses to find the
+start of a line: moving it makes compact read as a different document rather
+than as the same one closer together. `--board-card-gap` is vertical by
+definition and may keep shrinking.
+
+The original knob names still work and still mean what they meant. Set
+`--board-card-padding` on `html` and both axes and both views move together;
+compact then still takes its own vertical value.
+
 What compact does:
 
 * **The card header row is gone.** No header, no background, no border and
@@ -110,13 +143,58 @@ What compact does:
   `pointer-events: none` on the layer and `auto` on the two controls, so a
   click on a card's top strip falls THROUGH to the card and still selects it.
 * **The group header bar thins**: chevron, name, a bare member count, one menu
-  at the right. The GROUP label and the group id fold into that menu.
-* **The group outline does not change.** `--board-group-border-width` is
-  deliberately absent from the compact block: the outline is structure, not
-  chrome, and it is identical at both densities.
+  at the right. The GROUP label and the group id fold into that menu. The bar
+  keeps its resting tint at both densities - it is the only thing left naming a
+  group, so a group with an invisible resting outline is still findable.
+* **Compact is an outline, not a surface.** No fill: `--board-card-surface`
+  becomes the theme's own page background token, `--root-background-color`, so
+  it is right in light, in dark and under a third theme, rather than a colour
+  that happens to match today. The strokes turn DOTTED.
 * **The collapse chevron does not shrink**, at either density. It is the
   control that turns a long page into a list of group names, so its size is
   restated in the compact block rather than left to inheritance.
+
+## How quiet works at compact, and what it costs
+
+Steve's rule: *"just make the dotted border same as background theme so no size
+for border, only headers go away."*
+
+So the stroke is **always present and always the same width**. At rest its
+colour is the page background, which makes it invisible while it still occupies
+its space; the pointer gives it its visible colour. Nothing about the geometry
+changes between rest and hover, so nothing below a card can move - the same
+trick that already reserves the box for the hover-only controls. What recedes
+at compact is the card HEADER ROW, not any geometry.
+
+Comfortable shares the mechanism rather than opting out of it: its resting
+colour IS its visible colour, so hover changes nothing there.
+
+**Room for a stale state, and how.** Every stroke's colour arrives through
+exactly two knobs per box - `--board-card-border-rest-color` for the resting
+colour and `--board-card-border-color` for the visible one, plus
+`--board-accent-color` for selection - and no rule below sets a colour any
+other way. A per-card stale state (amber, when a digest no longer matches its
+content) is therefore one declaration on that card's lines, at either density,
+with no geometry to reconsider: width and style belong to the density, colour
+belongs to the state. The inline view has **no** stale indicator today - that
+was built for the `atomdown-board` panel only - so nothing here designs for
+it; see `iugum-abi`.
+
+**THE TRADE, RECORDED.** The rule this replaces read: *"the group outline does
+not change - the outline is structure, not chrome, and it is identical at both
+densities."* Compact now draws it dotted, and quiet at rest. The rule is
+narrowed rather than dropped:
+
+> A group's outline keeps its PRESENCE and its GEOMETRY at every density - same
+> width, same position, never absent. Its STROKE STYLE and its RESTING COLOUR
+> may vary with the density.
+
+The reason the original rule existed is intact: the outline never disappears
+and never moves, so it cannot stop being the thing that says "these cards are
+one group", and no density change can reflow the page. What varies is how
+loudly it says it, which is chrome. A dotted, background-coloured stroke is
+still a stroke at the same 2px in the same place - `getComputedStyle` proves
+both, and the front-end suite asserts them.
 
 ```space-style
 html {
@@ -124,7 +202,20 @@ html {
   --board-card-radius: 6px;
   --board-card-border-width: 1px;
   --board-card-padding: 14px;
+  /* THE TWO AXES OF ONE KNOB. `--board-card-padding` is still the knob a
+     space-style page sets and still means "a card's padding"; these two are
+     derived from it, so overriding it on `html` still moves both views, both
+     axes and both densities. The compact block overrides the `-y` half ONLY -
+     the horizontal distance from a card's border to its first glyph is
+     identical at both densities. See "Compact compresses the VERTICAL axis
+     only" above. */
+  --board-card-padding-x: var(--board-card-padding);
+  --board-card-padding-y: var(--board-card-padding);
+  /* Declared because the panel has it. The inline card head reads
+     --board-card-padding-x horizontally and its own vertical value, for the
+     same reason the padding knob is split - see the head's own rule. */
   --board-card-header-padding: 4px 8px;
+  /* Vertical by definition, so the density may keep shrinking it. */
   --board-card-gap: 14px;
   /* Room reserved at the top right of a compact card's first line, so the
      three-dot button never lands on top of the content. The panel's own knob,
@@ -132,6 +223,10 @@ html {
   --board-card-chrome-space: 24px;
   --board-group-border-width: 2px;
   --board-group-padding: 8px;
+  /* Same split, same reason: the distance from a group's border to a member
+     card's border is identical at both densities. */
+  --board-group-padding-x: var(--board-group-padding);
+  --board-group-padding-y: var(--board-group-padding);
   --board-group-header-padding: 5px 8px;
   --board-group-quiet-border: 40%;
   --board-group-quiet-header: 16%;
@@ -154,69 +249,227 @@ html {
   --board-header-active-color: var(--root-color, #222);
   --board-card-surface: var(--ui-surface-section-background-color, #f7f7f7);
   --board-card-border-color: var(--ui-surface-border-color, #ddd);
+
+  /* ---- THE STROKES: style, resting colour, surfaces --------------------
+     Three knobs per box, and every rule below reads them rather than naming
+     a colour of its own. That is what leaves room for a per-card state - a
+     stale digest, later - to be one declaration with no geometry to redo.
+
+     STYLE belongs to the density: solid at comfortable, dotted at compact.
+     The WIDTH never changes, at either density or in any state.
+     The RESTING COLOUR belongs to the density too: the visible colour at
+     comfortable, the page's own background token at compact, so the stroke
+     is present, is the same width, and is invisible until the pointer
+     arrives. See "How quiet works at compact" above. */
+  --board-card-border-style: solid;
+  --board-group-border-style: solid;
+  --board-card-border-rest-color: var(--board-card-border-color);
+  --board-group-border-rest-color: color-mix(
+    in srgb,
+    var(--board-accent-color) var(--board-group-quiet-border),
+    transparent
+  );
+  /* A group has no fill of its own at comfortable. At compact both boxes take
+     the page background token, which is what makes compact an outline rather
+     than a surface. */
+  --board-group-surface: transparent;
+  --board-card-selected-surface: var(--ui-surface-hover-background-color, #eaeaea);
 }
 
 /* ------------------------------------------------------------------ */
 /* THE CARD BOX.                                                       */
-/* One closed rounded box per atom, drawn by a ::before inset by       */
-/* --ad-inset. --ad-inset is 0 for a top-level card and the group's    */
-/* padding for a member card, so a member floats inside the group.     */
+/* One closed rounded box per atom, drawn by a ::before pulled back    */
+/* out of the line's own transparent inset. The three measurements are  */
+/* --ad-inset, --ad-frame and --ad-lead; see "The three horizontal      */
+/* measurements, by name" above.                                        */
 /* ------------------------------------------------------------------ */
 
-.cm-line.atomdown-card-line {
+.cm-line.atomdown-card-line,
+.cm-line.atomdown-group-line {
   --ad-inset: 0px;
+  --ad-frame: 0px;
+  --ad-lead: 0px;
   position: relative;
 }
 
-/* A card inside a group is inset by the group's interior padding. Two
-   classes, so this beats the single-class rule above. */
-.cm-line.atomdown-card-line.atomdown-group-line {
-  --ad-inset: var(--board-group-padding);
+.cm-line.atomdown-card-line {
+  --ad-lead: var(--board-card-padding-x);
 }
 
-/* THE HORIZONTAL PADDING NEEDS BOTH THE ID PREFIX AND !important, and neither
-   is a style choice.
-     - `#sb-main .cm-editor .cm-line { padding: 0 }` in the client's own
-       editor.scss is specificity (1,0,2) and beats any two-class rule however
-       late it is injected.
-     - client/codemirror/list_indent.ts writes `padding-left:Nch;
-       text-indent:-Nch` as an INLINE STYLE on every line of every list item,
-       and an inline style beats any stylesheet rule that is not !important.
-       That hanging indent is what put the `1.` of an ordered list in the
-       gutter, OUTSIDE the card's left border, while the wrapped text sat
-       correctly inside.
-   `text-indent: 0` is the price: wrapped list text now aligns under the
-   marker instead of after it. The alternative would need the marker's width in
-   CSS, which is per line and not knowable there. The same override also pulls
-   in the negative text-indent the client puts on a blockquote line and on a
-   heading whose `#` markers are showing. */
+/* A card inside a group sits inside the group's stroke AND its interior
+   padding. Two classes, so this beats the rules above. A group's own marker
+   lines are not card lines, so they keep --ad-lead: 0 - they carry no card
+   and therefore no inset. */
+.cm-line.atomdown-card-line.atomdown-group-line {
+  --ad-inset: var(--board-group-padding-x);
+  --ad-frame: calc(var(--board-group-border-width) + var(--ad-inset));
+  --ad-lead: calc(var(--ad-frame) + var(--board-card-padding-x));
+}
+
+/* ===================================================================== */
+/* THE HORIZONTAL INSET IS A TRANSPARENT BORDER, NOT PADDING.            */
+/* iugum-3ad. This is the whole reason the two boxes moved to pseudo-     */
+/* elements, so it is worth the paragraphs.                              */
+/*                                                                       */
+/* WHAT WENT WRONG WITH PADDING. client/codemirror/list_indent.ts writes  */
+/* `padding-left:Nch;text-indent:-Nch` as an INLINE STYLE on every line   */
+/* of every list item, where N is that item's own marker width. That pair */
+/* IS the hanging indent: the marker starts at the line's own left edge   */
+/* and the wrapped rows start after it. The card used to take its         */
+/* horizontal inset from `padding-left` with `!important`, which had to    */
+/* clobber the client's inline `padding-left` - and then `text-indent: 0   */
+/* !important` as well, or an ordered list's `1.` was pulled N characters  */
+/* left, into the page gutter, OUTSIDE the card's left border. Rule 1      */
+/* CONTENT catches exactly that. The price was the hanging indent: every   */
+/* wrapped list row aligned under the marker instead of after it. Steve    */
+/* says the price is too high.                                            */
+/*                                                                       */
+/* WHY A BORDER COMPOSES WHERE PADDING CANNOT. list_indent.ts sets         */
+/* `padding` and `text-indent` and NOTHING ELSE - no margin, no border. A  */
+/* border is a length the card can own outright, so the two never meet:    */
+/*                                                                       */
+/*   - the line's border-left and border-right are --ad-lead of            */
+/*     TRANSPARENT, which is the whole inset: the group's frame plus the   */
+/*     card's own horizontal padding;                                      */
+/*   - `padding-left` is left to the client, so a list line keeps its      */
+/*     `Nch` and its `-Nch` and a plain line keeps the client's `padding:  */
+/*     0`;                                                                 */
+/*   - the BORDER BOX is unchanged, so the line still spans the content    */
+/*     column and every rect the front-end suite measures still means      */
+/*     what it meant. Margin would have moved it.                          */
+/*                                                                       */
+/* So a card's first glyph sits at frame + card padding, its list marker   */
+/* sits there too, and its wrapped rows hang N characters further in.      */
+/*                                                                       */
+/* !important ON THE WIDTHS, and only there. The inset is what keeps       */
+/* content inside the card, so no client rule may shorten it -             */
+/* `.sb-admonition` sets `border-left-width: 4px !important`, which would   */
+/* otherwise leave an admonition's text 4px from the card's border. Among   */
+/* !important declarations specificity decides, and the id prefix wins.     */
+/* The client's own 4px bar is redrawn as a shadow, below, so nothing is    */
+/* lost.                                                                   */
+/*                                                                       */
+/* THE ID PREFIX is still needed for everything else here: `#sb-main        */
+/* .cm-editor .cm-line { padding: 0 }` in the client's editor.scss is       */
+/* (1,0,2) and beats any two-class rule however late it is injected.        */
+/* ===================================================================== */
 #sb-main .cm-editor .cm-line.atomdown-card-line {
-  padding-left: calc(var(--ad-inset) + var(--board-card-padding)) !important;
-  padding-right: calc(var(--ad-inset) + var(--board-card-padding)) !important;
-  text-indent: 0 !important;
+  border-left-style: solid;
+  border-right-style: solid;
+  border-left-color: transparent;
+  border-right-color: transparent;
+  border-left-width: var(--ad-lead) !important;
+  border-right-width: var(--ad-lead) !important;
+  /* A line background - a blockquote's, a fenced code block's - is the
+     client's, and `background-clip: border-box` would paint it across the
+     transparent inset and out over the card's border. Clip it to the padding
+     box and it stops at the card's text origin. */
+  background-clip: padding-box;
 }
 
 #sb-main .cm-editor .cm-line.atomdown-card-line.atomdown-card-first {
-  padding-top: var(--board-card-padding);
+  padding-top: var(--board-card-padding-y);
 }
 
 #sb-main .cm-editor .cm-line.atomdown-card-line.atomdown-card-last {
-  padding-bottom: var(--board-card-padding);
+  padding-bottom: var(--board-card-padding-y);
+}
+
+/* --- THE CLIENT'S OTHER HANGING INDENTS, COMPLETED ------------------
+   list_indent.ts writes a MATCHED pair. Two of the client's stylesheet
+   outdents do not: `.sb-line-blockquote` takes `text-indent: -2ch` with no
+   padding at all (`.sb-blockquote-outside` narrows that to -1ch once the
+   quote mark is hidden), and a heading whose `#` markers are showing takes
+   -2ch to -7ch the same way. Outside a card those hang into the page's own
+   margin, which is empty. Inside a card that margin is the card's border, so
+   the marker crossed it - which is what `text-indent: 0 !important` used to
+   suppress, at the cost of the hanging indent everywhere else.
+
+   Give each one the padding it is missing and both properties hold: the
+   marker sits at the card's text origin and the wrapped rows sit after it.
+
+   NO `!important`, deliberately. A blockquote that is also a list item
+   carries the client's inline pair, and an inline style has to keep winning
+   there - `!important` here would take the list's own marker width away
+   again. */
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-line-blockquote {
+  padding-left: 2ch;
+  /* The client draws the blockquote's bar as the LINE's own `border-left`,
+     and that border is the card's inset now. Redraw it as an inset shadow at
+     the line's padding edge - which is a better place than the client's own,
+     because the client's put the bar underneath the card's border. */
+  box-shadow: inset 1px 0 0 0 var(--editor-blockquote-border-color);
+}
+
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-blockquote-outside {
+  padding-left: 1ch;
+}
+
+/* Same treatment for an admonition's 4px bar, for the reason in the
+   !important paragraph above. */
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-admonition {
+  box-shadow: inset 4px 0 0 0 var(--admonition-color);
+}
+
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h1 {
+  padding-left: 2ch;
+}
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h2 {
+  padding-left: 3ch;
+}
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h3 {
+  padding-left: 4ch;
+}
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h4 {
+  padding-left: 5ch;
+}
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h5 {
+  padding-left: 6ch;
+}
+#sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h6 {
+  padding-left: 7ch;
+}
+
+/* The client renders those `#` markers INLINE below its own default editor
+   width, where the page has no margin left to hang them in - so it zeroes the
+   text-indent there. Mirror that, or the padding would indent a heading with
+   nothing hanging back into it. The threshold tracks the client's own, which
+   cannot read a custom property either. */
+@media (max-width: 800px) {
+  #sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h1,
+  #sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h2,
+  #sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h3,
+  #sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h4,
+  #sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h5,
+  #sb-main .cm-editor .cm-line.atomdown-card-line.sb-header-inside.sb-line-h6 {
+    padding-left: 0;
+  }
 }
 
 .cm-line.atomdown-card-line::before {
   content: "";
   position: absolute;
   z-index: -1;
-  left: var(--ad-inset);
-  right: var(--ad-inset);
+  /* NEGATIVE, and by exactly the card's own horizontal padding. An absolutely
+     positioned box is placed against its containing block's PADDING box,
+     which is inside the transparent inset, so this puts the card's border
+     back where the inset started: --ad-frame from the group's outer edge, and
+     the content column's edge for a top-level card. */
+  left: calc(-1 * var(--board-card-padding-x));
+  right: calc(-1 * var(--board-card-padding-x));
   top: 0;
   bottom: 0;
   background: var(--board-card-surface);
-  border-left: var(--board-card-border-width) solid
-    var(--board-card-border-color);
-  border-right: var(--board-card-border-width) solid
-    var(--board-card-border-color);
+  /* WIDTH AND STYLE HERE, COLOUR IN ONE PLACE, and that is Steve's rule for
+     how quiet works rather than a tidiness preference: the state rules below
+     change `border-color` and nothing else, so rest and hover are identical
+     in geometry and nothing can reflow. A `border-left: W S C` shorthand in a
+     state rule would reset the width with it. */
+  border-left-width: var(--board-card-border-width);
+  border-left-style: var(--board-card-border-style);
+  border-right-width: var(--board-card-border-width);
+  border-right-style: var(--board-card-border-style);
+  border-color: var(--board-card-border-rest-color);
   pointer-events: none;
 }
 
@@ -224,10 +477,19 @@ html {
    directly above this line - so -first adds padding only, above. */
 .cm-line.atomdown-card-line.atomdown-card-last::before,
 .cm-line.atomdown-card-line.atomdown-card-first.atomdown-card-last::before {
-  border-bottom: var(--board-card-border-width) solid
-    var(--board-card-border-color);
+  border-bottom-width: var(--board-card-border-width);
+  border-bottom-style: var(--board-card-border-style);
   border-bottom-left-radius: var(--board-card-radius);
   border-bottom-right-radius: var(--board-card-radius);
+}
+
+/* THE POINTER GIVES THE STROKE ITS COLOUR BACK. At comfortable the resting
+   colour already IS this one, so hover changes nothing there and both
+   densities share one mechanism. At compact the resting colour is the page
+   background, so this is the whole of the reveal - and it is a colour change
+   only, so the card does not move and neither does anything under it. */
+.cm-line.atomdown-card-line.atomdown-card-hover::before {
+  border-color: var(--board-card-border-color);
 }
 
 /* ------------------------------------------------------------------ */
@@ -270,25 +532,25 @@ html {
 
 .sb-decoration-widget.atomdown-card-header {
   --ad-inset: 0px;
+  --ad-frame: 0px;
   padding: 0;
   margin: 0;
   position: relative;
 }
 
+/* The group's outline continues through a member card's header widget, and
+   here it IS the real border: a widget carries no list indent, so nothing is
+   contesting it. Width and style from the same two knobs the group's ::after
+   reads, so the density moves both together. */
 .sb-decoration-widget.atomdown-card-header.atomdown-nested {
-  --ad-inset: var(--board-group-padding);
-  border-left: var(--board-group-border-width) solid
-    color-mix(
-      in srgb,
-      var(--board-accent-color) var(--board-group-quiet-border),
-      transparent
-    );
-  border-right: var(--board-group-border-width) solid
-    color-mix(
-      in srgb,
-      var(--board-accent-color) var(--board-group-quiet-border),
-      transparent
-    );
+  --ad-inset: var(--board-group-padding-x);
+  --ad-frame: calc(var(--board-group-border-width) + var(--ad-inset));
+  border-left-width: var(--board-group-border-width);
+  border-left-style: var(--board-group-border-style);
+  border-right-width: var(--board-group-border-width);
+  border-right-style: var(--board-group-border-style);
+  border-left-color: var(--board-group-border-rest-color);
+  border-right-color: var(--board-group-border-rest-color);
 }
 
 .atomdown-card-head {
@@ -298,12 +560,18 @@ html {
   margin-left: var(--ad-inset);
   margin-right: var(--ad-inset);
   position: relative;
+  /* Vertical from the density, horizontal from the constant. The two gutter
+     controls are offset from THIS box, so a horizontal value that moved with
+     the density would move them too. Same requirement-2 split the card lines
+     use. */
   padding-top: 4px;
   padding-bottom: 4px;
-  padding-left: var(--board-card-padding);
-  padding-right: var(--board-card-padding);
+  padding-left: var(--board-card-padding-x);
+  padding-right: var(--board-card-padding-x);
   background: var(--board-card-surface);
-  border: var(--board-card-border-width) solid var(--board-card-border-color);
+  border-width: var(--board-card-border-width);
+  border-style: var(--board-card-border-style);
+  border-color: var(--board-card-border-rest-color);
   border-bottom: none;
   border-top-left-radius: var(--board-card-radius);
   border-top-right-radius: var(--board-card-radius);
@@ -351,29 +619,53 @@ html {
 }
 
 /* ------------------------------------------------------------------ */
-/* THE GROUP BOX: one closed rounded 2px accent box around its cards.  */
-/* The real border, because the group is the outer of the two boxes.   */
+/* THE GROUP BOX: one closed rounded 2px accent box around its cards,  */
+/* drawn by the line's ::after.                                        */
 /*                                                                     */
-/* SUBDUED AT REST at --board-group-quiet-border of the accent, full   */
-/* strength when the pointer is anywhere inside the group. color-mix,  */
-/* never opacity, for the reason above. A browser with no color-mix()  */
-/* drops the resting declaration and the group is simply always at     */
-/* full strength, never at an unreadable half state.                   */
+/* WHY ::after AND NOT THE REAL BORDER ANY MORE (iugum-3ad). The group  */
+/* used to take the real `border`, because a line inside a group        */
+/* carries both ranges' line classes and one element has one           */
+/* `border-left`. The card's horizontal inset IS that border now - see  */
+/* the card box above for why it has to be - so the group moved to the  */
+/* line's other pseudo-element. A line has both, so the two boxes and   */
+/* the inset all fit on one element with nothing left contested.        */
+/*                                                                     */
+/* IT DRAWS WHERE IT ALWAYS DREW. `-1 * --ad-lead` puts its left edge   */
+/* back on the content column, which is where the real border was, and  */
+/* --ad-lead is 0 on a group's own marker lines. A member card's        */
+/* --ad-frame then puts the card's border 2px + the group's padding     */
+/* inside it, the same two numbers as before.                           */
+/*                                                                     */
+/* z-index -2, ONE BEHIND the card's ::before, so a selected member     */
+/* card's own surface is not painted over by the group's.               */
+/*                                                                     */
+/* SUBDUED AT REST at --board-group-quiet-border of the accent, full    */
+/* strength when the pointer is anywhere inside the group; at compact   */
+/* the resting colour is the page background instead. color-mix,        */
+/* never opacity, for the reason above. A browser with no color-mix()   */
+/* drops the resting declaration and the group is simply always at      */
+/* full strength, never at an unreadable half state.                    */
 /* ------------------------------------------------------------------ */
 
-.cm-line.atomdown-group-line {
-  border-left: var(--board-group-border-width) solid
-    var(--board-accent-color);
-  border-right: var(--board-group-border-width) solid
-    var(--board-accent-color);
+.cm-line.atomdown-group-line::after {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  left: calc(-1 * var(--ad-lead));
+  right: calc(-1 * var(--ad-lead));
+  top: 0;
+  bottom: 0;
+  background: var(--board-group-surface);
+  border-left-width: var(--board-group-border-width);
+  border-left-style: var(--board-group-border-style);
+  border-right-width: var(--board-group-border-width);
+  border-right-style: var(--board-group-border-style);
+  border-color: var(--board-accent-color);
+  pointer-events: none;
 }
 
-.cm-line.atomdown-group-line:not(.atomdown-group-hover):not(.atomdown-selected-line) {
-  border-color: color-mix(
-    in srgb,
-    var(--board-accent-color) var(--board-group-quiet-border),
-    transparent
-  );
+.cm-line.atomdown-group-line:not(.atomdown-group-hover):not(.atomdown-selected-line)::after {
+  border-color: var(--board-group-border-rest-color);
 }
 
 /* THE GROUP'S TOP AND BOTTOM INTERIOR PADDING.
@@ -394,16 +686,16 @@ html {
    --board-group-padding, the same one that insets the sides, so all four
    sides match and match the panel. */
 #sb-main .cm-editor .cm-line.atomdown-group-line.atomdown-group-first {
-  padding-top: var(--board-group-padding) !important;
+  padding-top: var(--board-group-padding-y) !important;
 }
 
 #sb-main .cm-editor .cm-line.atomdown-group-line.atomdown-group-last {
-  padding-bottom: var(--board-group-padding) !important;
+  padding-bottom: var(--board-group-padding-y) !important;
 }
 
-.cm-line.atomdown-group-line.atomdown-group-last {
-  border-bottom: var(--board-group-border-width) solid
-    var(--board-accent-color);
+.cm-line.atomdown-group-line.atomdown-group-last::after {
+  border-bottom-width: var(--board-group-border-width);
+  border-bottom-style: var(--board-group-border-style);
   border-bottom-left-radius: var(--board-card-radius);
   border-bottom-right-radius: var(--board-card-radius);
 }
@@ -437,12 +729,12 @@ html {
     transparent
   );
   color: var(--board-header-active-color);
-  border: var(--board-group-border-width) solid
-    color-mix(
-      in srgb,
-      var(--board-accent-color) var(--board-group-quiet-border),
-      transparent
-    );
+  /* The bar is the group box's top edge, so it takes the group's own stroke
+     knobs: same width at every density, dotted at compact, and the density's
+     resting colour. */
+  border-width: var(--board-group-border-width);
+  border-style: var(--board-group-border-style);
+  border-color: var(--board-group-border-rest-color);
   border-bottom: none;
   border-top-left-radius: var(--board-card-radius);
   border-top-right-radius: var(--board-card-radius);
@@ -809,7 +1101,7 @@ html {
   left: calc(var(--ad-inset) + var(--board-card-border-width));
   right: calc(var(--ad-inset) + var(--board-card-border-width));
   box-sizing: border-box;
-  padding: 3px var(--board-card-padding);
+  padding: 3px var(--board-card-padding-x);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.66em;
   line-height: 1.35;
@@ -874,8 +1166,8 @@ html {
   background: var(--board-accent-color);
   color: var(--ui-accent-contrast-color, #fff);
   border-color: var(--board-accent-color);
-  border-bottom: var(--board-group-border-width) solid
-    var(--board-accent-color);
+  border-bottom-width: var(--board-group-border-width);
+  border-bottom-style: var(--board-group-border-style);
   border-bottom-left-radius: var(--board-card-radius);
   border-bottom-right-radius: var(--board-card-radius);
 }
@@ -892,21 +1184,58 @@ html {
 /* decorated line and every widget, so the DOM says which density is   */
 /* showing instead of leaving it to an absence.                        */
 /*                                                                     */
-/* Every value here is one of the panel's own named properties with    */
-/* the panel's own compact value, so overriding one on `html` moves    */
-/* both views and both densities together. --board-group-border-width  */
-/* is deliberately absent: the group outline is structure, not chrome, */
-/* and it is IDENTICAL at both densities.                              */
+/* VERTICAL ONLY, and that is iugum-3ad requirement 2. Not one         */
+/* horizontal distance below moves: --board-card-padding-x and         */
+/* --board-group-padding-x are deliberately absent, so the distance    */
+/* from a card's border to its first glyph, and from a group's border  */
+/* to a member card's border, are IDENTICAL at both densities. The     */
+/* `-y` halves are what compact takes. See "Compact compresses the     */
+/* VERTICAL axis only" above.                                          */
+/*                                                                     */
+/* Every value here is derived from one of the panel's own named        */
+/* properties, so overriding that property on `html` still moves both  */
+/* views and both densities together.                                  */
+/*                                                                     */
+/* --board-group-border-width and --board-card-border-width are        */
+/* deliberately absent, and that rule is NARROWED rather than dropped: */
+/* a group's outline keeps its PRESENCE and its GEOMETRY at every      */
+/* density - same width, same position, never absent - while its       */
+/* STROKE STYLE and RESTING COLOUR may vary with the density. The      */
+/* trade and the reason are written out in "How quiet works at         */
+/* compact" above. The original rule's purpose survives: the outline    */
+/* never disappears and never moves, so no density change can reflow    */
+/* the page and the outline never stops saying "these cards are one    */
+/* group".                                                             */
 /* ================================================================== */
 
 .cm-line.atomdown-compact-line,
 .sb-decoration-widget.atomdown-compact {
   --board-card-radius: 4px;
-  --board-card-padding: 6px;
-  --board-card-header-padding: 0;
+  --board-card-padding-y: 6px;
   --board-card-gap: 6px;
-  --board-group-padding: 4px;
+  --board-group-padding-y: 4px;
   --board-group-header-padding: 1px 4px;
+
+  /* --- THE COMPACT REGISTER: AN OUTLINE, NOT A SURFACE --------------
+     Dotted strokes, no fill, and every colour here is the theme's own page
+     background TOKEN rather than a value that happens to match today - so it
+     is right in light, in dark, and under a third theme.
+
+     The resting colours are what make the strokes invisible at rest while
+     they still occupy their space. The pointer restores them; see the hover
+     rules on the two boxes. Nothing about the geometry differs between the
+     two states, so nothing can move. */
+  --board-card-border-style: dotted;
+  --board-group-border-style: dotted;
+  --board-card-surface: var(--root-background-color, #fff);
+  --board-group-surface: var(--root-background-color, #fff);
+  --board-card-border-rest-color: var(--root-background-color, #fff);
+  --board-group-border-rest-color: var(--root-background-color, #fff);
+  /* A selected compact card is an ACCENT OUTLINE plus its ring, not a fill:
+     compact has no surface, and adding one back for one state would be the
+     one place the density stopped meaning what it means. Rest, hover and
+     selected are still three different computed border colours. */
+  --board-card-selected-surface: var(--root-background-color, #fff);
 }
 
 /* --- COMPACT: the card header row is gone --------------------------
@@ -936,11 +1265,23 @@ html {
 .atomdown-compact .atomdown-card-head {
   position: absolute;
   top: 0;
-  left: var(--ad-inset);
-  right: var(--ad-inset);
+  /* --ad-frame, not --ad-inset: the compact header widget sets `border: none`
+     below, so its padding box starts on the content column and the offset has
+     to carry the group's stroke as well. With --ad-inset it landed 2px inside
+     a member card's own border. */
+  left: var(--ad-frame);
+  right: var(--ad-frame);
   z-index: 6;
   margin: 0;
-  padding: var(--board-card-header-padding);
+  /* VERTICAL ZERO, HORIZONTAL CONSTANT. The head's box is what the two gutter
+     controls are offset from, so its horizontal padding has to be the same at
+     both densities or the controls move with the density.
+     `--board-card-header-padding` stays declared as the panel's own knob and
+     is no longer read here, the way `--board-card-chrome-space` is not. */
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: var(--board-card-padding-x);
+  padding-right: var(--board-card-padding-x);
   background: transparent;
   border: none;
   border-radius: 0;
@@ -969,9 +1310,12 @@ html {
 /* THE CARD'S TOP EDGE AND TOP CORNERS MOVE ONTO THE CARD'S FIRST LINE,
    because the header widget that carried them is out of the layout now.
    Without this the box would be open at the top. */
+/* Width and style only - the colour comes from the one place that sets it, so
+   the top edge takes the resting, the hover and the selected colour with the
+   other three sides instead of pinning its own. */
 .cm-line.atomdown-compact-line.atomdown-card-first::before {
-  border-top: var(--board-card-border-width) solid
-    var(--board-card-border-color);
+  border-top-width: var(--board-card-border-width);
+  border-top-style: var(--board-card-border-style);
   border-top-left-radius: var(--board-card-radius);
   border-top-right-radius: var(--board-card-radius);
 }
@@ -986,8 +1330,11 @@ html {
 
 /* --- COMPACT: a thin group bar -------------------------------------
    Chevron, name, a bare member count, one three-dot menu. The GROUP label
-   and the group id fold into that menu. The 2px accent outline around the
-   group is NOT touched. */
+   and the group id fold into that menu. The outline around the group keeps
+   its 2px and its position; the density block above changes its stroke style
+   and its resting colour and nothing else. The bar keeps its resting tint at
+   both densities, because it is the only thing left naming a group and a
+   group whose resting outline is invisible still has to be findable. */
 .sb-decoration-widget.atomdown-group-header.atomdown-compact {
   flex-wrap: nowrap;
 }
@@ -1018,20 +1365,21 @@ html {
 /* Selection, lasso, drag feedback. */
 /* ------------------------------- */
 
-.cm-line.atomdown-selected-line::before {
-  background: var(--ui-surface-hover-background-color, #eaeaea);
+/* SELECTED, and it has to beat the hover rule, so it carries the card class
+   too and comes after it. The card's TOP border at compact is drawn by a
+   two-class rule above but takes its colour from here with the other three,
+   because that rule sets width and style only. */
+.cm-line.atomdown-card-line.atomdown-selected-line::before {
+  background: var(--board-card-selected-surface);
   border-color: var(--board-accent-color);
-}
-
-/* At compact the card's TOP border is drawn by a two-class rule above, so
-   the one-class selection rule cannot recolour it. Restated at matching
-   specificity, and after it, so a selected compact card is outlined on all
-   four sides like a selected comfortable one. */
-.cm-line.atomdown-compact-line.atomdown-selected-line::before {
-  border-color: var(--board-accent-color);
-}
-
-.cm-line.atomdown-selected-line {
+  /* THE RING MOVED ONTO THE CARD BOX. It was an inset shadow on the LINE,
+     which drew it at the content column's edge - outside a member card's own
+     border and outside the group's. An inset shadow paints inside the padding
+     box, and the line's padding box is inside the transparent inset now, so
+     leaving it there would have drawn it through the text. On the ::before it
+     is one pixel inside the card's own border, which is where a selection
+     ring belongs. It is also what keeps SELECTED distinguishable from HOVERED
+     at compact, where neither state has a surface to differ by. */
   box-shadow: inset 0 0 0 1px
     color-mix(in srgb, var(--board-accent-color) 45%, transparent);
 }
