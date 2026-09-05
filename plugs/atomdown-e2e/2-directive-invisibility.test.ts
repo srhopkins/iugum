@@ -319,7 +319,7 @@ for (const theme of THEMES) {
         const cards = view.ev.locator(".board-card-header");
         const cardCount = await cards.count();
         expect(cardCount).toBe(FIXTURE.cards);
-        // Hovering 84 cards and re-reading the panel HTML each time is the
+        // Hovering 82 cards and re-reading the panel HTML each time is the
         // slow way; the panel is one document, so a leak shows up wherever it
         // is. Sample the hovers, check the whole DOM after each.
         for (const i of [0, 1, Math.floor(cardCount / 2), cardCount - 1]) {

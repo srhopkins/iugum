@@ -262,9 +262,15 @@ be fooled by.
 
 Two things in it look wrong and are not:
 
-- **84 cards, 82 atoms.** `atomdown materialize` leaves a fenced code block's
-  opening line outside the atom it creates, so each fence is an uncovered
-  block that both views draw as one extra card marked implicit.
+- **82 cards, 82 atoms, and it used to be 84 cards.** `atomdown materialize`
+  used to leave a fenced code block's opening line outside the atom it created,
+  so each of the two fences left an uncovered block that both views drew as an
+  extra card marked implicit - 84 cards for 82 atoms, both numbers right
+  because they counted different things. The build that regenerated this
+  fixture covers the opening line, so there are no uncovered blocks and the two
+  numbers agree. The cost is that nothing here exercises a card with NO
+  Atomdown id any more, which is what the text-keyed identity fallbacks in
+  `measureBoxes` and `sweepEach` exist for; see `FIXTURE.cards` in the harness.
 - **One row is raw.** The `FFAI-62019` row's link label contains unescaped
   square brackets, which close the label early, so it is not a link. Plain
   SilverBullet renders it raw too. Rule 5 asserts it STAYS raw, so a change
@@ -390,7 +396,7 @@ estimates the rest.
   at every stop.
 - **`locator.hover()` waits out its timeout on a rebuilt element.** Putting
   `hoverClasses` on a group rebuilds every line element in it, so the element a
-  locator resolved a moment ago is detached; at 84 cards that is eleven minutes
+  locator resolved a moment ago is detached; at 82 cards that is eleven minutes
   and it reads as a three-minute test timeout. Hovers in a sweep are real mouse
   moves — `hoverBox` in the harness.
 - **An index is not an identity.** `sweepEach` chooses the next key in the page,
