@@ -32,7 +32,7 @@ So this suite measures the rendered document in a real browser.
 | 1 | **Containment.** Every child rect inside its card box and its group box, allowing for border width. | Ordered-list markers `1.`-`6.` left of the card's left border. A wide table across the card border AND the group border. Group header controls clipped at the content column edge. |
 | 2 | **Directive invisibility, one legitimate reveal.** At rest every directive contributes at most 4px and shows no text; nothing appears on any hover, any card top border, or any collapse click; the text cursor with the editor focused DOES reveal one, inside its card's borders. | 82 `sha256:` digests back on the page. A reveal that leaked on hover and passed every at-rest check. |
 | 3 | **Layout stability.** A reference card's y never moves. Edit mode is the one exception and may grow its own card DOWNWARD only, with content below moving by exactly the height delta. | Hover states that resized a box instead of recolouring it, so reading the page moved it. |
-| 4 | **State machine round trips.** Collapse, view on/off, raw/rendered, density and the four editor widths each return to an identical DOM signature; reload persistence keeps on ON and off OFF, scoped per page. | A group that would not expand after collapse. The header toggle doing nothing on first press while the command worked. Close-then-reload reopening the board. |
+| 4 | **State machine round trips.** Collapse, view on/off, raw/rendered, density (through the command AND through the header button) and the four editor widths each return to an identical DOM signature; reload persistence keeps on ON, off OFF and the density where it was left, scoped per page. | A group that would not expand after collapse. The header toggle doing nothing on first press while the command worked. Close-then-reload reopening the board. |
 | 5 | **Rendering fidelity.** No `<!-- <atom`, no `sha256:`, no `](http`, no bare `##` or `**` outside code. Positively: one `<ol>` with six `<li>`, one `<table>` with 10 rows, an `<a href>` in every ticket cell. | Raw markdown reaching the reader. An ordered list rendering as a run-on paragraph. |
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
 
@@ -58,8 +58,17 @@ bugs.
 
 ## The matrix, and the split
 
-Three axes: two densities (board only - the inline view has no density knob),
-four editor widths from `Library/Styles/EditorWidth.md`, light and dark theme.
+Three axes: two densities (**both views**, since the inline view gained its
+own), four editor widths from `Library/Styles/EditorWidth.md`, light and dark
+theme.
+
+The two views report their density differently and `setDensity` in the harness
+hides the difference. The panel has a root element, so it carries
+`data-board-density`. The inline view has none - it decorates the real page -
+so the plug puts `atomdown-comfortable` or `atomdown-compact` on every
+decorated line and every widget, and `inlineDensity` reads that class. The
+class is deliberately the readout rather than clientStore: it is what the CSS
+keys off, so it is the only value that can disagree with what is on screen.
 
 - **FAST** (default, what the hook runs): four cells, one per axis value. Every
   width appears once, both themes appear, both densities appear.

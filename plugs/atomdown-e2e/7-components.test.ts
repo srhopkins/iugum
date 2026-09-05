@@ -45,6 +45,7 @@ import {
   failWithArtifacts,
   FIXTURE,
   gotoFixture,
+  hoverBox,
   measureBoxes,
   mod,
   openBoard,
@@ -220,7 +221,7 @@ for (const theme of THEMES) {
           await gotoFixture(page, server);
           await setWidth(page, combo.width);
           const view = await open(page);
-          if (view.kind === "board") await setDensity(view, combo.density);
+          await setDensity(view, combo.density);
           const s = sel(view);
 
           // Exists once per atom, plus the fenced-code implicit cards.
@@ -788,12 +789,24 @@ for (const theme of THEMES) {
           await gotoFixture(page, server);
           await setWidth(page, combo.width);
           const view = await open(page);
-          if (view.kind === "board") await setDensity(view, combo.density);
+          await setDensity(view, combo.density);
           const s = sel(view);
 
           const host =
             view.kind === "board" ? ".board-card" : ".atomdown-card-header";
           const gripSel = view.kind === "board" ? ".board-drag-handle" : ".atomdown-grip";
+          // WHAT THE POINTER GOES ONTO IS NOT WHAT IS MEASURED.
+          //
+          // At compact density the card header is a chrome layer with no
+          // height of its own — the board pins it over the card, the inline
+          // view pins it over the card's first line — so it is not a box a
+          // pointer can be put on the middle of. The pointer goes onto the
+          // CARD, which is what a reader's pointer lands on, and the browser
+          // delivers the event to whatever is topmost. The header stays the
+          // element the grip is measured inside.
+          const hoverTarget = view.kind === "board"
+            ? ".board-card"
+            : ".cm-line.atomdown-card-line";
 
           const rest = await hiddenState(view, gripSel, host);
           if (rest.visible) {
@@ -808,7 +821,11 @@ for (const theme of THEMES) {
             );
           }
 
-          await view.ev.locator(host).first().hover();
+          // A real mouse move, not `hover()`. `hover()` needs a box with a
+          // non-empty area and a hit test that reaches the element, and a
+          // compact card header has neither by design — it waited out its own
+          // timeout for three minutes and read as a test timeout.
+          await hoverBox(view, view.ev.locator(hoverTarget).first());
           await settle(page);
           const hovered = await hiddenState(view, gripSel, host);
           if (!hovered.visible) {

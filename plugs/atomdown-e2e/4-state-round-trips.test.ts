@@ -40,6 +40,7 @@ import {
   failWithArtifacts,
   FIXTURE,
   gotoFixture,
+  inlineDensity,
   openBoard,
   openInline,
   runCommand,
@@ -131,6 +132,7 @@ for (const theme of THEMES) {
         await gotoFixture(page, server);
         await setWidth(page, combo.width);
         let view = await openInline(page);
+        await setDensity(view, combo.density);
 
         // --- Collapse and expand, every group ----------------------------
         // Driven through the header caret, which is the control that was out
@@ -151,12 +153,88 @@ for (const theme of THEMES) {
             expect(collapsed.length).toBe(FIXTURE.groups);
           },
           async () => {
-            await sweepEach(view, ".atomdown-group-collapse", async (caret) => {
-              await caret.click();
-              await settle(page, 4);
-            });
+            // ASSERT THE COUNT ON THE WAY BACK TOO. Without it a sweep that
+            // expanded nine of eleven groups returned quietly and the failure
+            // arrived as an unexplained signature diff rather than as "the
+            // sweep reached nine carets".
+            const expanded = await sweepEach(
+              view,
+              ".atomdown-group-collapse",
+              async (caret) => {
+                await caret.click();
+                await settle(page, 4);
+              },
+            );
+            expect(expanded.length).toBe(FIXTURE.groups);
           },
         );
+
+        // --- The density, both ways ---------------------------------------
+        // Presentational, so the DOM has to come back byte-identical. It is
+        // also the half of "presentational" a signature can prove: rule 6
+        // proves the other half, that the document's bytes never move.
+        const otherDens = combo.density === "compact"
+          ? "comfortable"
+          : "compact";
+        await assertRoundTrip(
+          view,
+          combo,
+          `inline density ${combo.density} -> ${otherDens} -> ${combo.density}`,
+          async () => await setDensity(view, otherDens),
+          async () => await setDensity(view, combo.density),
+        );
+
+        // --- The density through the header BUTTON -------------------------
+        // The other entry point, and the one that used to arrive only when
+        // the client's page index happened to hold the library page. The plug
+        // registers it now, so it is present whenever the command is.
+        const densityButton = page.locator(
+          'button[title*="Atomdown display density"]',
+        );
+        // WAITED FOR, NOT COUNTED. The plug appends the button to the
+        // `actionButtons` config, and Space Lua's own reload clears that key
+        // when the first index of a space completes — so the plug re-asserts
+        // it on a heartbeat and the icon can be a few seconds behind a fresh
+        // load. A count taken immediately is a race, not an assertion.
+        await densityButton.first().waitFor({
+          state: "visible",
+          timeout: 30_000,
+        });
+        await assertRoundTrip(
+          view,
+          combo,
+          "switch the inline density with the header button, twice",
+          async () => {
+            await densityButton.first().click();
+            await page
+              .locator(`.cm-line.atomdown-${otherDens}-line`)
+              .first()
+              .waitFor({ state: "attached", timeout: 10_000 });
+            await settle(page, 4);
+          },
+          async () => {
+            await densityButton.first().click();
+            await page
+              .locator(`.cm-line.atomdown-${combo.density}-line`)
+              .first()
+              .waitFor({ state: "attached", timeout: 10_000 });
+            await settle(page, 4);
+          },
+        );
+
+        // --- Reload persistence: the density survives ---------------------
+        await setDensity(view, otherDens);
+        await gotoFixture(page, server);
+        await page
+          .locator(".atomdown-card-line")
+          .first()
+          .waitFor({ state: "attached", timeout: 15_000 });
+        await settle(page, 6);
+        expect(
+          await inlineDensity(view),
+          `the density is remembered per page, so ${otherDens} must survive a reload`,
+        ).toBe(otherDens);
+        await setDensity(view, combo.density);
 
         // --- The view off and on, through the command --------------------
         await assertRoundTrip(
@@ -176,13 +254,22 @@ for (const theme of THEMES) {
         );
 
         // --- The view off and on, through the header BUTTON --------------
-        // The other entry point. `Library/Atomdown/Inline.md` defines it with
-        // `actionButton.define`, and it is the one that did nothing on first
-        // press while the command worked.
+        // The other entry point, and the one that did nothing on first press
+        // while the command worked. Named by its own description rather than
+        // by "Atomdown": there are TWO Atomdown buttons now, and `.first()`
+        // over both would silently start driving the density switch if their
+        // registration order ever changed.
         const button = page.locator(
-          'button[title*="Atomdown"], button[aria-label*="Atomdown"]',
+          'button[title*="Atomdown card view"], button[aria-label*="Atomdown card view"]',
         );
-        if (await button.count()) {
+        // NO LONGER CONDITIONAL. It used to be `if (await button.count())`,
+        // which skipped silently whenever the library page's `space-lua` had
+        // not reached this browser's page index — so the very failure this
+        // guards was the one it could not see. The plug registers the button
+        // now, so it is always there, and this waits for it like the density
+        // one above.
+        await button.first().waitFor({ state: "visible", timeout: 30_000 });
+        {
           await assertRoundTrip(
             view,
             combo,

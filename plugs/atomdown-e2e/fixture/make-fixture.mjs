@@ -274,15 +274,46 @@ const slugify = (line) =>
     .slice(0, 7)
     .join("-") || "atom";
 
+// SLUGS HAVE TO BE UNIQUE ACROSS THE WHOLE PAGE, and that is a real Atomdown
+// rule rather than tidiness: `atomdown lint` reports `duplicate-slug` on a
+// name used twice, because a name that points at two things names neither.
+// Rule 6 requires lint to say nothing at all, so a fixture with a duplicate
+// slug fails the suite for a reason that is not a defect in either view.
+//
+// Two collisions arise naturally here. A group's own name is derived from the
+// same word as the `## name` heading it wraps, so `editor` was both the
+// group's slug and its first atom's; and two of the filler atoms open with the
+// same long-link line. The GROUP keeps the plain name, because it is the one a
+// reader picks out of a collapsed page, and a later duplicate takes a numeric
+// suffix.
 {
   const lines = readFileSync(OUT, "utf8").split("\n");
+  const taken = new Set();
+  // Group slugs are claimed first, whatever line they are on.
+  for (const line of lines) {
+    const g = line.match(/^<!-- <atom-group id="[0-9A-Z]+" slug="([^"]+)">/);
+    if (g) taken.add(g[1]);
+  }
+  const unique = (base) => {
+    if (!taken.has(base)) {
+      taken.add(base);
+      return base;
+    }
+    for (let n = 2; ; n++) {
+      const candidate = `${base}-${n}`;
+      if (!taken.has(candidate)) {
+        taken.add(candidate);
+        return candidate;
+      }
+    }
+  };
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(/^<!-- <atom id="([0-9A-Z]+)"(.*)\/> -->$/);
     if (!m || m[2].includes("slug=")) continue;
     // The atom's content starts on the next non-blank line.
     let j = i + 1;
     while (j < lines.length && lines[j].trim() === "") j++;
-    const slug = slugify(lines[j] ?? "");
+    const slug = unique(slugify(lines[j] ?? ""));
     lines[i] = `<!-- <atom id="${m[1]}" slug="${slug}"${m[2]}/> -->`;
   }
   writeFileSync(OUT, lines.join("\n"));

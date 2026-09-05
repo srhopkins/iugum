@@ -101,9 +101,17 @@ test("the whole suite's interactions leave the page byte-identical, and atomdown
   // --- Every interaction the other five rules perform ---------------------
   await gotoFixture(page, server);
 
-  // Inline: open, collapse and expand every group, hover every card, put the
-  // cursor in a directive line, walk all four widths, close.
+  // Inline: open, flip the density both ways, collapse and expand every
+  // group, hover every card, put the cursor in a directive line, walk all
+  // four widths, close.
   const inline = await openInline(page);
+  // THE DENSITY SWITCH IS THE CLAIM UNDER TEST HERE. It is presentational, so
+  // it must not put one byte in the file — and it is driven before the sweeps
+  // as well as after them, so a write it makes cannot hide behind a later
+  // interaction's own read.
+  await setDensity(inline, "compact");
+  await setDensity(inline, "comfortable");
+  await setDensity(inline, "compact");
   // Two sweeps rather than one caret clicked twice: a press rewrites the
   // decorations, so the second click through the same index is not necessarily
   // the same caret.
@@ -121,6 +129,7 @@ test("the whole suite's interactions leave the page byte-identical, and atomdown
   });
   await putCursorOnLine(page, '<!-- <atom id="');
   for (const w of WIDTHS) await setWidth(page, w);
+  await setDensity(inline, "comfortable");
   await inline.close();
 
   // Board: open, collapse and expand every group, flip raw/rendered, flip

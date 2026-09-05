@@ -12,16 +12,85 @@ and the plug only decorates what is already there.
 
 | | |
 |---|---|
-| **The icon** | An action button in the header bar, next to home and terminal. Per page, off until you press it, and remembered across a reload. |
+| **The icons** | Two action buttons in the header bar, next to home and terminal: `grid` turns the card view on, `align-justify` switches the display density. Both are per page, and both are remembered across a reload. The **plug registers them itself** - see "The header buttons" below. |
 | **Cards** | One closed rounded box per atom: 1px border, the card surface, padding, and a clear gap to the next card. |
-| **Card header** | A strip at the top of each box: drag grip, the readable name in body text, the id in small grey monospace. |
+| **Card header** | At comfortable density, a strip at the top of each box: drag grip, the readable name in body text, the id in small grey monospace. Compact removes it. |
 | **Groups** | One closed rounded 2px accent box around the member cards, which are inset inside it on all four sides. |
-| **Group header** | A bar inside the top of that box: collapse caret, drag grip, GROUP, the name, the id, the card count, Rename and Ungroup. |
+| **Group header** | A bar inside the top of that box: collapse caret, drag grip, GROUP, the name, the id, the card count, and a menu holding Rename and Ungroup. Compact thins it to caret, name, a bare count and the menu. |
+| **Density** | Comfortable (the default) and compact, the panel's own two. `Atomdown: Toggle Inline Density`, or the `align-justify` button. |
 | **Editing** | Ordinary typing. There is nothing to open and nothing to save. |
 | **Drag to reorder** | Drag the grip that appears at the left of a hovered block. |
 | **Lasso** | Alt-drag a band over several blocks to select them. |
 | **Group / Ungroup** | `Atomdown: Group Selection` on a lassoed run, `Atomdown: Ungroup` with the cursor in a group, or the group header's menu. |
 | **Collapse** | The header caret, through the editor's own folding. |
+
+## The two densities
+
+The same comfortable and compact the `atomdown-board` panel has, with the same
+names, the same knob values and the same `--board-*` CSS custom property names,
+so the two views cannot drift. Comfortable is the default.
+
+**Compact compresses chrome only.** Not one content size changes: a heading is
+a heading at its full rendered size at both densities, because the point is to
+fit more of the document on screen, not to shrink the document.
+
+| | comfortable | compact |
+|---|---|---|
+| Card header row | a strip with the grip, the name and the id | **gone** - no header, no background, no border, and deliberately no dotted line standing in for it. There is no seam. |
+| The card's top edge | on the header strip | on the card's own first line |
+| The name and the id | in the header | in the three-dot menu, whose picker leads with a `name  -  id` label that does nothing when chosen |
+| The grip and the menu | in the header strip's padding gutters | a zero-height layer pinned across the card's top edge, `pointer-events: none` except on the two controls, so a click on the top strip falls through and still selects the card |
+| Group bar | caret, grip, GROUP, name, id, count, menu | caret, grip, name, a bare count, menu |
+| Group outline | 2px accent | **identical** - the outline is structure, not chrome |
+| Collapse caret | full size | **identical** - it is the control that turns a long page into a list of group names |
+| `--board-card-padding` | 14px | 6px |
+| `--board-card-radius` | 6px | 4px |
+| `--board-card-gap` | 14px | 6px |
+| `--board-group-padding` | 8px | 4px |
+| `--board-group-header-padding` | 5px 8px | 1px 4px |
+| `--board-card-header-padding` | 4px 8px | 0 |
+
+**How the density reaches the line elements.** A `.cm-line` gets a class only
+from a mark's `lineClasses`, and the seam uses `marks[].class` as the STEM of
+the classes it derives - so a second class in that string would produce
+`atomdown-card atomdown-compact-line` rather than two classes. The plug
+therefore emits a THIRD kind of mark, `dens:<key>`, over exactly the same span
+as each box mark, carrying nothing but `atomdown-comfortable` or
+`atomdown-compact`. Widgets take the class directly, because `widgets[].class`
+is used verbatim. The class is present at both densities, so the DOM says which
+density is showing instead of leaving it to an absence.
+
+Switching density needs **no** `editor.rebuildEditorState`: mark classes and
+widget classes live in one StateField the seam rebuilds whenever the config
+value changes, so the empty transaction is enough and the undo history survives
+a switch.
+
+## The header buttons
+
+The plug registers both of them, with `config.insert` on the `actionButtons`
+key. There is no `actionButton.define` block on the library page any more.
+
+Why it moved. An action button is plain configuration - `actionButton.define`
+in Space Lua is three lines that read that key, append to it and write it back
+- and the `config.insert` syscall is open to a plug
+(`silverbullet/client/plugos/syscalls/config.ts`). A `space-lua` block, though,
+only runs when the client's own page index holds that page, and that index is
+per browser origin and can be silently stale: the same server showed a button
+whose command was "not found" in one tab and a page with no styling at all in
+another. A plug loads by file discovery with no index involved, which is why
+the COMMANDS always worked when the button did not.
+
+Registration runs on `editor:init` and again on every page load, and skips a
+button whose command is already in the list. Both halves matter.
+`Config.clear()` wipes every config value each time Space Lua reloads
+(`silverbullet/client/client_system.ts`, `loadLuaScripts`), and the boot order
+is plugs → `plugs:loaded` → Space Lua → `editor:init`, so a button registered
+on the earlier event would be wiped before the header bar ever read the key.
+The skip is what stops a reload from producing two grid icons.
+
+The CSS still lives on the library page, in one `space-style` block, and the
+density's rules are in that same block - so they cannot arrive separately from
+the rules they modify.
 
 ## The collapse caret, and why it cannot go out of step
 

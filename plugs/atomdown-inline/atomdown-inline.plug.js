@@ -1019,9 +1019,16 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) 
   /**
    * The density mark for one span: the class, and nothing else.
    *
-   * `key` is the BARE key, so a box mark `box:atom:X` is twinned by
-   * `dens:atom:X`. Naming them off the same suffix is what lets a test pair
-   * every box with its density mark and check the two spans agree.
+   * ONE PER TOP-LEVEL UNIT, NEVER ONE PER CARD, and that is a fix rather than
+   * a saving. The seam derives `-line`, `-first`, `-mid` and `-last` from
+   * every mark and CodeMirror concatenates the class strings of all the line
+   * decorations on one line. A member card covered by both its group's mark
+   * and its own therefore carried `atomdown-comfortable-line` TWICE and
+   * `-first`, `-mid` and `-last` together, and how many of those overlapping
+   * marks the editor had realised varied with the scroll position — so a
+   * width round trip came back with a different class string for the same
+   * correct state. A unit's span already covers every line of every card
+   * inside it, so one mark per unit gives every line exactly one.
    */
   function addDensity(key, box) {
     marks.push({
@@ -1051,7 +1058,6 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) 
       // pointer is anywhere in the card, not only on the header row itself.
       hoverClasses: true,
     });
-    addDensity(boxKey.slice("box:".length), box);
     // THE HEADER WIDGET IS EMITTED AT BOTH DENSITIES, and at compact it keeps
     // the grip and the three-dot menu only — the name and the id are removed
     // by CSS and the row is lifted out of the layout, so it has no height and
@@ -1080,6 +1086,8 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) 
       to: unitSpan.to,
       class: "atomdown-unit",
     });
+    // The density, once, over the whole unit. See addDensity.
+    addDensity(unit.unitKey, unitSpan);
 
     let visible = null;
 
@@ -1104,7 +1112,6 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) 
         // cannot express that.
         hoverClasses: true,
       });
-      addDensity(unit.unitKey, unitSpan);
       const isCollapsed = collapsed.indexOf(unit.groupId) !== -1;
       widgets.push({
         id: "unit:" + unit.unitKey,
@@ -1629,11 +1636,30 @@ async function toggleDensity() {
  * the button did not. Registering the buttons here removes that whole failure
  * class: the button and the command it runs now arrive together or not at all.
  *
- * IDEMPOTENT, because it has to run more than once. `Config.clear()` wipes
- * every config value each time Space Lua reloads (client/client_system.ts,
- * `loadLuaScripts`), so this runs on `editor:init` — after that load — and
- * again on every page load. A button whose command is already in the list is
- * skipped, so no reload can produce two grid icons.
+ * IDEMPOTENT AND SELF-HEALING, because it has to run more than once and cannot
+ * know when.
+ *
+ * `Config.clear()` wipes every config value each time Space Lua reloads
+ * (silverbullet/client/client_system.ts, `loadLuaScripts`), and Space Lua then
+ * writes the whole `actionButtons` array back from
+ * `Library/Std/Config.md` — so anything a plug appended is gone twice over.
+ * Registering on `editor:init` and on every page load is not enough on its
+ * own: the client dispatches `editor:reloadState` when the FIRST INDEX of a
+ * space completes (client/data/object_index.ts, the `mq:emptyQueue:indexQueue`
+ * handler) and again after a version-bump reindex, both of which land after
+ * `editor:init` has already been and gone. Measured on a fresh space: the two
+ * commands were registered and the header bar had neither button.
+ *
+ * Listening to `editor:reloadState` cannot fix it either, and that is a race
+ * rather than an oversight: `EventHook.dispatchEvent` queues plug handlers and
+ * local listeners as concurrent promises, so this plug's first syscall and
+ * `reloadState`'s `config.clear()` are in flight together, and the clear wins.
+ *
+ * So there is a heartbeat as well. A tick re-reads the key and appends only
+ * what is missing, which costs one syscall every few seconds and makes the
+ * button survive a config clear whenever and however it happens. A button
+ * whose command is already in the list is skipped, so no reload can produce
+ * two grid icons.
  */
 const ACTION_BUTTONS = [
   {
@@ -1650,13 +1676,86 @@ const ACTION_BUTTONS = [
   },
 ];
 
-async function registerActionButtons() {
+/**
+ * The command of every action button already configured.
+ *
+ * READ ONE FIELD AT A TIME, NEVER THE WHOLE ARRAY, and that is a hard
+ * constraint rather than a style. `Library/Std/Config.md` defines the back and
+ * forward buttons with a `run` CALLBACK, so `actionButtons` holds Lua
+ * functions; a syscall that returned the array had to structuredClone it into
+ * the worker and threw
+ * `Failed to execute 'postMessage' on 'Worker': (...) could not be cloned`.
+ * The plug then caught its own failure, registered nothing, and the header bar
+ * had no Atomdown button while both commands worked — the exact symptom this
+ * whole move was supposed to end.
+ *
+ * `config.get` takes a dot path, and an array is an object, so
+ * `actionButtons.length` and `actionButtons.<i>.command` each return one
+ * clonable scalar.
+ */
+async function configuredButtonCommands() {
+  const count = await syscall("config.get", "actionButtons.length", 0);
+  const total = typeof count === "number" && count > 0 ? count : 0;
+  const commands = [];
+  for (let i = 0; i < total; i++) {
+    commands.push(
+      await syscall("config.get", "actionButtons." + i + ".command", ""),
+    );
+  }
+  return commands;
+}
+
+/**
+ * Make the header bar re-read the `actionButtons` key.
+ *
+ * WHY A NUDGE IS NEEDED AT ALL. The header bar reads that key while it renders
+ * (silverbullet/client/editor_ui.tsx, `const actionButtons = client.config.get`)
+ * and nothing subscribes to config, so a button appended after the last render
+ * sits in the config and not on screen. Space Lua never noticed, because its
+ * `actionButton.define` runs during the boot sequence and a page load renders
+ * afterwards anyway. A plug appending later gets no render for free. Measured:
+ * both buttons in `config.get("actionButtons")`, neither in the header bar.
+ *
+ * `editor.showProgress` with no arguments is the cheapest honest re-render.
+ * It sets the progress indicator to nothing, which is what it already is, and
+ * the reducer builds a new state object either way, so the UI re-renders. It
+ * touches nothing else — no panel is shown or hidden, no UI option is written,
+ * no editor state is rebuilt, so no undo history is lost. The alternatives
+ * were worse: `editor.hidePanel` would clobber a panel another plug owns, and
+ * `editor.reloadConfigAndCommands` reloads Space Lua, which starts with the
+ * `config.clear()` that removed these buttons in the first place.
+ *
+ * Called only when a button was actually added, so it runs about once per
+ * config generation rather than on every heartbeat.
+ */
+async function nudgeHeaderBar() {
   try {
-    const existing = await syscall("config.get", "actionButtons", []);
-    const list = Array.isArray(existing) ? existing : [];
-    const present = list.map(function (button) {
-      return button && button.command;
-    });
+    await syscall("editor.showProgress");
+  } catch (e) {
+    // An older host, or no progress indicator. The button is in the config
+    // either way and the next render will pick it up.
+  }
+}
+
+/**
+ * The registration itself, serialized.
+ *
+ * Two calls in flight together — a page load and a heartbeat tick — would both
+ * read the key before either inserted, and the second would append a duplicate
+ * icon. Same lost-update shape as the collapse presses, same queue.
+ */
+let buttonQueue = Promise.resolve();
+
+function registerActionButtons() {
+  const work = applyRegisterActionButtons;
+  const next = buttonQueue.then(work, work);
+  buttonQueue = next.then(function () {}, function () {});
+  return next;
+}
+
+async function applyRegisterActionButtons() {
+  try {
+    const present = await configuredButtonCommands();
     const added = [];
     for (let i = 0; i < ACTION_BUTTONS.length; i++) {
       const button = ACTION_BUTTONS[i];
@@ -1664,12 +1763,37 @@ async function registerActionButtons() {
       await syscall("config.insert", "actionButtons", button);
       added.push(button.command);
     }
+    if (added.length > 0) await nudgeHeaderBar();
     return { ok: true, added };
   } catch (e) {
     // A host with no config.insert still gets the commands, which are the
     // plug's real surface. Never fail a page load over an icon.
     return { ok: false, error: e.message };
   }
+}
+
+/**
+ * How often the heartbeat actually looks: every fifth tick.
+ *
+ * Pure, so the interval is testable and stated in one place. One second is the
+ * client's own cron tick and is more often than a config clear can happen; a
+ * five-second window is imperceptible for an icon coming back and cuts the
+ * syscall traffic by four fifths.
+ */
+const BUTTON_CHECK_TICKS = 5;
+
+function shouldReassertButtons(tick) {
+  return tick % BUTTON_CHECK_TICKS === 0;
+}
+
+let buttonTick = 0;
+
+/** The heartbeat. Wired to `cron:secondPassed`; never throws. */
+async function heartbeatActionButtons() {
+  buttonTick++;
+  if (!shouldReassertButtons(buttonTick)) return { ok: true, checked: false };
+  const result = await registerActionButtons();
+  return { ok: true, checked: true, added: result.added ?? [] };
 }
 
 /**
@@ -2227,6 +2351,7 @@ const functionMapping = {
   toggleInline,
   toggleDensity,
   registerActionButtons,
+  heartbeatActionButtons,
   restoreInline,
   refreshInline,
   onDecorationClick,
@@ -2257,6 +2382,14 @@ const manifest = {
     registerActionButtons: {
       path: "./atomdown-inline.js:registerActionButtons",
       events: ["editor:init"],
+    },
+    // The self-healing half. `editor:reloadState` is deliberately NOT the
+    // event here: the client queues plug handlers and its own local listeners
+    // as concurrent promises, so this plug's first syscall and that handler's
+    // `config.clear()` race, and the clear wins.
+    heartbeatActionButtons: {
+      path: "./atomdown-inline.js:heartbeatActionButtons",
+      events: ["cron:secondPassed"],
     },
     // Both events matter: pageLoaded fires for a browser reload and for
     // navigating to another page, pageReloaded for reloading the page already
@@ -2336,6 +2469,8 @@ const internals = {
   densityTitle,
   densityClass,
   ACTION_BUTTONS,
+  shouldReassertButtons,
+  BUTTON_CHECK_TICKS,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,
