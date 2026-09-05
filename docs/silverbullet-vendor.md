@@ -106,9 +106,13 @@ serves the 2.9.0 blob and a 2.10.0 source build.
 Replace the embedded blob with a 2.10.0 build to remove the skew:
 
 ```sh
-scripts/build-wiki-blob.sh     # builds the blob and installs it
-scripts/build.sh --cgo         # rebuilds iugum around the new blob
+scripts/build-wiki-blob.sh     # builds the blob, installs it, rebuilds iugum
 ```
+
+One command, not two: the script's last step is `scripts/build.sh`, because
+`//go:embed` reads the blob at iugum's own compile time and a forgotten second
+build looks exactly like a plug change that did not work. Pass
+`IUGUM_BUILD_MODE=--static` to build the static program instead.
 
 `silverbullet/silverbullet` is the `//go:embed` target in `main.go` and is
 ignored by git, so that copy changes the built program, not the repository.

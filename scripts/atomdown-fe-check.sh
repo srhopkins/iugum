@@ -6,6 +6,15 @@
 #   scripts/atomdown-fe-check.sh --full     # the whole 16-cell matrix
 #   scripts/atomdown-fe-check.sh --rule 1   # one rule only
 #   scripts/atomdown-fe-check.sh --probe    # print what the views render
+#   scripts/atomdown-fe-check.sh --visual   # rule 9 only, the visual baselines
+#   scripts/atomdown-fe-check.sh --visual --update-snapshots
+#                                           # re-take the baselines, one command
+#
+# THE DEFAULT RUNS RULES 1 TO 9. Rule 9 compares images, in its own Playwright
+# project with its own browser policy (Playwright's bundled Chromium only,
+# headless only) — see plugs/atomdown-e2e/9-visual.test.ts. It is in the
+# default gate because the defect it exists for, a hover painting a white hole
+# in a coloured bar, is invisible to every other rule.
 #
 # A board or inline change is not done until this passes. It is also the
 # Definition-of-Done gate for a subagent working on either plug: run it, and
@@ -26,16 +35,22 @@ PW="$SB/node_modules/.bin/playwright"
 ARTIFACTS="${ATOMDOWN_FE_ARTIFACTS:-$ROOT/scratchpad/atomdown-fe-out}"
 
 FULL=0
-PROJECT="atomdown"
+# The default is TWO projects: the behavioural rules and the visual ones.
+PROJECTS=("atomdown" "visual")
 GREP=""
 PASSTHRU=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --full) FULL=1; shift ;;
-    --probe) PROJECT="probe"; shift ;;
-    --defects) PROJECT="defects"; shift ;;
-    --rule) GREP="$2"; shift 2 ;;
+    --probe) PROJECTS=("probe"); shift ;;
+    --defects) PROJECTS=("defects"); shift ;;
+    --visual) PROJECTS=("visual"); shift ;;
+    # A rule number picks the file, so it also picks the project: rule 9 is
+    # the visual one, 1 to 8 are behavioural.
+    --rule) GREP="$2"
+            if [ "$2" = "9" ]; then PROJECTS=("visual"); else PROJECTS=("atomdown"); fi
+            shift 2 ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) PASSTHRU+=("$1"); shift ;;
   esac
@@ -101,6 +116,25 @@ if [ ! -x "$PW" ]; then
   exit 1
 fi
 
+# --- The visual project's browser --------------------------------------------
+#
+# Rule 9 needs Playwright's OWN bundled Chromium and refuses to fall back to
+# the system Chrome the behavioural rules accept, because an auto-updating
+# browser is how two machines silently disagree about a pixel. Say so here, in
+# the runner, rather than letting the refusal arrive as a test failure.
+for proj in "${PROJECTS[@]}"; do
+  if [ "$proj" = "visual" ]; then
+    if ! ( cd "$SB" && node -e \
+      'const{chromium}=require("@playwright/test");require("node:fs").accessSync(chromium.executablePath())' \
+      >/dev/null 2>&1 ); then
+      say "ERROR: rule 9 needs Playwright's bundled Chromium, which is not installed"
+      say "       run once: cd silverbullet && npx playwright install chromium"
+      say "       or skip the visual rule: scripts/atomdown-fe-check.sh --rule 1"
+      exit 1
+    fi
+  fi
+done
+
 # --- The matrix ---------------------------------------------------------------
 if [ "$FULL" = 1 ]; then
   export ATOMDOWN_FE_FULL=1
@@ -110,7 +144,8 @@ else
 fi
 export ATOMDOWN_FE_ARTIFACTS="$ARTIFACTS"
 
-args=(test --config "$SUITE/playwright.config.ts" --project="$PROJECT")
+args=(test --config "$SUITE/playwright.config.ts")
+for proj in "${PROJECTS[@]}"; do args+=(--project="$proj"); done
 # Playwright takes a filename filter positionally.
 [ -n "$GREP" ] && args+=("$GREP-")
 [ ${#PASSTHRU[@]} -gt 0 ] && args+=("${PASSTHRU[@]}")
