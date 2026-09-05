@@ -771,23 +771,32 @@ export async function measureBoxes(
         // same card had a different position at every scroll stop and one
         // implicit card counted five or six times. Text is stable across a
         // scroll, which is the whole requirement.
-        // Two following siblings are included because a header widget
-        // measured on its own says only "no id" — identical for both implicit
-        // cards — while the line just below it is that card's own fenced code
-        // and tells them apart.
-        const near: Element[] = [...els];
-        let next = els[els.length - 1]?.nextElementSibling ?? null;
-        for (let i = 0; next && i < 2; i++) {
-          near.push(next);
-          next = next.nextElementSibling;
-        }
-        const text = near
+        // A header widget measured on its own says only "no id" — identical
+        // for both implicit cards — so the key needs the card's own first
+        // line of content, which for those two is their fenced code and
+        // differs.
+        //
+        // "The first following line that has text", not "the next two
+        // siblings". Counting siblings made the key depend on how CodeMirror
+        // had recycled its line elements at that moment, so the same card
+        // keyed differently at two scroll stops and the sweep counted 85 of 84
+        // cards. Content is stable across a scroll; DOM shape is not.
+        const own = els
           .map((el) => el.textContent ?? "")
           .join(" ")
           .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 120);
-        return `text:${text}`;
+          .trim();
+        let next = els[els.length - 1]?.nextElementSibling ?? null;
+        let following = "";
+        for (let i = 0; next && i < 6; i++) {
+          const t = (next.textContent ?? "").replace(/\s+/g, " ").trim();
+          if (t) {
+            following = t;
+            break;
+          }
+          next = next.nextElementSibling;
+        }
+        return `text:${own} | ${following}`.slice(0, 160);
       };
 
       const clips = (el: Element) => {
@@ -1150,21 +1159,23 @@ export async function sweepEach(
           if (id) return id;
           // A card with no Atomdown id — the implicit card a fenced code
           // block produces — has a header that reads only "no id", the same
-          // for every one of them. Two following siblings make it unique,
-          // because the line below the header is that card's own content.
-          // Without this the sweep visited 83 of 84 cards and said so.
-          const near: Element[] = [unit];
+          // for every one of them, so the key needs the card's own first line
+          // of content. Keyed on the first FOLLOWING LINE THAT HAS TEXT rather
+          // than on a fixed number of siblings: a sibling count makes the key
+          // depend on how CodeMirror had recycled its elements at that moment,
+          // and the same card then keys differently at two scroll stops.
+          const ownText = (unit.textContent ?? "").replace(/\s+/g, " ").trim();
           let next = unit.nextElementSibling;
-          for (let i = 0; next && i < 2; i++) {
-            near.push(next);
+          let following = "";
+          for (let i = 0; next && i < 6; i++) {
+            const t = (next.textContent ?? "").replace(/\s+/g, " ").trim();
+            if (t) {
+              following = t;
+              break;
+            }
             next = next.nextElementSibling;
           }
-          return `text:${near
-            .map((n) => n.textContent ?? "")
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 80)}`;
+          return `text:${ownText} | ${following}`.slice(0, 160);
         }),
         selector,
       );
