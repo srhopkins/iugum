@@ -93,6 +93,7 @@ The contract continues to apply: same verbs, same JSON or CLI form.
 | `tracker` | `run` | `iugum beads …` |
 | `beadview` | `serve` | `iugum beadview …` |
 | `wiki` | `serve` | `iugum wiki …` |
+| `wiki` | `stage` | `iugum stage-wiki-assets …` (build step; see `docs/wiki-space-assets.md`) |
 | `observe` | `ingest` | metric/log write |
 | `observe` | `query` | metric/log read |
 | `observe` | `serve` | `iugum observe …` |

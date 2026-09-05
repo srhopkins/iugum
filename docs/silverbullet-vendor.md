@@ -76,9 +76,17 @@ IUGUM_WIKI_SB_SRC=./silverbullet ./iugum wiki --port 3010 ./wiki
 ```
 
 The source build runs `npm install` when `node_modules` is absent, then
-`make build-rs`, and runs `silverbullet/target/release/silverbullet`.
-It needs `make`, `npm`, and `cargo` on PATH. Both build outputs
-(`target/`, `node_modules/`) are ignored by `silverbullet/.gitignore`.
+`npm run build`, then `iugum`'s own space-asset staging step, then
+`cargo build --release -p silverbullet`, and runs
+`silverbullet/target/release/silverbullet`. It needs `npm` and `cargo` on PATH.
+Both build outputs (`target/`, `node_modules/`) are ignored by
+`silverbullet/.gitignore`.
+
+Those are the two halves of `make build-rs` with the staging step between them.
+The atomdown plugs and their CSS go into `client_bundle/base_fs`, which
+`npm run build` writes and `cargo build` compiles into the binary, so the
+staging has to land in the middle. See
+[`wiki-space-assets.md`](wiki-space-assets.md).
 
 The build takes minutes. It is cached: a second run reuses the artifact unless
 you set `IUGUM_WIKI_SB_REBUILD=1`.
@@ -98,10 +106,15 @@ serves the 2.9.0 blob and a 2.10.0 source build.
 Replace the embedded blob with a 2.10.0 build to remove the skew:
 
 ```sh
-IUGUM_WIKI_SB_SRC=./silverbullet ./iugum wiki --port 3010 ./wiki   # builds it
-cp silverbullet/target/release/silverbullet silverbullet/silverbullet
-scripts/build.sh --cgo
+scripts/build-wiki-blob.sh     # builds the blob and installs it
+scripts/build.sh --cgo         # rebuilds iugum around the new blob
 ```
 
 `silverbullet/silverbullet` is the `//go:embed` target in `main.go` and is
 ignored by git, so that copy changes the built program, not the repository.
+
+Use `scripts/build-wiki-blob.sh` rather than a bare `make build-rs` plus a
+`cp`. The script stages iugum's space assets into `client_bundle/base_fs`
+between the npm and cargo halves of the build. A blob built without that step
+serves the atomdown card view with no CSS and no header button, and
+`iugum wiki` says so at startup.
