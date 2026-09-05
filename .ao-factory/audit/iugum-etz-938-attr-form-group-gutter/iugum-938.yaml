@@ -1,0 +1,8 @@
+bead: iugum-938
+namespace: iugum-etz-938-attr-form-group-gutter
+search_query: "Group controls must sit outside the container like card controls"
+candidates: []
+associated_issues: [iugum-etz]
+duplicate_issues: none
+checked_at: 2026-09-05T23:10:37Z
+written_by: ayo-related-set
