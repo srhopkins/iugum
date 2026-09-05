@@ -772,10 +772,20 @@ function gripLine(unit) {
   return contentFirstLine(unit);
 }
 
-/** The drag handle, the same six-dot glyph and hover rule the board uses. */
+/**
+ * The drag handle, the same six-dot glyph and hover rule the board uses.
+ *
+ * `tabindex="0"`, so the grip can take keyboard focus. The stylesheet has had
+ * a `.atomdown-grip:focus` rule since it was written, and without a tabindex
+ * that rule was unreachable: `.focus()` on a plain span does nothing, so a
+ * hover-only control had no keyboard route to being visible at all. The grip
+ * has no keyboard ACTION - a drag needs a pointer - but it names itself, so a
+ * reader tabbing through the page is told the block is movable rather than
+ * landing on something invisible.
+ */
 function gripHtml(title) {
-  return '<span class="atomdown-grip" title="' + escapeHtml(title) +
-    '">&#10303;</span>';
+  return '<span class="atomdown-grip" role="button" tabindex="0" title="' +
+    escapeHtml(title) + '">&#10303;</span>';
 }
 
 /**
@@ -1151,7 +1161,10 @@ function buildDecorations(
     // keeps the grip, the menu and the directive peek working identically at
     // both densities; a density that dropped the widget would have to rebuild
     // those three controls somewhere else.
-    const isOpen = menuOpenForCard(open, boxKey);
+    // The OPEN key is the widget name with its `box:` prefix off, because
+    // that is the form `widgetBoxKey` hands the click handler. Comparing the
+    // raw widget name against it never matched, so no card popover opened.
+    const isOpen = menuOpenForCard(open, cardOpenKey(boxKey));
     widgets.push({
       id: boxKey,
       at: box.from,
@@ -1604,6 +1617,15 @@ let activeDensity = "comfortable";
  * Shape: `{ kind: "card", boxKey }` or `{ kind: "group", unitKey }`.
  */
 let openMenu = null;
+
+/**
+ * The key a card's popover is remembered under: its widget name without the
+ * `box:` prefix, which is the form `widgetBoxKey` produces from a click.
+ */
+function cardOpenKey(boxKey) {
+  const key = String(boxKey == null ? "" : boxKey);
+  return key.indexOf("box:") === 0 ? key.slice("box:".length) : key;
+}
 
 /** Is this card's popover the open one? */
 function menuOpenForCard(open, boxKey) {
@@ -2694,6 +2716,7 @@ const internals = {
   widgetBoxKey,
   cardMenuItems,
   groupMenuItems,
+  cardOpenKey,
   menuPopoverHtml,
   menuActionFromClasses,
   menuOpenForCard,
