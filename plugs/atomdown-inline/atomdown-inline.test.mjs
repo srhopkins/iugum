@@ -928,12 +928,15 @@ test("firstUnitKey reads past a selection mark to the unit mark", () => {
   assert.equal(firstUnitKey(undefined), null);
 });
 
+/** The units of PAGE, the second argument every drag request is read against. */
+const PAGE_UNITS = computeUnits(PAGE).units;
+
 test("a drag reports the unit under the handle and the unit under the drop", () => {
   const request = dragToReorder({
     marks: ["unit:atom:4P8W2H6K"],
     targetMarks: ["unit:group:7K3M9X2D", "card:7K3M9X2D:1"],
     placement: "after",
-  }, ["atom:4P8W2H6K", "group:7K3M9X2D"]);
+  }, PAGE_UNITS);
   assert.deepEqual(request, {
     movedUnitKey: "atom:4P8W2H6K",
     targetUnitKey: "group:7K3M9X2D",
@@ -947,47 +950,142 @@ test("a drag onto a group member moves the whole group", () => {
     marks: ["unit:group:7K3M9X2D", "card:7K3M9X2D:0"],
     targetMarks: ["unit:atom:implicit-1"],
     placement: "before",
-  }, ["group:7K3M9X2D", "atom:implicit-1"]);
+  }, PAGE_UNITS);
   assert.equal(request.movedUnitKey, "group:7K3M9X2D");
 });
 
 test("a drop on the block it came from asks for nothing", () => {
   assert.equal(
     dragToReorder({
-      marks: ["unit:atom:A"],
-      targetMarks: ["unit:atom:A"],
+      marks: ["unit:atom:4P8W2H6K"],
+      targetMarks: ["unit:atom:4P8W2H6K"],
       placement: "after",
-    }, ["atom:A"]),
+    }, PAGE_UNITS),
     null,
   );
 });
 
 test("a drag with no unit under the handle asks for nothing", () => {
   assert.equal(
-    dragToReorder({ marks: [], targetMarks: ["unit:atom:A"] }, ["atom:A"]),
+    dragToReorder({
+      marks: [],
+      targetMarks: ["unit:atom:4P8W2H6K"],
+    }, PAGE_UNITS),
     null,
   );
 });
 
-test("a drop past every block lands at the end of the page", () => {
+// --- A RELEASE THAT COVERS NO UNIT (iugum-uuv) -----------------------------
+//
+// The grip lives in the page gutter, so the natural gesture — press the grip
+// and travel straight down — releases over the blank line between two cards
+// as often as over a card. A blank line is a unit BOUNDARY and carries no
+// unit mark, so `targetMarks` comes back empty. That used to mean "the end of
+// the document", and Steve dragged the first card down one position and
+// watched it land at the bottom of an 84-card page.
+//
+// The answer is the board panel's `pickDropTarget` rule, stated in lines
+// instead of pixels: the drop goes BEFORE the first unit that begins at or
+// after the release line. Card order IS document order in this view, so the
+// next unit in source order and the next unit down the page are the same unit,
+// and no rectangle has to be measured to find it.
+
+test("a release on the blank line between two units drops before the next one", () => {
+  // PAGE line 5 (1-based) is the blank line between the claim and the group.
   assert.deepEqual(
     dragToReorder({
-      marks: ["unit:atom:A"],
+      marks: ["unit:atom:implicit-1"],
       targetMarks: [],
+      targetLine: 5,
       placement: "after",
-    }, ["atom:A", "atom:B"]),
-    { movedUnitKey: "atom:A", targetUnitKey: null, placement: "end" },
+    }, PAGE_UNITS),
+    {
+      movedUnitKey: "atom:implicit-1",
+      targetUnitKey: "group:7K3M9X2D",
+      placement: "before",
+    },
   );
 });
 
-test("a drop above every block lands at the start of the page", () => {
+test("a release on the blank line after a group drops before the next unit", () => {
+  // Line 13: between the group's closing marker and the implicit paragraph.
   assert.deepEqual(
     dragToReorder({
-      marks: ["unit:atom:B"],
+      marks: ["unit:atom:4P8W2H6K"],
+      targetMarks: [],
+      targetLine: 13,
+      placement: "before",
+    }, PAGE_UNITS),
+    {
+      movedUnitKey: "atom:4P8W2H6K",
+      targetUnitKey: "atom:implicit-1",
+      placement: "before",
+    },
+  );
+});
+
+test("a release above every unit drops before the first one", () => {
+  // Line 2: the blank line under the document marker. The claim is first, so
+  // this is the start of the page — and it must not reach the marker itself.
+  assert.deepEqual(
+    dragToReorder({
+      marks: ["unit:group:7K3M9X2D"],
+      targetMarks: [],
+      targetLine: 2,
+      placement: "before",
+    }, PAGE_UNITS),
+    {
+      movedUnitKey: "group:7K3M9X2D",
+      targetUnitKey: "atom:4P8W2H6K",
+      placement: "before",
+    },
+  );
+});
+
+test("a release past every unit still lands at the end of the page", () => {
+  // Line 16: the trailing blank line, below the last unit.
+  assert.deepEqual(
+    dragToReorder({
+      marks: ["unit:atom:4P8W2H6K"],
+      targetMarks: [],
+      targetLine: 16,
+      placement: "after",
+    }, PAGE_UNITS),
+    {
+      movedUnitKey: "atom:4P8W2H6K",
+      targetUnitKey: null,
+      placement: "end",
+    },
+  );
+});
+
+test("a release in the gap right above the dragged unit asks for nothing", () => {
+  // Line 13 resolves to the implicit paragraph, which is the unit being
+  // dragged: the reader dropped it where it already is.
+  assert.equal(
+    dragToReorder({
+      marks: ["unit:atom:implicit-1"],
+      targetMarks: [],
+      targetLine: 13,
+      placement: "before",
+    }, PAGE_UNITS),
+    null,
+  );
+});
+
+test("a release the seam could not place at all lands at the end", () => {
+  // No `targetLine`: nothing to resolve against, so the old fallback stands.
+  assert.deepEqual(
+    dragToReorder({
+      marks: ["unit:atom:4P8W2H6K"],
       targetMarks: [],
       placement: "before",
-    }, ["atom:A", "atom:B"]),
-    { movedUnitKey: "atom:B", targetUnitKey: null, placement: "start" },
+    }, PAGE_UNITS),
+    {
+      movedUnitKey: "atom:4P8W2H6K",
+      targetUnitKey: null,
+      placement: "end",
+    },
   );
 });
 

@@ -217,6 +217,21 @@ box also must not cover the blank line between two blocks, because that blank
 line IS the gap between two cards. So the range that draws the box is not the
 range that identifies the unit, and separating them is what makes both correct.
 
+**Which means a release can land on no mark at all, and that is where a drop
+goes wrong.** The blank line between two cards belongs to neither box, so a
+drag released there reports an empty `targetMarks`. It is not a rare miss: the
+grip is in the gutter, so the natural gesture is to press it and travel
+straight down, and the seam under a card is exactly what the pointer crosses.
+`dragToReorder` therefore resolves such a release BY POSITION — the drop goes
+before the first unit that begins at or after the release line, and only a
+release past the last unit is the end of the document. Card order IS document
+order here, so the next unit down the page and the next unit in source order
+are the same unit, and no rectangle has to be measured. Reading the empty
+target as "the end of the page" instead is `iugum-uuv`: the first card,
+dragged down one position, landed at the bottom of an 84-card page. Guarded by
+rule 8i (`plugs/atomdown-e2e/8-drag-drop.test.ts`), which asserts the whole
+resulting unit order.
+
 Mark ids are namespaced, and that is load-bearing. The seam reports covering
 marks outermost first, so a drag that starts inside a group reads
 `unit:group:...` before `card:...` and moves the whole group — which is what an

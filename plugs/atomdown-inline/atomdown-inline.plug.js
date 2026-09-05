@@ -1380,15 +1380,41 @@ function widgetBoxKey(event) {
  * Turns one `editor:decorationDrag` payload into a reorder request.
  *
  * The origin is whichever unit mark covered the handle. The target is
- * whichever unit mark covered the release point; a release outside every unit
- * (the document marker, or the blank space past the last block) becomes a drop
- * at the start or the end of the document, decided by which end of the page
- * the pointer was nearer.
+ * whichever unit mark covered the release point.
  *
- * Returns null when the gesture asks for nothing: no origin, or a drop on the
- * unit that was picked up.
+ * A RELEASE THAT COVERS NO UNIT IS RESOLVED BY POSITION, and that is the fix
+ * for the defect Steve found on the live page: he dragged the first card down
+ * one position and it landed at the bottom of an 84-card document.
+ *
+ * Why the miss happens at all. Both controls now sit in the page gutter, so
+ * the natural gesture is to press the grip and travel straight down the
+ * gutter. The seam maps the release point to a document position with
+ * `posAtCoords`, and the vertical band of the next card's header widget maps
+ * to the BLANK LINE between the two cards. A blank line is a unit boundary, so
+ * no unit mark covers it and `targetMarks` arrives empty. Measured on the real
+ * fixture (`plugs/atomdown-e2e/drag-probe.test.ts`): releasing 80px and 100px
+ * below the first card's grip both reported `targetMarks: []`, and the card
+ * moved from index 0 to index 81.
+ *
+ * The old fallback then read `placement` — a side computed against the blank
+ * LINE's own midpoint, which says nothing about which two units the pointer
+ * was between — and asked for the start or the end of the whole document.
+ *
+ * The rule now is the board panel's `pickDropTarget` rule, stated in lines
+ * rather than pixels: THE DROP GOES BEFORE THE FIRST UNIT THAT BEGINS AT OR
+ * AFTER THE RELEASE LINE. Card order IS document order in this view, so the
+ * next unit down the page and the next unit in source order are the same unit,
+ * and the seam's reported line is already the geometric answer — no rectangle
+ * has to be measured, and the seam needs no new field. Past the last unit is
+ * still the end of the document; above the first unit resolves to "before the
+ * first unit", which is the start of the page and cannot reach the document
+ * marker above it.
+ *
+ * `units` is `computeUnits(text).units` — the units in document order, each
+ * with the 0-based `startLine` this reads. Returns null when the gesture asks
+ * for nothing: no origin, or a drop on the unit that was picked up.
  */
-function dragToReorder(event, unitOrder) {
+function dragToReorder(event, units) {
   const moved = firstUnitKey(event && event.marks);
   if (!moved) return null;
   const target = firstUnitKey(event && event.targetMarks);
@@ -1400,12 +1426,28 @@ function dragToReorder(event, unitOrder) {
       placement: event.placement === "before" ? "before" : "after",
     };
   }
-  const movedIndex = (unitOrder || []).indexOf(moved);
-  const atTop = event.placement === "before" && movedIndex !== 0;
+  // The seam's `targetLine` is 1-based.
+  const line = event && typeof event.targetLine === "number"
+    ? event.targetLine - 1
+    : null;
+  if (line !== null) {
+    const next = (units || []).find(function (unit) {
+      return unit && typeof unit.startLine === "number" &&
+        unit.startLine >= line;
+    });
+    if (next) {
+      if (next.unitKey === moved) return null;
+      return {
+        movedUnitKey: moved,
+        targetUnitKey: next.unitKey,
+        placement: "before",
+      };
+    }
+  }
   return {
     movedUnitKey: moved,
     targetUnitKey: null,
-    placement: atTop ? "start" : "end",
+    placement: "end",
   };
 }
 
@@ -2044,12 +2086,17 @@ async function refreshInline() {
   }
 }
 
-/** The unit order of the page as it is now, for the contiguity rule. */
+/**
+ * The units of the page as it is now: their keys in order for the contiguity
+ * rule, and the units themselves for the line a drag was released on.
+ */
 async function currentUnitOrder() {
   const text = await syscall("editor.getText");
+  const units = computeUnits(text).units;
   return {
     text,
-    order: computeUnits(text).units.map(function (unit) {
+    units,
+    order: units.map(function (unit) {
       return unit.unitKey;
     }),
   };
@@ -2182,7 +2229,7 @@ async function onDecorationDrag(event) {
   if (!event) return { ok: true };
   if (!(await isInlineOn(event.page))) return { ok: true };
   const current = await currentUnitOrder();
-  const request = dragToReorder(event, current.order);
+  const request = dragToReorder(event, current.units);
   if (!request) return { ok: true, unchanged: true };
 
   const result = reorderUnit(
