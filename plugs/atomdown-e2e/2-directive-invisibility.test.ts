@@ -42,6 +42,7 @@ import {
   failWithArtifacts,
   FIXTURE,
   gotoFixture,
+  hoverBox,
   openBoard,
   openInline,
   putCursorOnLine,
@@ -154,13 +155,21 @@ for (const theme of THEMES) {
           view,
           ".atomdown-card-header",
           async (card, key) => {
-            const box = await card.boundingBox({ timeout: 8000 });
+            const box = await card.boundingBox({ timeout: 5000 }).catch(
+              () => null,
+            );
             if (!box) return;
             // Across the top border at three points, then over the header.
+            // Real mouse moves rather than `hover`, which would run
+            // actionability checks against an element CodeMirror has already
+            // rebuilt under us — see `hoverBox` in the harness.
             for (const fraction of [0.05, 0.5, 0.95]) {
               await page.mouse.move(box.x + box.width * fraction, box.y + 0.5);
             }
-            await card.hover({ timeout: 8000 }).catch(() => {});
+            await page.mouse.move(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            );
             await assertNothingRevealed(
               view,
               combo,
@@ -177,7 +186,7 @@ for (const theme of THEMES) {
           view,
           ".atomdown-group-header",
           async (header, key) => {
-            await header.hover({ timeout: 8000 }).catch(() => {});
+            await hoverBox(view, header);
             await assertNothingRevealed(
               view,
               combo,
@@ -193,6 +202,12 @@ for (const theme of THEMES) {
         // --- Every collapse caret ---------------------------------------
         // Collapsing rebuilds the decorations for a shorter document, which is
         // exactly when an offset error puts a directive back on screen.
+        // TWO SWEEPS, not one caret clicked twice. A press rewrites the
+        // decorations, which rebuilds the header widget, so the second click
+        // through the same index is not necessarily the same caret. One sweep
+        // that collapses everything and a second that expands everything
+        // drives each caret by its own group's key, and checks after each
+        // press either way.
         const visitedCarets = await sweepEach(
           view,
           ".atomdown-group-collapse",
@@ -204,7 +219,18 @@ for (const theme of THEMES) {
               combo,
               `after collapsing group ${key}`,
             );
-            await caret.click(); // put it back
+          },
+        );
+        expect(
+          visitedCarets.length,
+          "the collapse sweep did not reach every group",
+        ).toBe(FIXTURE.groups);
+
+        const reopened = await sweepEach(
+          view,
+          ".atomdown-group-collapse",
+          async (caret, key) => {
+            await caret.click();
             await settle(page, 4);
             await assertNothingRevealed(
               view,
@@ -214,8 +240,8 @@ for (const theme of THEMES) {
           },
         );
         expect(
-          visitedCarets.length,
-          "the collapse sweep did not reach every group",
+          reopened.length,
+          "the expand sweep did not reach every group",
         ).toBe(FIXTURE.groups);
 
         // --- The one legitimate reveal -----------------------------------

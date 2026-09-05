@@ -60,12 +60,13 @@ All eight are delivered.
    listener.
 5. **Folds.** `folds` names a source range the editor's own folding can
    collapse, for a region that is not a syntax node. Collapsing is
-   **declarative in both directions**: `folds[].collapsed` says what the caller
-   wants and the seam makes the editor's fold set match it, and
-   `foldedFroms` on the click event says what the editor actually has. A
-   collapse control needs both. With only the write half, a control has to
-   remember what it last did, and it is wrong from the first fold anyone makes
-   from the gutter.
+   **declarative**: `folds[].collapsed` says what the caller wants and the seam
+   makes the editor's fold set match it on every update. So the flag owns the
+   state of a configured range - a fold made from the gutter, by the fold
+   command, or by CodeMirror's own "clear the folds covering the cursor" rule
+   is put back - and a control driven by the flag cannot go out of step. The
+   one exception is the reader's: a range holding the text cursor is never
+   folded, because that would hide the cursor inside it.
 6. **Gestures.** `gestures` turns on a drag of one decorated range onto another
    (`editor:decorationDrag`) and a rubber-band sweep over decorated ranges
    (`editor:decorationLasso`).
@@ -142,7 +143,7 @@ Event payloads:
 
 | Event | Fields |
 |---|---|
-| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `foldedFroms`, `metaKey`, `ctrlKey`, `altKey` |
+| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
 | `editor:decorationSelect` | `page`, `from`, `to`, `marks` |
 | `editor:decorationDrag` | `page`, `from`, `to`, `marks`, `targetFrom`, `targetTo`, `targetMarks`, `targetLine`, `placement`, modifier flags |
 | `editor:decorationLasso` | `page`, `from`, `to`, `fromLine`, `toLine`, `marks`, `ranges`, modifier flags |
@@ -150,12 +151,12 @@ Event payloads:
 `marks` lists are **outermost first**, so a caller that nests ranges reads
 element 0 and gets the outer one.
 
-`foldedFroms` is the `from` offset of every configured fold range that is
-folded at the moment of the click. Offsets rather than indices, because the
-caller's own list can be rebuilt between the click and the handler while a
-`from` is a document position both sides compute the same way. A caret that
-reads it decides fold-or-unfold from the editor rather than from memory, so it
-can never go one press out of step.
+`widget` is the name the caller put on the widget, and it is the ONLY safe way
+to tell which unit a control in a widget belongs to. `pos` for a click in a
+block widget is the nearest TEXT, which is a neighbouring range's once anything
+between is folded, so `marks` names the wrong unit there. A press on widget
+chrome also does not move the text cursor: `pos` says where the click was, and
+nothing more.
 
 Mark, widget and fold offsets are read once, at editor state build time. The
 seam then maps them through your edits, so a mark stays on the text it was put

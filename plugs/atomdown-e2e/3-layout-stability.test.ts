@@ -37,6 +37,7 @@ import {
   failWithArtifacts,
   FIXTURE,
   gotoFixture,
+  hoverBox,
   openBoard,
   openInline,
   putCursorOnLine,
@@ -111,12 +112,14 @@ async function checkStable(
         `bug than one that moves it.` +
         (step.what.includes("collapse")
           ? ` A group left FOLDED does this: the folded lines leave the DOM, ` +
-            `so the card inside them cannot be measured. In the inline view ` +
-            `that is the caret's known fold/unfold drift — it alternates from ` +
-            `memory because the host offers editor.fold and editor.unfold but ` +
-            `no read of the fold state (see the inline plug's README, "Known ` +
-            `limits"). Check whether the group actually reopened before ` +
-            `looking for a layout bug.`
+            `so the card inside them cannot be measured. Check whether every ` +
+            `group actually reopened before looking for a layout bug. Four ` +
+            `separate causes have produced exactly this symptom: a click in a ` +
+            `widget naming the wrong group, CodeMirror clearing a fold under ` +
+            `the text cursor, two presses racing on one collapsed set, and a ` +
+            `hand-copied plug bundle in the space's _plug directory running ` +
+            `the plug a second time. See the inline plug's README, "The ` +
+            `collapse caret".`
           : ``),
     );
   }
@@ -157,7 +160,7 @@ for (const theme of THEMES) {
                 view,
                 ".atomdown-card-header",
                 async (card) => {
-                  await card.hover().catch(() => {});
+                  await hoverBox(view, card);
                 },
               );
               expect(visited.length).toBe(FIXTURE.cards);
@@ -176,7 +179,7 @@ for (const theme of THEMES) {
                 view,
                 ".atomdown-group-header",
                 async (h) => {
-                  await h.hover().catch(() => {});
+                  await hoverBox(view, h);
                 },
               );
               expect(visited.length).toBe(FIXTURE.groups);
@@ -248,12 +251,13 @@ for (const theme of THEMES) {
                 view,
                 ".board-card-header",
                 async (c) => {
-                  // `force`: at compact density the header is a
-                  // `pointer-events: none` overlay by design, so the
-                  // hit-target check can never pass and a plain hover sits
-                  // there until the test times out. The move still lands where
-                  // a reader's pointer lands.
-                  await c.hover({ force: true }).catch(() => {});
+                  // A real mouse move, not `hover`. At compact density the
+                  // header is a `pointer-events: none` overlay by design, so
+                  // the hit-target check can never pass; and the element is
+                  // rebuilt under the locator anyway. The move lands where a
+                  // reader's pointer lands, and the browser delivers the event
+                  // to whatever is topmost, exactly as it does for a reader.
+                  await hoverBox(view, c);
                 },
               );
               expect(visited.length).toBe(FIXTURE.cards);

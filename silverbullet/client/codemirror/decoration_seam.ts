@@ -256,23 +256,6 @@ export type DecorationClickEvent = {
   marks: string[];
   /** `id` (or `class`) of the widget clicked, when the click was in one. */
   widget?: string;
-  /**
-   * The `from` offset of every configured fold range that is folded RIGHT NOW.
-   *
-   * This is the read of the fold state the syscall surface does not offer, and
-   * a collapse control needs it. `collapsed` makes the seam reconcile the
-   * editor to the caller's flag, which makes the control idempotent — but a
-   * caller that keeps the flag in its own memory still has to guess the
-   * current state, and it guesses wrong the moment the reader folds the same
-   * range from the gutter or with a command. A control that reads this decides
-   * fold-or-unfold from the editor rather than from memory, so it can never go
-   * one press out of step.
-   *
-   * Offsets, not indices: the caller's own list can be rebuilt between the
-   * click and the handler, and a `from` is a position in the document both
-   * sides compute the same way.
-   */
-  foldedFroms: number[];
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
@@ -807,8 +790,10 @@ function liveMarks(
 /**
  * The `from` offset of every configured fold range the editor has folded now.
  *
- * Exported because it is the read half of the fold contract, and a test that
- * cannot call it can only assert the reconciler's own behaviour.
+ * The read half of the fold contract, and what makes the reconciliation below
+ * a comparison rather than a blind re-application: the seam can only dispatch
+ * the difference if it can see what the editor already has. Exported because a
+ * test that cannot call it can only assert the reconciler's own behaviour.
  */
 export function foldedConfiguredFroms(
   state: EditorState,
@@ -838,8 +823,6 @@ function clickHandler(
   return EditorView.domEventHandlers({
     click: (event: MouseEvent, view: EditorView) => {
       if (event.button !== 0) return;
-      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      if (pos === null) return;
       let lineClasses: string[] = [];
       const classes: string[] = [];
       let widget: string | undefined;
@@ -863,6 +846,22 @@ function clickHandler(
           widget = widgetEl.dataset.decorationId ?? "";
         }
       }
+      // WHERE THE CLICK WAS, and a widget's own position when the editor
+      // cannot say.
+      //
+      // `posAtCoords` returns null for a point it cannot map to text, and a
+      // block widget above a FOLDED range is exactly such a point: the lines
+      // it would map to are not in the layout. Returning early there made a
+      // collapse caret dead for every group but the first once several groups
+      // were shut — ten clicks out of eleven never reached the plug at all.
+      // A widget carries the offset it was configured at, which is the
+      // position the caller meant anyway.
+      let pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null && widget !== undefined) {
+        const rule = config.widgets.find((w) => ruleName(w) === widget);
+        if (rule) pos = Math.min(rule.at, view.state.doc.length);
+      }
+      if (pos === null) return;
       const payload: DecorationClickEvent = {
         page: pageName,
         pos,
@@ -873,7 +872,6 @@ function clickHandler(
           marksIn(liveMarks(view.state, field, config), pos, pos),
         ),
         ...(widget !== undefined ? { widget } : {}),
-        foldedFroms: foldedConfiguredFroms(view.state, field, config),
         metaKey: event.metaKey,
         ctrlKey: event.ctrlKey,
         altKey: event.altKey,
@@ -918,9 +916,26 @@ function selectionWatcher(
 /**
  * Make the editor's own fold set match the `collapsed` flags in the config.
  *
- * The reconciliation runs after a state build and after any transaction that
- * brought a new config value, and it dispatches its own transaction, so it is
- * queued to a microtask rather than run inside the update it observed.
+ * THE FLAGS OWN THE STATE OF A CONFIGURED RANGE, CONTINUOUSLY, and that is
+ * what makes a collapse control race-free. An earlier version reconciled only
+ * when the config value changed, which left a window in which the editor and
+ * the flags disagreed — and a caret pressed inside that window read the
+ * editor, decided from the stale answer, and undid the press before it.
+ * Measured on 11 groups: reopening them one press each left between zero and
+ * nine of them shut, differently on every run. Reconciling on every update
+ * closes the window: the two can only disagree for the microtask between a
+ * change and this plugin's own dispatch.
+ *
+ * That also absorbs an out-of-band fold. A group folded from the gutter, or by
+ * the fold command, or by CodeMirror's own "clear the folds covering the
+ * selection head" rule, is put back to what the flags say. The caller's caret
+ * is therefore the only thing that decides whether a configured region is
+ * shut, which is the whole point of declaring it.
+ *
+ * ONE EXCEPTION, and it is the reader's: a range holding the text cursor is
+ * never folded. CodeMirror unfolds a range the cursor moves into, and folding
+ * it again would hide the cursor inside a collapsed region and trap it. The
+ * flag is restored as soon as the cursor leaves.
  *
  * Only ranges the caller actually configured are touched. A fold the reader
  * made somewhere else in the document is never disturbed.
@@ -935,13 +950,11 @@ function foldReconciler(field: StateField<SeamState>) {
       }
 
       update(update: ViewUpdate) {
-        const before = update.startState.field(field, false);
-        const after = update.state.field(field, false);
-        if (!after) return;
-        // A new config value, or a doc change that moved the ranges.
-        if (!before || before.source !== after.source || update.docChanged) {
-          this.schedule();
-        }
+        // EVERY update, not only a config change. `reconcile` dispatches
+        // nothing when the editor already agrees with the flags, so the cost
+        // of this is one set comparison over the configured ranges.
+        if (!update.state.field(field, false)) return;
+        this.schedule();
       }
 
       private schedule() {
@@ -960,11 +973,15 @@ function foldReconciler(field: StateField<SeamState>) {
         const folded = new Set(
           foldedConfiguredFroms(state, field, seam.config),
         );
+        const head = state.selection.main.head;
         const effects = [];
         for (const fold of seam.folds) {
           const want = fold.collapsed === true;
           const have = folded.has(fold.from);
-          if (want && !have) {
+          // The reader's cursor wins: folding a range it sits in would hide
+          // the cursor inside a collapsed region.
+          const holdsCursor = head > fold.from && head < fold.to;
+          if (want && !have && !holdsCursor) {
             effects.push(foldEffect.of({ from: fold.from, to: fold.to }));
           } else if (!want && have) {
             effects.push(unfoldEffect.of({ from: fold.from, to: fold.to }));

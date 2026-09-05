@@ -31,6 +31,7 @@
 
 import { test } from "@playwright/test";
 import {
+  boardFrame,
   boardViewMode,
   type Combo,
   combos,
@@ -370,12 +371,16 @@ for (const theme of THEMES) {
         // This is the close-then-reload defect verbatim. The close path used
         // to forget the page AFTER hiding the panel, so `restoreBoard` on the
         // next `editor:pageLoaded` still saw the open flag and reopened it.
-        view = await openBoard(page).catch(async () => {
-          const iframe = page.locator(".sb-modal .sb-panel iframe");
-          const handle = await iframe.elementHandle();
-          const frame = await handle!.contentFrame();
-          return { ...view, ev: frame! };
-        });
+        // TAKE THE FRAME, DO NOT RE-OPEN. The panel is already open after the
+        // reload — the assertion above just proved it — and `openBoard` runs
+        // the toggle command, so calling it here CLOSED the panel and then
+        // waited three minutes for an iframe that was never coming back.
+        const openFrame = await boardFrame(page);
+        if (openFrame) {
+          view = { ...view, ev: openFrame };
+        } else {
+          view = await openBoard(page);
+        }
         await view.ev.locator("#atomdown-board-close").click();
         await page
           .locator(".sb-modal .sb-panel iframe")

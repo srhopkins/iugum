@@ -1301,70 +1301,6 @@ function toggleCollapsed(ids, groupId) {
   return out.filter(function (_, i) { return i !== at; });
 }
 
-/**
- * Every group's foldable range, as the offsets the decorations use.
- *
- * The offsets have to be computed exactly the way `buildDecorations` computes
- * its `folds` entries — the hidden part starts at the END of the group's
- * opening marker line and ends at the end of its closing marker line — because
- * the editor reports its fold state by `from` offset, and an offset that
- * differs by one character matches no group at all.
- */
-function groupFoldRanges(sourceText) {
-  const scan = computeUnits(sourceText);
-  const lines = scan.lines;
-  const starts = lineStarts(lines);
-  const out = [];
-  scan.units.forEach(function (unit) {
-    if (unit.kind !== "group") return;
-    const from = starts[unit.startLine] + lines[unit.startLine].length;
-    const to = starts[unit.endLine] + lines[unit.endLine].length;
-    if (to > from) out.push({ groupId: unit.groupId, from: from, to: to });
-  });
-  return out;
-}
-
-/**
- * The collapsed set after one press of one group's caret.
- *
- * THIS IS WHY THE CARET CANNOT GO OUT OF STEP. `foldedFroms` is what the
- * EDITOR reports folded at the moment of the click, so every group other than
- * the pressed one takes its flag from the editor: a group the reader folded
- * from the gutter or with the fold command is adopted rather than contradicted.
- * The pressed group takes the OPPOSITE of what the editor has, so a press
- * always changes something, and nothing at all is carried over from the last
- * press. The previous version alternated a remembered flag, which was right
- * until anything else folded the same range once — after that the caret was
- * permanently one press behind and the group would not reopen.
- *
- * `remembered` is the fallback for a client whose seam does not report the fold
- * state: the control then alternates as it used to, which is worse but still
- * works.
- */
-function collapsedFromFolds(sourceText, foldedFroms, pressedGroupId, remembered) {
-  const known = Array.isArray(foldedFroms);
-  const prior = dedupeKeys(remembered || []);
-  const out = [];
-  let sawPressed = false;
-  groupFoldRanges(sourceText).forEach(function (range) {
-    const folded = known
-      ? foldedFroms.indexOf(range.from) !== -1
-      : prior.indexOf(range.groupId) !== -1;
-    if (range.groupId === pressedGroupId) {
-      sawPressed = true;
-      if (!folded) out.push(range.groupId);
-      return;
-    }
-    if (folded) out.push(range.groupId);
-  });
-  if (!sawPressed && prior.indexOf(pressedGroupId) === -1) {
-    // A group with nothing to fold still draws a caret. Keep its flag
-    // flipping, so the glyph reports what the reader last asked for.
-    out.push(pressedGroupId);
-  }
-  return dedupeKeys(out);
-}
-
 /** True only when this exact page was left with the inline view on. */
 async function isInlineOn(pageName) {
   if (!pageName) return false;
@@ -1595,10 +1531,7 @@ async function onDecorationClick(event) {
   // nearest text, which is the wrong group's range once a neighbouring group
   // is folded.
   if (classes.indexOf("atomdown-group-collapse") !== -1) {
-    return await collapseGroup(
-      widgetUnitKey(event) ?? firstUnitKey(event.marks),
-      event.foldedFroms,
-    );
+    return await collapseGroup(widgetUnitKey(event) ?? firstUnitKey(event.marks));
   }
 
   if (classes.indexOf("atomdown-group-menu") !== -1) {
@@ -1686,30 +1619,59 @@ function onDecorationSelect() {
 /**
  * Collapses or expands one group, through the editor's own folding.
  *
- * The state is DECLARED, not alternated. `foldedFroms` on the click event is
- * the editor's own fold set, so the press computes "fold this" or "unfold
- * this" from what the editor actually has rather than from what this plug last
- * remembered. That is the whole fix for the caret that went dead: a group
- * folded from the gutter, or by the fold command, used to leave the remembered
- * flag one press behind for good.
+ * THE FLAGS ARE THE STATE, AND ONE PRESS FLIPS ONE FLAG. Nothing here reads
+ * the editor's fold set, and that is the fix rather than a shortcut. The seam
+ * reconciles the editor to these flags on EVERY update, so the two can only
+ * disagree for a microtask; a press that read the editor inside that window
+ * decided from a stale answer and undid the press before it. Measured on the
+ * fixture's 11 groups: reopening them one press each left between zero and
+ * nine shut, differently on every run.
  *
- * The new flag goes into the decorations and the seam reconciles the editor's
- * fold set to it. The cursor is never moved: moving it into the marker line is
- * what used to reveal the directive on a collapse click.
+ * The same continuous reconciliation is what makes a fold from the gutter,
+ * from the fold command, or from CodeMirror's own "clear the folds covering
+ * the cursor" rule harmless: the seam puts it back to what the flags say. So
+ * the caret cannot end up one press behind - the drift that used to leave a
+ * collapsed group stuck shut is impossible by construction now, rather than
+ * corrected after the fact.
+ *
+ * The new flag goes into the decorations and the seam does the folding. The
+ * cursor is never moved: moving it into the marker line is what used to reveal
+ * the directive on a collapse click.
+ *
+ * ONE PRESS AT A TIME. Every press reads the collapsed set, changes one entry
+ * and writes the set back, with four syscalls in between - the page name, the
+ * page text, the store write and the config write. Two presses in flight
+ * together both read the set as it was before either of them, so the second
+ * write loses the first press entirely. The presses are therefore queued,
+ * which costs nothing a reader can perceive.
  */
-async function collapseGroup(unitKey, foldedFroms) {
+async function collapseGroup(unitKey) {
+  return await queueCollapse(function () {
+    return applyCollapse(unitKey);
+  });
+}
+
+/**
+ * The press queue: each press waits for the one before it to finish writing.
+ *
+ * A rejection is swallowed for the CHAIN only, never for the caller — a press
+ * that failed must not stop the next one from running.
+ */
+let collapseQueue = Promise.resolve();
+function queueCollapse(work) {
+  const next = collapseQueue.then(work, work);
+  collapseQueue = next.then(function () {}, function () {});
+  return next;
+}
+
+async function applyCollapse(unitKey) {
   const groupId = unitKey && unitKey.indexOf("group:") === 0
     ? unitKey.slice("group:".length)
     : null;
   if (!groupId) return { ok: false, error: "No group under that control" };
   const page = await syscall("editor.getCurrentPage").catch(() => undefined);
   const text = await syscall("editor.getText");
-  collapsedGroupIds = collapsedFromFolds(
-    text,
-    foldedFroms,
-    groupId,
-    collapsedGroupIds,
-  );
+  collapsedGroupIds = toggleCollapsed(collapsedGroupIds, groupId);
   await rememberCollapsed(page, collapsedGroupIds);
   await writeDecorations(text, false);
   return {
@@ -2105,8 +2067,6 @@ const internals = {
   directivePeekHtml,
   toggleAction,
   toggleCollapsed,
-  groupFoldRanges,
-  collapsedFromFolds,
   collapsedKey,
   buildDecorations,
   emptyDecorations,
