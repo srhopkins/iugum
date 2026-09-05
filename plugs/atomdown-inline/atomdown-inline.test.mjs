@@ -52,6 +52,11 @@ const {
   toggleAction,
   toggleCollapsed,
   collapsedKey,
+  densityKey,
+  normalizeDensity,
+  otherDensity,
+  densityTitle,
+  densityClass,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,
@@ -332,24 +337,30 @@ test("an implicit block is badged 'no id' rather than given a fake one", () => {
 test("a group gets a header widget on its opening marker line", () => {
   const payload = buildDecorations(PAGE, []);
   const widget = payload.widgets.find((w) =>
-    w.class === "atomdown-group-header"
+    w.class.split(" ").includes("atomdown-group-header")
   );
   assert.equal(widget.id, "unit:group:7K3M9X2D");
   assert.equal(widget.side, "before");
   assert.equal(widget.at, offsetOf(PAGE, '<!-- <atom-group id="7K3M9X2D"'));
   assert.match(widget.html, /findings/);
   assert.match(widget.html, /7K3M9X2D/);
-  assert.match(widget.html, /2 cards/);
+  assert.match(widget.html, /atomdown-group-count-n">2</);
+  assert.match(widget.html, /atomdown-group-count-word"> cards</);
   assert.match(widget.html, /atomdown-grip/);
   assert.match(widget.html, /atomdown-group-collapse/);
   assert.match(widget.html, /atomdown-group-kind/);
   assert.match(widget.html, /atomdown-group-menu/);
 });
 
+// The number and the word are two elements, because compact removes the word
+// and keeps the number. So the count reads "1 card" only when both are shown.
 test("a group with one card says card, not cards", () => {
   const html = groupHeaderHtml({ groupId: "AAAAAAAA", groupSlug: "x" }, 1);
-  assert.match(html, /1 card</);
-  assert.match(groupHeaderHtml({ groupId: "AAAAAAAA", groupSlug: "x" }, 3), /3 cards</);
+  assert.match(html, /atomdown-group-count-n">1</);
+  assert.match(html, /atomdown-group-count-word"> card</);
+  const three = groupHeaderHtml({ groupId: "AAAAAAAA", groupSlug: "x" }, 3);
+  assert.match(three, /atomdown-group-count-n">3</);
+  assert.match(three, /atomdown-group-count-word"> cards</);
 });
 
 test("a group with no slug shows its id as the name", () => {
@@ -551,7 +562,7 @@ test("every card header carries a peek of its own directive line", () => {
 test("a group header carries a peek of its opening marker", () => {
   const payload = buildDecorations(PAGE, []);
   const head = payload.widgets.find((w) =>
-    w.class === "atomdown-group-header"
+    w.class.split(" ").includes("atomdown-group-header")
   );
   assert.match(head.html, /atomdown-directive-peek/);
   assert.match(head.html, /atom-group id=&quot;7K3M9X2D&quot;/);
@@ -1043,6 +1054,137 @@ test("minimalEdit reports null for no change", () => {
   assert.equal(minimalEdit("same", "same"), null);
 });
 
+// ---------------------------------------------------------------------------
+// Display density
+//
+// Two densities, the panel's own two, and the switch is PRESENTATIONAL: the
+// only difference between the two payloads is a set of CSS class names. Every
+// offset, every id, every widget and every fold is identical, which is what
+// makes "no document byte changes with the density" provable here rather than
+// only in a browser.
+// ---------------------------------------------------------------------------
+
+test("an unknown density reads as comfortable, the default", () => {
+  assert.equal(normalizeDensity(undefined), "comfortable");
+  assert.equal(normalizeDensity(null), "comfortable");
+  assert.equal(normalizeDensity("cosy"), "comfortable");
+  assert.equal(normalizeDensity("comfortable"), "comfortable");
+  assert.equal(normalizeDensity("compact"), "compact");
+});
+
+test("the switch alternates, and its tooltip names where it would take you", () => {
+  assert.equal(otherDensity("comfortable"), "compact");
+  assert.equal(otherDensity("compact"), "comfortable");
+  assert.equal(otherDensity(otherDensity("compact")), "compact");
+  assert.match(densityTitle("comfortable"), /^Compact:/);
+  assert.match(densityTitle("compact"), /^Comfortable:/);
+});
+
+test("the density class is one class, and there is one per density", () => {
+  assert.equal(densityClass("comfortable"), "atomdown-comfortable");
+  assert.equal(densityClass("compact"), "atomdown-compact");
+  assert.equal(densityClass(undefined), "atomdown-comfortable");
+  assert.equal(densityClass("compact").split(" ").length, 1);
+});
+
+test("the density is remembered per page, in the same store as the rest", () => {
+  assert.equal(
+    densityKey("Todo/running"),
+    "atomdown-inline.density:Todo/running",
+  );
+  assert.notEqual(densityKey("a"), densityKey("b"));
+  // Same prefix as the view's on/off flag and its collapsed set, so there is
+  // one storage mechanism rather than a second one for the density.
+  assert.match(densityKey("p"), /^atomdown-inline\./);
+});
+
+test("every decorated line carries the density class, at both densities", () => {
+  ["comfortable", "compact"].forEach((density) => {
+    const payload = buildDecorations(PAGE, [], [], density);
+    const dens = payload.marks.filter((m) => m.id.startsWith("dens:"));
+    assert.ok(dens.length > 0, `${density} emitted no density mark`);
+    dens.forEach((mark) => {
+      assert.equal(mark.class, densityClass(density));
+      assert.equal(mark.lineClasses, true);
+    });
+  });
+});
+
+test("a density mark covers exactly the span of the box mark beside it", () => {
+  // The line classes have to land on the card's own lines and no others, or
+  // the knob values reach a line that is not in a card.
+  const payload = buildDecorations(PAGE, [], [], "compact");
+  payload.marks
+    .filter((m) => m.id.startsWith("box:"))
+    .forEach((box) => {
+      const wanted = "dens:" + box.id.slice("box:".length);
+      const twin = payload.marks.find((m) => m.id === wanted);
+      assert.ok(twin, `no density mark for ${box.id}`);
+      assert.equal(twin.from, box.from);
+      assert.equal(twin.to, box.to);
+    });
+});
+
+test("every widget carries the density class, at both densities", () => {
+  ["comfortable", "compact"].forEach((density) => {
+    const payload = buildDecorations(PAGE, [], [], density);
+    assert.ok(payload.widgets.length > 0);
+    payload.widgets.forEach((widget) => {
+      assert.ok(
+        widget.class.split(" ").includes(densityClass(density)),
+        `${widget.id} at ${density} has class "${widget.class}"`,
+      );
+    });
+  });
+});
+
+test("compact keeps the card header widget, so the grip and the menu stay", () => {
+  // The row is lifted out of the layout by CSS rather than dropped from the
+  // payload: the grip, the three-dot menu and the directive peek all live in
+  // that widget, and a density that removed it would have to rebuild all
+  // three somewhere else.
+  const payload = buildDecorations(PAGE, [], [], "compact");
+  const head = payload.widgets.find((w) => w.id === "box:atom:4P8W2H6K");
+  assert.ok(head);
+  assert.match(head.html, /atomdown-grip/);
+  assert.match(head.html, /atomdown-card-menu/);
+  assert.match(head.html, /atomdown-directive-peek/);
+});
+
+test("the group's collapse control is identical at both densities", () => {
+  // It is the control that turns a long page into a list of group names, so
+  // it must not thin out with the rest of the bar.
+  const bars = ["comfortable", "compact"].map((density) => {
+    const payload = buildDecorations(PAGE, [], [], density);
+    return payload.widgets.find((w) =>
+      w.class.split(" ").includes("atomdown-group-header")
+    ).html;
+  });
+  assert.match(bars[0], /atomdown-group-collapse/);
+  assert.equal(bars[0], bars[1]);
+});
+
+test("switching density changes CSS classes and nothing else", () => {
+  // THE PROOF THAT THE SWITCH IS PRESENTATIONAL. Strip the density class out
+  // of both payloads and they must be byte-identical: same offsets, same ids,
+  // same widget HTML, same folds. There is no source text in the payload at
+  // all, so nothing here can reach the document.
+  const strip = (payload, density) =>
+    JSON.stringify(payload)
+      .replaceAll('"class":"' + densityClass(density) + '"', '"class":"D"')
+      .replaceAll(" " + densityClass(density), "")
+      .replaceAll('"dens:', '"DENS:');
+  const comfortable = strip(
+    buildDecorations(PAGE, ["atom:4P8W2H6K"], ["7K3M9X2D"], "comfortable"),
+    "comfortable",
+  );
+  const compact = strip(
+    buildDecorations(PAGE, ["atom:4P8W2H6K"], ["7K3M9X2D"], "compact"),
+    "compact",
+  );
+  assert.equal(comfortable, compact);
+});
+
 test("the remembered flag is keyed by page name", () => {
   assert.equal(inlineOnKey("Todo/running"), "atomdown-inline.on:Todo/running");
   assert.notEqual(inlineOnKey("a"), inlineOnKey("b"));
@@ -1053,13 +1195,14 @@ test("the remembered flag is keyed by page name", () => {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// The header button's contract
+// The header buttons' contract
 //
-// The button is not a command call in this file - it is a name in the library
-// page's actionButton.define, which the client resolves with
-// runCommandByName. That resolution is by STRING, and nothing else in the
-// build checks the two strings match: a rename on either side leaves a button
-// that silently does nothing, which is exactly the failure that was reported.
+// The buttons are registered BY THE PLUG now (`registerActionButtons`), not by
+// an actionButton.define block on the library page. A button still names its
+// command as a STRING that the client resolves with runCommandByName, and
+// nothing else in the build checks the two strings match: a rename on either
+// side leaves a button that silently does nothing, which is exactly the
+// failure that was reported.
 // ---------------------------------------------------------------------------
 
 const LIBRARY_PAGE = readFileSync(
@@ -1067,29 +1210,65 @@ const LIBRARY_PAGE = readFileSync(
   "utf8",
 );
 
-test("the header button names a command this plug actually registers", () => {
-  const buttons = [...LIBRARY_PAGE.matchAll(/actionButton\.define\s*\{([^}]*)\}/g)]
-    .map((m) => m[1]);
-  assert.equal(buttons.length, 1, "expected exactly one action button");
-  const named = /command\s*=\s*"([^"]+)"/.exec(buttons[0]);
-  assert.ok(named, "the action button must name a command");
+test("every header button names a command this plug actually registers", () => {
+  const buttons = plug.internals.ACTION_BUTTONS;
+  assert.equal(buttons.length, 2, "the card view and the density switch");
   const commands = Object.values(plug.manifest.functions)
     .filter((fn) => fn.command)
     .map((fn) => fn.command.name);
-  assert.ok(
-    commands.includes(named[1]),
-    `the button names "${named[1]}", which is not one of ${commands.join(", ")}`,
-  );
-  // And that command must resolve to a real function, or runCommandByName
-  // finds an entry whose run() throws.
-  const entry = Object.entries(plug.manifest.functions)
-    .find(([, fn]) => fn.command && fn.command.name === named[1]);
-  assert.equal(typeof plug.functionMapping[entry[0]], "function");
+  buttons.forEach((button) => {
+    assert.ok(
+      commands.includes(button.command),
+      `the button names "${button.command}", not one of ${commands.join(", ")}`,
+    );
+    // And that command must resolve to a real function, or runCommandByName
+    // finds an entry whose run() throws.
+    const entry = Object.entries(plug.manifest.functions)
+      .find(([, fn]) => fn.command && fn.command.name === button.command);
+    assert.equal(typeof plug.functionMapping[entry[0]], "function");
+  });
 });
 
-test("the button carries an icon, or the client filters it out entirely", () => {
+test("every button carries an icon, or the client filters it out entirely", () => {
   // client/editor_ui.tsx drops any actionButton without an icon.
-  assert.match(LIBRARY_PAGE, /actionButton\.define\s*\{[^}]*icon\s*=\s*"[^"]+"/);
+  plug.internals.ACTION_BUTTONS.forEach((button) => {
+    assert.equal(typeof button.icon, "string");
+    assert.ok(button.icon.length > 0, `${button.command} has no icon`);
+  });
+});
+
+test("the buttons fit the actionButtons schema, which forbids extra keys", () => {
+  // libraries/Library/Std/Config.md defines the schema with
+  // additionalProperties = false, so an unknown key makes config.insert throw
+  // and the button never appears.
+  const allowed = [
+    "icon",
+    "description",
+    "command",
+    "priority",
+    "mobile",
+    "standalone",
+    "dropdown",
+    "run",
+  ];
+  plug.internals.ACTION_BUTTONS.forEach((button) => {
+    Object.keys(button).forEach((key) => {
+      assert.ok(allowed.includes(key), `${key} is not in the schema`);
+    });
+  });
+});
+
+test("the library page registers no action button of its own", () => {
+  // Two buttons would appear, and one of them would be the stale copy that
+  // arrives only when the client's page index happens to hold this page. The
+  // page's PROSE still names actionButton.define, to say why it is gone, so
+  // this looks inside the space-lua fences and nowhere else.
+  const luaBlocks = [
+    ...LIBRARY_PAGE.matchAll(/```space-lua\n([\s\S]*?)```/g),
+  ].map((m) => m[1]);
+  luaBlocks.forEach((block) => {
+    assert.equal(/actionButton\.define/.test(block), false);
+  });
 });
 
 test("the manifest wires one command per user action and one function per event", () => {

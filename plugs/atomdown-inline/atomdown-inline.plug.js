@@ -852,6 +852,57 @@ function directivePeekHtml(directiveText) {
 }
 
 /**
+ * Display density: "comfortable" (the default) or "compact".
+ *
+ * The SAME two densities the board panel has, with the same names, the same
+ * meaning and the same CSS custom property names, so the two views cannot
+ * drift. See atomdown-board.plug.js `normalizeDensity` for the panel's copy of
+ * these three functions.
+ *
+ * COMPACT COMPRESSES CHROME ONLY. Not one content size changes: a heading is a
+ * heading at its full rendered size at both densities, because the point is to
+ * fit more of the document on screen, not to shrink the document. What compact
+ * removes is the card header row, the GROUP label, the group id and the word
+ * after the member count, and most of the padding.
+ *
+ * Pure, so the command, the button's tooltip and the decoration payload cannot
+ * disagree about which density is showing.
+ */
+function normalizeDensity(value) {
+  return value === "compact" ? "compact" : "comfortable";
+}
+
+/** The other density: what one press of the switch would take you to. */
+function otherDensity(value) {
+  return normalizeDensity(value) === "compact" ? "comfortable" : "compact";
+}
+
+/**
+ * The switch's tooltip.
+ *
+ * Same idiom as the panel's toolbar button: it names the state pressing would
+ * GIVE you, not the state you are in, so reading it tells you what the press
+ * does.
+ */
+function densityTitle(value) {
+  return otherDensity(value) === "compact"
+    ? "Compact: no card headers, a thin group bar, the same content size"
+    : "Comfortable: the card header comes back, with roomier spacing";
+}
+
+/**
+ * The class the density puts on every decorated line and every widget.
+ *
+ * One class, present at BOTH densities rather than only at compact, for two
+ * reasons. The knob overrides have somewhere to be declared either way, and a
+ * reader (or a test) can ask the DOM which density is showing instead of
+ * inferring it from an absence.
+ */
+function densityClass(value) {
+  return "atomdown-" + normalizeDensity(value);
+}
+
+/**
  * The group header bar: collapse, grip, the kind, the group's readable name,
  * its id, how many atoms it holds, and a menu.
  *
@@ -880,7 +931,12 @@ function groupHeaderHtml(unit, memberCount, directiveText, collapsed) {
     '<span class="atomdown-group-id" title="' +
     escapeHtml("Atomdown id " + unit.groupId) + '">' +
     escapeHtml(String(unit.groupId)) + "</span>",
-    '<span class="atomdown-group-count">' + memberCount + " " + word +
+    // THE COUNT IS SPLIT INTO THE NUMBER AND THE WORD, and the split is the
+    // only reason compact can keep a bare count: the word is what `display:
+    // none` removes there. Same two class names the panel uses.
+    '<span class="atomdown-group-count">' +
+    '<span class="atomdown-group-count-n">' + memberCount + "</span>" +
+    '<span class="atomdown-group-count-word"> ' + word + "</span>" +
     "</span>",
     '<span class="atomdown-group-menu" role="button" tabindex="0" title="' +
     escapeHtml("Actions for group " + name) + '">&#8943;</span>',
@@ -928,13 +984,27 @@ function toggleAction(remembered, applied) {
  * `selectedKeys` are the unit keys the reader lassoed. They add one more mark
  * per selected unit, so a selection is purely visual and never reaches the
  * document.
+ *
+ * `density` adds a THIRD kind of mark, `dens:<key>`, over exactly the same
+ * span as each box mark and carrying nothing but the density class. It exists
+ * because the density's knob values have to reach the LINE elements, and a
+ * line's only route to a class is a mark's `lineClasses`. It could not be
+ * folded into the box mark's own class: the seam uses `marks[].class` as the
+ * STEM of the line classes it derives, so a second class in that string would
+ * produce `atomdown-card atomdown-compact-line` rather than two classes. Its
+ * `-first`, `-mid` and `-last` variants are unused on purpose — a card inside
+ * a group is covered by two of these marks, so those would be ambiguous. The
+ * CSS keys off `atomdown-<density>-line` together with the card's or the
+ * group's own `-first` / `-last`.
  */
-function buildDecorations(sourceText, selectedKeys, collapsedGroupIds) {
+function buildDecorations(sourceText, selectedKeys, collapsedGroupIds, density) {
   const scan = computeCards(sourceText);
   const lines = scan.lines;
   const starts = lineStarts(lines);
   const selected = dedupeKeys(selectedKeys);
   const collapsed = dedupeKeys(collapsedGroupIds);
+  const dens = normalizeDensity(density);
+  const densClass = densityClass(dens);
   const marks = [];
   const widgets = [];
   const folds = [];
@@ -944,6 +1014,23 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds) {
       from: starts[startLine],
       to: starts[endLine] + lines[endLine].length,
     };
+  }
+
+  /**
+   * The density mark for one span: the class, and nothing else.
+   *
+   * `key` is the BARE key, so a box mark `box:atom:X` is twinned by
+   * `dens:atom:X`. Naming them off the same suffix is what lets a test pair
+   * every box with its density mark and check the two spans agree.
+   */
+  function addDensity(key, box) {
+    marks.push({
+      id: "dens:" + key,
+      from: box.from,
+      to: box.to,
+      class: densClass,
+      lineClasses: true,
+    });
   }
 
   /** One atom's card: the box mark and the header row above it. */
@@ -964,11 +1051,21 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds) {
       // pointer is anywhere in the card, not only on the header row itself.
       hoverClasses: true,
     });
+    addDensity(boxKey.slice("box:".length), box);
+    // THE HEADER WIDGET IS EMITTED AT BOTH DENSITIES, and at compact it keeps
+    // the grip and the three-dot menu only — the name and the id are removed
+    // by CSS and the row is lifted out of the layout, so it has no height and
+    // draws no seam. The card's top edge and top corners move to the card's
+    // own `-first` line there. Emitting the same widget either way is what
+    // keeps the grip, the menu and the directive peek working identically at
+    // both densities; a density that dropped the widget would have to rebuild
+    // those three controls somewhere else.
     widgets.push({
       id: boxKey,
       at: box.from,
       side: "before",
-      class: "atomdown-card-header" + (nested ? " atomdown-nested" : ""),
+      class: "atomdown-card-header" + (nested ? " atomdown-nested" : "") +
+        " " + densClass,
       html: cardHeaderHtml(unit, nested, directiveText),
     });
     return box;
@@ -1007,13 +1104,15 @@ function buildDecorations(sourceText, selectedKeys, collapsedGroupIds) {
         // cannot express that.
         hoverClasses: true,
       });
+      addDensity(unit.unitKey, unitSpan);
       const isCollapsed = collapsed.indexOf(unit.groupId) !== -1;
       widgets.push({
         id: "unit:" + unit.unitKey,
         at: unitSpan.from,
         side: "before",
         class: "atomdown-group-header" +
-          (isCollapsed ? " atomdown-group-collapsed" : ""),
+          (isCollapsed ? " atomdown-group-collapsed" : "") +
+          " " + densClass,
         html: groupHeaderHtml(
           unit,
           members.length,
@@ -1261,6 +1360,44 @@ function collapsedKey(pageName) {
   return "atomdown-inline.collapsed:" + (pageName || "");
 }
 
+/**
+ * The display density's key. Same store and same `atomdown-inline.<what>:<page>`
+ * shape as the view's own on/off flag and its collapsed set, so there is ONE
+ * storage mechanism for every piece of this view's presentation state. The
+ * panel's own key is `atomdown-board.density:<page>`.
+ */
+function densityKey(pageName) {
+  return "atomdown-inline.density:" + (pageName || "");
+}
+
+/** This page's remembered density. Comfortable unless it says otherwise. */
+async function loadDensity(pageName) {
+  if (!pageName) return "comfortable";
+  try {
+    return normalizeDensity(
+      await syscall("clientStore.get", densityKey(pageName)),
+    );
+  } catch (e) {
+    return "comfortable";
+  }
+}
+
+async function rememberDensity(pageName, density) {
+  if (!pageName) return;
+  try {
+    if (normalizeDensity(density) === "compact") {
+      await syscall("clientStore.set", densityKey(pageName), "compact");
+    } else {
+      // Comfortable is the default, so it is the ABSENCE of a value rather
+      // than a value. A page that was never switched and a page switched back
+      // then read identically.
+      await syscall("clientStore.delete", densityKey(pageName));
+    }
+  } catch (e) {
+    // Not remembering is acceptable; failing the reader's action is not.
+  }
+}
+
 /** The ids of this page's collapsed groups. Always an array. */
 async function loadCollapsed(pageName) {
   if (!pageName) return [];
@@ -1332,6 +1469,14 @@ let selectedUnitKeys = [];
  * the document.
  */
 let collapsedGroupIds = [];
+/**
+ * The density the decorations on screen were built at.
+ *
+ * Presentation, like the two above: not one byte of the document changes with
+ * it. Persisted per page in the same store, so a page left compact draws
+ * compact after a reload.
+ */
+let activeDensity = "comfortable";
 
 async function warnUser(message, level) {
   if (!message) return;
@@ -1360,7 +1505,7 @@ async function writeDecorations(text, rebuild) {
   await syscall(
     "config.set",
     "editorDecorations",
-    buildDecorations(text, selectedUnitKeys, collapsedGroupIds),
+    buildDecorations(text, selectedUnitKeys, collapsedGroupIds, activeDensity),
   );
   if (rebuild) {
     await syscall("editor.rebuildEditorState");
@@ -1377,6 +1522,7 @@ async function writeDecorations(text, rebuild) {
 async function clearDecorations(rebuild) {
   selectedUnitKeys = [];
   collapsedGroupIds = [];
+  activeDensity = "comfortable";
   activePage = null;
   await syscall("config.set", "editorDecorations", emptyDecorations());
   if (rebuild) await syscall("editor.rebuildEditorState");
@@ -1395,7 +1541,7 @@ async function applyEdit(oldText, newText) {
   await syscall(
     "config.set",
     "editorDecorations",
-    buildDecorations(newText, selectedUnitKeys, collapsedGroupIds),
+    buildDecorations(newText, selectedUnitKeys, collapsedGroupIds, activeDensity),
   );
   await syscall("editor.replaceRange", edit.from, edit.to, edit.insert);
   return true;
@@ -1425,8 +1571,105 @@ async function toggleInline() {
   activePage = page;
   selectedUnitKeys = [];
   collapsedGroupIds = await loadCollapsed(page);
+  activeDensity = await loadDensity(page);
   await writeDecorations(text, true);
   return { ok: true, on: true };
+}
+
+/**
+ * "Atomdown: Toggle Inline Density" — comfortable <-> compact for this page.
+ *
+ * PRESENTATIONAL, and provably so: it re-reads the page text, rebuilds the
+ * decoration payload from it and writes nothing else. No `editor.replaceRange`
+ * is reachable from here, so a density switch cannot change a document byte.
+ *
+ * No `editor.rebuildEditorState` either. The density changes mark classes and
+ * widget classes, and the seam keeps both in one StateField that it rebuilds
+ * whenever the config value changes — so the empty transaction is enough, and
+ * the undo history survives a switch. `rebuildEditorState` calls `setState`,
+ * which would throw that history away.
+ *
+ * The switch works with the view OFF too: it records the choice for the page,
+ * so turning the view on afterwards draws the density asked for. It does not
+ * turn the view on by itself — a density button is not a view button.
+ */
+async function toggleDensity() {
+  const page = await syscall("editor.getCurrentPage").catch(() => undefined);
+  const current = await loadDensity(page);
+  const next = otherDensity(current);
+  await rememberDensity(page, next);
+  activeDensity = next;
+  if (!(await isInlineApplied())) {
+    await warnUser(
+      "Atomdown density is now " + next + " for this page. The card view is " +
+        "off, so press the grid button to see it.",
+      "info",
+    );
+    return { ok: true, density: next, on: false };
+  }
+  const text = await syscall("editor.getText");
+  activePage = page;
+  await writeDecorations(text, false);
+  return { ok: true, density: next, on: true };
+}
+
+/**
+ * The header-bar buttons, registered BY THE PLUG rather than by the library
+ * page's `space-lua` block.
+ *
+ * WHY IT MOVED. An action button is plain configuration — `actionButton.define`
+ * in Space Lua is three lines that read `actionButtons`, append to it and write
+ * it back (silverbullet/libraries/Library/Std/APIs/Action Button.md), and the
+ * `config.insert` syscall is open to a plug (client/plugos/syscalls/config.ts).
+ * A `space-lua` block, though, only runs when the client's own page index has
+ * that page in it, and that index is per browser origin and can be silently
+ * stale — so the same server showed a button whose command was "not found" in
+ * one tab and no button at all in another. A plug is loaded by file discovery
+ * with no index involved, which is exactly why the COMMANDS always worked when
+ * the button did not. Registering the buttons here removes that whole failure
+ * class: the button and the command it runs now arrive together or not at all.
+ *
+ * IDEMPOTENT, because it has to run more than once. `Config.clear()` wipes
+ * every config value each time Space Lua reloads (client/client_system.ts,
+ * `loadLuaScripts`), so this runs on `editor:init` — after that load — and
+ * again on every page load. A button whose command is already in the list is
+ * skipped, so no reload can produce two grid icons.
+ */
+const ACTION_BUTTONS = [
+  {
+    icon: "grid",
+    description: "Atomdown card view on this page",
+    command: "Atomdown: Toggle Inline View",
+  },
+  {
+    // `align-justify` is a feather icon: four flush rows, which is the
+    // clearest picture of "how tightly is this page packed" in that set.
+    icon: "align-justify",
+    description: "Atomdown display density on this page",
+    command: "Atomdown: Toggle Inline Density",
+  },
+];
+
+async function registerActionButtons() {
+  try {
+    const existing = await syscall("config.get", "actionButtons", []);
+    const list = Array.isArray(existing) ? existing : [];
+    const present = list.map(function (button) {
+      return button && button.command;
+    });
+    const added = [];
+    for (let i = 0; i < ACTION_BUTTONS.length; i++) {
+      const button = ACTION_BUTTONS[i];
+      if (present.indexOf(button.command) !== -1) continue;
+      await syscall("config.insert", "actionButtons", button);
+      added.push(button.command);
+    }
+    return { ok: true, added };
+  } catch (e) {
+    // A host with no config.insert still gets the commands, which are the
+    // plug's real surface. Never fail a page load over an icon.
+    return { ok: false, error: e.message };
+  }
 }
 
 /**
@@ -1455,6 +1698,9 @@ async function isInlineApplied() {
  * default: the key is per page, and turning the view off deletes it.
  */
 async function restoreInline(pageName) {
+  // The buttons first, and unconditionally: they belong to the header bar, not
+  // to a page the view happens to be on.
+  await registerActionButtons();
   try {
     const page = pageName ||
       await syscall("editor.getCurrentPage").catch(() => undefined);
@@ -1473,6 +1719,7 @@ async function restoreInline(pageName) {
     activePage = page;
     selectedUnitKeys = [];
     collapsedGroupIds = await loadCollapsed(page);
+    activeDensity = await loadDensity(page);
     await writeDecorations(text, true);
     return { ok: true, on: true };
   } catch (e) {
@@ -1978,6 +2225,8 @@ async function ungroupSelection() {
 
 const functionMapping = {
   toggleInline,
+  toggleDensity,
+  registerActionButtons,
   restoreInline,
   refreshInline,
   onDecorationClick,
@@ -1995,6 +2244,19 @@ const manifest = {
     toggleInline: {
       path: "./atomdown-inline.js:toggleInline",
       command: { name: "Atomdown: Toggle Inline View" },
+    },
+    toggleDensity: {
+      path: "./atomdown-inline.js:toggleDensity",
+      command: { name: "Atomdown: Toggle Inline Density" },
+    },
+    // The header-bar buttons. `editor:init` and not `plugs:loaded`: the boot
+    // sequence loads plugs, dispatches `plugs:loaded`, THEN loads Space Lua —
+    // and loading Space Lua calls `Config.clear()`, so a button registered on
+    // the earlier event is wiped before the header bar ever reads the key
+    // (silverbullet/client/client.ts, `init`).
+    registerActionButtons: {
+      path: "./atomdown-inline.js:registerActionButtons",
+      events: ["editor:init"],
     },
     // Both events matter: pageLoaded fires for a browser reload and for
     // navigating to another page, pageReloaded for reloading the page already
@@ -2068,6 +2330,12 @@ const internals = {
   toggleAction,
   toggleCollapsed,
   collapsedKey,
+  densityKey,
+  normalizeDensity,
+  otherDensity,
+  densityTitle,
+  densityClass,
+  ACTION_BUTTONS,
   buildDecorations,
   emptyDecorations,
   firstUnitKey,
