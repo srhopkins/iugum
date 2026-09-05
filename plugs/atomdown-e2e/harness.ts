@@ -1240,6 +1240,11 @@ export function containmentViolations(boxes: Box[]): Violation[] {
  *   3. land on the group's own 2px accent outline, where a control reads as a
  *      notch cut out of the group's border.
  *
+ * Rule 3 applies to a MEMBER CARD's controls, measured against the band the
+ * card's own nested header carries, and since iugum-938 it applies to the
+ * GROUP's own grip and menu as well, measured against the group bar's own
+ * border - those two left the bar and now sit in the same gutters.
+ *
  * Board chrome is not in this list: it stays inside its card and is checked as
  * content, through `CHILD_SELECTOR`.
  */
@@ -1368,7 +1373,15 @@ export async function measureChrome(view: View): Promise<ChromeItem[]> {
       const nestedHeader = el.closest(
         ".sb-decoration-widget.atomdown-card-header.atomdown-nested",
       ) as HTMLElement | null;
-      const bandHost = nestedHeader;
+      // THE GROUP'S OWN CONTROLS ARE CHECKED AGAINST THE GROUP'S OWN OUTLINE
+      // (iugum-938). The grip and the three-dot menu are outside the group
+      // container now, in the same two gutters the cards use, so "clear of the
+      // 2px accent outline" is a rule they have to obey as well - and the bar
+      // IS that outline's top edge, so the band is read off the bar itself.
+      const groupHeader = el.closest(
+        ".sb-decoration-widget.atomdown-group-header",
+      ) as HTMLElement | null;
+      const bandHost = nestedHeader ?? groupHeader;
       if (bandHost) {
         const br = bandHost.getBoundingClientRect();
         const bw = parseFloat(getComputedStyle(bandHost).borderLeftWidth) || 0;

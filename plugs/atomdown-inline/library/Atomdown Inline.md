@@ -618,6 +618,108 @@ html {
 }
 
 /* ------------------------------------------------------------------ */
+/* THE GROUP'S TWO CONTROLS, OUTSIDE THE GROUP CONTAINER: grip in the   */
+/* LEFT page gutter, vertical three-dot menu in the RIGHT one, both      */
+/* hover-only. iugum-938, and the card's treatment applied to the group. */
+/*                                                                      */
+/* THE OFFSET IS FROM THE GROUP HEADER WIDGET'S OWN BORDER BOX, which is  */
+/* the group box's top edge and carries the 2px accent outline. So the    */
+/* same --board-chrome-gutter that puts a card's grip 22px outside the    */
+/* card border puts the group's grip 22px outside the group outline, and  */
+/* neither control can land ON that outline.                             */
+/*                                                                      */
+/* THE COLLISION RULE IS THE BAR'S ROW. These two are pinned to the       */
+/* vertical centre of the BAR, and the bar is a row of its own above      */
+/* every member card, so a group control and a member card's control can  */
+/* never share a row - not for the first member and not for the last.     */
+/* There is a second, independent separation and it is worth knowing: a   */
+/* member card's head is inset by the group's padding plus the outline,   */
+/* so its controls sit in a lane about 10px to the right of the group's.  */
+/* Rule 8 asserts the rows are disjoint AND that the lanes differ.        */
+/*                                                                      */
+/* WHAT THE BAR KEEPS: the collapse chevron, the GROUP label, the name,   */
+/* the id and the member count. The chevron stays inside the bar at full  */
+/* size and always visible at both densities - it is the control that      */
+/* turns a long page into a list of group names, and it is the one        */
+/* control still sitting on the accent fill, so it keeps the translucent  */
+/* wash above.                                                           */
+/* ------------------------------------------------------------------ */
+
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-grip,
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-menu {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  line-height: 1;
+  /* Out of the bar's flex flow, so neither control spends a pixel of the
+     bar's width and neither moves the name when it appears on hover. The
+     margin reset kills the `margin-left: auto` that used to push the menu to
+     the right end of the bar. */
+  margin: 0;
+  opacity: 0;
+  pointer-events: auto;
+}
+
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-grip {
+  left: calc(-1 * var(--board-chrome-gutter));
+}
+
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-menu {
+  right: calc(-1 * var(--board-chrome-gutter));
+  /* On the page ground now, not on the accent fill, so it takes the CARD
+     menu's quiet colour rather than inheriting the bar's contrast text. */
+  color: var(--board-header-quiet-color);
+}
+
+/* REVEALED BY A HOVER ANYWHERE INSIDE THE GROUP - including over a member
+   card - and by keyboard focus. That is the scope the bar's own fill already
+   has: the bar's next sibling is its group's first line, so the seam's
+   `atomdown-group-hover` class on that line means the pointer is inside this
+   group. Plain :hover on the bar alone would hide the controls the moment the
+   pointer moved down onto a card.
+
+   :focus AND :focus-visible, the panel's own lesson: :focus-visible does not
+   match a focus set by script or by a click, so a control that HAS focus was
+   still at opacity 0. */
+.sb-decoration-widget.atomdown-group-header:hover > .atomdown-group-grip,
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-group-hover
+  ) > .atomdown-group-grip,
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-selected-line
+  ) > .atomdown-group-grip,
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-grip:focus,
+.sb-decoration-widget.atomdown-group-header
+  > .atomdown-group-grip:focus-visible {
+  opacity: 0.5;
+}
+
+.sb-decoration-widget.atomdown-group-header:hover > .atomdown-group-menu,
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-group-hover
+  ) > .atomdown-group-menu,
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-selected-line
+  ) > .atomdown-group-menu,
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-menu:focus,
+.sb-decoration-widget.atomdown-group-header
+  > .atomdown-group-menu:focus-visible {
+  opacity: 0.6;
+}
+
+/* Under the pointer, or focused, it goes to full strength and the active
+   colour, exactly as the card's menu does. No background: the wash is for a
+   control on the accent fill, and this one is not on it any more. */
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-menu:hover,
+.sb-decoration-widget.atomdown-group-header > .atomdown-group-menu:focus,
+.sb-decoration-widget.atomdown-group-header
+  > .atomdown-group-menu:focus-visible {
+  opacity: 1;
+  background: none;
+  color: var(--board-header-active-color);
+}
+
+/* ------------------------------------------------------------------ */
 /* THE POPOVER. The card's own menu, anchored to the card, NOT the      */
 /* host's command palette. iugum-caj item 1.                            */
 /*                                                                     */
