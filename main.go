@@ -16,18 +16,21 @@ import (
 	_ "github.com/srhopkins/iugum/defaults"
 	"github.com/srhopkins/iugum/embedbin"
 	"github.com/srhopkins/iugum/ship"
-	"github.com/srhopkins/iugum/spaceseed"
+	"github.com/srhopkins/iugum/spaceassets"
 )
 
 //go:embed silverbullet/silverbullet
 var silverbulletBin []byte
 
-// The atomdown space assets. A space needs all three files: the two plug
-// bundles, and the library page that carries the header-bar button
-// (space-lua) and the card CSS (space-style). Without the library page the
-// decorations land with no stylesheet, and the feature reads as broken.
+// The atomdown space assets that have another home in this repository. A
+// space needs all three files: the two plug bundles, and the library page that
+// carries the header-bar button (space-lua) and the card CSS (space-style).
+// Without the library page the decorations land with no stylesheet, and the
+// feature reads as broken rather than uninstalled.
+//
 // The plug YAML files are build inputs, and plugs/atomdown-e2e is a test
-// suite, so neither one ships.
+// suite, so neither one ships. Pages with no other home live in
+// spaceassets/library and need no embed here.
 var (
 	//go:embed plugs/atomdown-board/atomdown-board.plug.js
 	atomdownBoardPlug []byte
@@ -39,10 +42,10 @@ var (
 
 func init() {
 	embedbin.Set(silverbulletBin)
-	spaceseed.Set([]spaceseed.Asset{
-		{Rel: "_plug/atomdown-board.plug.js", Data: atomdownBoardPlug},
-		{Rel: "_plug/atomdown-inline.plug.js", Data: atomdownInlinePlug},
-		{Rel: "Library/Atomdown Inline.md", Data: atomdownInlineLibrary},
+	spaceassets.Set([]spaceassets.Asset{
+		{Rel: "Plugs/atomdown-board.plug.js", Data: atomdownBoardPlug},
+		{Rel: "Plugs/atomdown-inline.plug.js", Data: atomdownInlinePlug},
+		{Rel: "Inline.md", Data: atomdownInlineLibrary},
 	})
 }
 
@@ -60,6 +63,11 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   job          list, add, remove, or run cron jobs (jobs.yaml)
   prepare-pr   write review files; do not push
   skill run    run a skill by name (prepare-pr)
+
+  stage-wiki-assets <sb-src-dir>
+               build step: copy this program's space assets into that tree's
+               client_bundle/base_fs, so the next cargo build compiles them
+               into the SilverBullet binary. Use scripts/build-wiki-blob.sh.
 
   iugum up [--wiki-port N] [--observe-port N] [--code-server-port N] [--browser-port N] [--ttyd-port N]
   iugum up [--no-code-server] [--no-browser] [--no-ttyd]
@@ -166,6 +174,8 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "stage-wiki-assets":
+		return runStageWikiAssets(ctx, a, args[1:])
 	case "observe":
 		port, host, code, ok := parseObserveArgs(args[1:])
 		if !ok {
@@ -182,6 +192,33 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n%s", args[0], usage)
 		return 1
 	}
+}
+
+// runStageWikiAssets copies this program's space assets into the base_fs of a
+// SilverBullet source tree, so the next cargo build compiles them into the
+// SilverBullet binary. It is a build step, called by
+// scripts/build-wiki-blob.sh between `npm run build` and `cargo build`.
+//
+// The staging lives in this program because the assets do: it holds the only
+// copy, so a shell script cannot drift from it.
+func runStageWikiAssets(ctx context.Context, a *app.App, args []string) int {
+	if err := a.Check(ctx, "wiki", "stage"); err != nil {
+		fmt.Fprintln(os.Stderr, app.DenyMessage(err))
+		return 1
+	}
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "Usage: iugum stage-wiki-assets <silverbullet-source-dir>")
+		return 2
+	}
+	written, err := spaceassets.Stage(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stage-wiki-assets: %v\n", err)
+		return 1
+	}
+	for _, rel := range written {
+		fmt.Printf("staged %s\n", rel)
+	}
+	return 0
 }
 
 func runRuntime(ctx context.Context, a *app.App, cfg config.File) int {
