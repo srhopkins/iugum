@@ -1,7 +1,29 @@
 /**
  * RULE 1 — CONTAINMENT.
  *
- * Nothing a card or a group draws may leave the box that draws it.
+ * A card's or a group's CONTENT may not leave the box that draws it. Its
+ * CHROME may, and is checked for three other things instead.
+ *
+ * THE SPLIT, AND WHY IT IS NOT A WEAKENING (iugum-caj). This rule used to say
+ * "nothing a card draws may leave the box that draws it", full stop. The
+ * inline view's per-card controls — the drag grip and the vertical three-dot
+ * button — now sit deliberately OUTSIDE the card's border, in the page
+ * gutter, and its popover hangs below the card. So the rule now has two
+ * halves:
+ *
+ *   CONTENT — every line, list marker, blockquote bar, table cell, fenced
+ *   code block and link — must stay inside the box, exactly as before. The
+ *   list is `CHILD_SELECTOR` and it has not lost an entry.
+ *
+ *   CHROME — the grip, the three-dot buttons, the collapse caret and the
+ *   popover — may sit outside, and must instead: be actually PAINTED where
+ *   its rect says it is (a clipped element still reports its full rect, so
+ *   this is hit-tested rather than measured), stay inside the editor's own
+ *   scroll container, and not land on the group's 2px accent outline. See
+ *   `chromeViolations` in the harness.
+ *
+ * The board panel's chrome stays inside its card, so it is still checked as
+ * content and nothing about the board's half of this rule changed.
  *
  * For every card box and every group box, in both views, this measures
  * `getBoundingClientRect()` on the box and on every element inside it — lines,
@@ -38,10 +60,12 @@ import {
   combos,
   comboName,
   FIXTURE,
+  chromeViolations,
   containmentViolations,
   expect,
   failWithArtifacts,
   gotoFixture,
+  measureChrome,
   openBoard,
   openInline,
   type SBServer,
@@ -49,6 +73,7 @@ import {
   setWidth,
   startSpace,
   sweepBoxes,
+  sweepEach,
   THEMES,
   type View,
 } from "./harness.ts";
@@ -126,6 +151,54 @@ function kindsFor(view: View): Kind[] {
   ];
 }
 
+/**
+ * The CHROME half of rule 1: the inline controls that sit outside their box.
+ *
+ * Swept the same way the content half is, because CodeMirror realises about
+ * five of the fixture's 84 cards on a 1440x900 viewport and a chrome check
+ * that only saw those five would pass with a clipped control sixty atoms down.
+ */
+async function checkChrome(view: View, combo: Combo) {
+  if (view.kind !== "inline") return;
+  let seen = 0;
+  const all: ReturnType<typeof chromeViolations> = [];
+  await sweepEach(view, ".atomdown-card-header", async () => {
+    const items = await measureChrome(view);
+    seen += items.length;
+    all.push(...chromeViolations(items));
+  });
+
+  if (seen === 0) {
+    await failWithArtifacts(
+      view.page,
+      1,
+      "containment (chrome) — no chrome was measured at all",
+      combo,
+      { seen },
+      `inline: the chrome sweep measured nothing. Either the controls stopped ` +
+        `being rendered or CHROME_SELECTOR no longer names them — a chrome ` +
+        `pass over zero elements proves nothing.`,
+    );
+  }
+
+  if (all.length) {
+    // Dedupe: the sweep re-measures whatever is still on screen at the next
+    // stop, so one clipped control reports once per stop it was visible at.
+    const unique = new Map<string, (typeof all)[number]>();
+    for (const v of all) unique.set(`${v.chrome}|${v.kind}|${v.detail}`, v);
+    const worst = [...unique.values()].sort((a, b) => b.px - a.px);
+    await failWithArtifacts(
+      view.page,
+      1,
+      "containment (chrome) — a control is clipped, off the scroller, or on the group outline",
+      combo,
+      { count: unique.size, violations: worst.slice(0, 40) },
+      `inline chrome: ${unique.size} violation(s). Worst: ${worst[0].chrome} ` +
+        `(${worst[0].kind}) — ${worst[0].detail}.`,
+    );
+  }
+}
+
 async function checkContainment(view: View, combo: Combo) {
   for (const kind of kindsFor(view)) {
     const sweep = await sweepBoxes(view, kind.spec);
@@ -193,7 +266,9 @@ for (const theme of THEMES) {
         await gotoFixture(page, server);
         await setWidth(page, combo.width);
         const view = await openInline(page);
+        await setDensity(view, combo.density);
         await checkContainment(view, combo);
+        await checkChrome(view, combo);
       });
 
       test(`board: everything stays inside its box [${comboName(combo)}]`, async ({
