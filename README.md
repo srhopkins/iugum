@@ -112,6 +112,11 @@ To run a build of the vendored SilverBullet source instead of the embedded
 binary, set `IUGUM_WIKI_SB_SRC` (or `IUGUM_WIKI_SB_BIN` for a binary you already
 have). See `docs/silverbullet-vendor.md`.
 
+The command also seeds the atomdown assets it carries into the space: the two
+plug bundles and the library page with the header button and the card CSS.
+Seeding is additive and it never overwrites a file you changed. See
+`docs/wiki-space-seed.md`.
+
 ### Observe
 
 This starts the metrics and logs server (sqlite file + embedded graphs).

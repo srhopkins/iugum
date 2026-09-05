@@ -16,13 +16,34 @@ import (
 	_ "github.com/srhopkins/iugum/defaults"
 	"github.com/srhopkins/iugum/embedbin"
 	"github.com/srhopkins/iugum/ship"
+	"github.com/srhopkins/iugum/spaceseed"
 )
 
 //go:embed silverbullet/silverbullet
 var silverbulletBin []byte
 
+// The atomdown space assets. A space needs all three files: the two plug
+// bundles, and the library page that carries the header-bar button
+// (space-lua) and the card CSS (space-style). Without the library page the
+// decorations land with no stylesheet, and the feature reads as broken.
+// The plug YAML files are build inputs, and plugs/atomdown-e2e is a test
+// suite, so neither one ships.
+var (
+	//go:embed plugs/atomdown-board/atomdown-board.plug.js
+	atomdownBoardPlug []byte
+	//go:embed plugs/atomdown-inline/atomdown-inline.plug.js
+	atomdownInlinePlug []byte
+	//go:embed "plugs/atomdown-inline/library/Atomdown Inline.md"
+	atomdownInlineLibrary []byte
+)
+
 func init() {
 	embedbin.Set(silverbulletBin)
+	spaceseed.Set([]spaceseed.Asset{
+		{Rel: "_plug/atomdown-board.plug.js", Data: atomdownBoardPlug},
+		{Rel: "_plug/atomdown-inline.plug.js", Data: atomdownInlinePlug},
+		{Rel: "Library/Atomdown Inline.md", Data: atomdownInlineLibrary},
+	})
 }
 
 const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|run|job|prepare-pr|skill>
