@@ -2710,11 +2710,17 @@ function buildBoardHtml(atoms, pageName, collapsedIds, viewState, density) {
     /* The three-dot button stays out of the way until the pointer is on the
        card or the group header. Its box is still laid out, so nothing reflows
        when it appears. Keyboard focus and an open popover also reveal it, or a
-       tab user would be moving through a control they cannot see. */
+       tab user would be moving through a control they cannot see.
+       :focus AND :focus-visible. :focus-visible is the narrower one and it
+       does not match a focus set by script or by a click, so a button that
+       HAS focus was still invisible - measured opacity 0 with
+       document.activeElement pointing at it. A focused control the reader
+       cannot see is a control they cannot use, whichever way focus arrived. */
     .board-card .board-menu-btn,
     .board-group-header .board-menu-btn { opacity: 0; }
     .board-card:hover .board-menu-btn,
     .board-group-header:hover .board-menu-btn,
+    .board-menu-btn:focus,
     .board-menu-btn:focus-visible { opacity: 1; }
     .board-card-menu:has(.board-menu-popover:not([hidden])) .board-menu-btn { opacity: 1; }
     .board-menu-popover {

@@ -40,6 +40,7 @@ import {
   FIXTURE,
   FIXTURE_PAGE,
   gotoFixture,
+  hoverBox,
   mod,
   openBoard,
   openInline,
@@ -103,14 +104,20 @@ test("the whole suite's interactions leave the page byte-identical, and atomdown
   // Inline: open, collapse and expand every group, hover every card, put the
   // cursor in a directive line, walk all four widths, close.
   const inline = await openInline(page);
-  await sweepEach(inline, ".atomdown-group-collapse", async (caret) => {
-    await caret.click();
-    await settle(page, 3);
-    await caret.click();
-    await settle(page, 3);
-  });
+  // Two sweeps rather than one caret clicked twice: a press rewrites the
+  // decorations, so the second click through the same index is not necessarily
+  // the same caret.
+  for (let pass = 0; pass < 2; pass++) {
+    await sweepEach(inline, ".atomdown-group-collapse", async (caret) => {
+      await caret.click();
+      await settle(page, 3);
+    });
+  }
   await sweepEach(inline, ".atomdown-card-header", async (card) => {
-    await card.hover({ timeout: 8000 }).catch(() => {});
+    // A real mouse move, not `hover`: see `hoverBox` in the harness. `hover`
+    // waits out its timeout on an element CodeMirror rebuilt under it, and at
+    // 84 cards that is longer than the test.
+    await hoverBox(inline, card);
   });
   await putCursorOnLine(page, '<!-- <atom id="');
   for (const w of WIDTHS) await setWidth(page, w);
@@ -119,12 +126,12 @@ test("the whole suite's interactions leave the page byte-identical, and atomdown
   // Board: open, collapse and expand every group, flip raw/rendered, flip
   // density both ways, close.
   const board = await openBoard(page);
-  await sweepEach(board, ".board-group-collapse", async (caret) => {
-    await caret.click();
-    await settle(page);
-    await caret.click();
-    await settle(page);
-  });
+  for (let pass = 0; pass < 2; pass++) {
+    await sweepEach(board, ".board-group-collapse", async (caret) => {
+      await caret.click();
+      await settle(page);
+    });
+  }
   await board.ev.locator("#atomdown-board-view").click();
   await settle(page);
   await board.ev.locator("#atomdown-board-view").click();

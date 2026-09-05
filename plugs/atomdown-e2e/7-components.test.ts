@@ -213,7 +213,7 @@ for (const theme of THEMES) {
       // Left visible in the runner output as a named pending test rather
       // than deleted, so it is a task and not a gap. See the "First-run
       // status" section of this directory's README.
-      test.fixme(`component: the CARD exists once per atom, is a closed box, and carries its slug and id [${comboName(combo)}]`, async ({
+      test(`component: the CARD exists once per atom, is a closed box, and carries its slug and id [${comboName(combo)}]`, async ({
         page,
       }) => {
         for (const open of [openInline, openBoard]) {
@@ -255,13 +255,23 @@ for (const theme of THEMES) {
                 left: side("left"),
               };
             };
-            // The inline card's edges are spread across the header widget and
-            // the body lines, so take the strongest claim on each side across
-            // the header and the two elements after it.
-            const parts: Element[] = [card];
+            // WHICH ELEMENTS CARRY THE DRAWN EDGE. The inline card's box is
+            // spread over three places, and a probe that misses any of them
+            // reports an open side on a closed box:
+            //   - the header widget's own child strip, `.atomdown-card-head`,
+            //     draws the TOP edge and the top corners. Reading the widget
+            //     and its siblings only, as a first version did, reported
+            //     `top: 0` on a card whose top border is plainly visible.
+            //   - the body lines draw the sides, on a `::before` rather than
+            //     their own border, because a line inside a group carries two
+            //     boxes' classes and one element has one border-left.
+            //   - the `-last` line draws the bottom edge.
+            // So: this element, everything inside it, and the next few
+            // siblings, each with its `::before`.
+            const parts: Element[] = [card, ...Array.from(card.querySelectorAll("*"))];
             let next = card.nextElementSibling;
             for (let i = 0; next && i < 3; i++) {
-              parts.push(next);
+              parts.push(next, ...Array.from(next.querySelectorAll("*")));
               next = next.nextElementSibling;
             }
             const all = parts.map(probe);
@@ -545,7 +555,7 @@ for (const theme of THEMES) {
       // Left visible in the runner output as a named pending test rather
       // than deleted, so it is a task and not a gap. See the "First-run
       // status" section of this directory's README.
-      test.fixme(`component: the CARD MENU is hidden at rest, sits top-right inside the card, and survives clicks inside itself [${comboName(combo)}]`, async ({
+      test(`component: the CARD MENU is hidden at rest, sits top-right inside the card, and survives clicks inside itself [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -559,9 +569,16 @@ for (const theme of THEMES) {
         const popover = view.ev.locator(`[data-menu-popover="${atomId}"]`);
 
         // --- Hidden at rest ----------------------------------------------
+        //
+        // THE BUTTON, NOT THE WRAPPER. `.board-card-menu` is a positioning box
+        // that deliberately stays laid out at all times, so that nothing
+        // reflows when the button inside it appears — the panel's own comment
+        // says so. Measuring the wrapper reported "visible at rest" on every
+        // card at both densities, on a build where the reader sees nothing.
+        const menuSel = ".board-card-menu .board-menu-btn";
         const rest = await hiddenState(
           view,
-          ".board-card-menu",
+          menuSel,
           `.board-card[data-atom-id="${atomId}"]`,
         );
         if (rest.visible) {
@@ -582,7 +599,7 @@ for (const theme of THEMES) {
         await settle(page);
         const hovered = await hiddenState(
           view,
-          ".board-card-menu",
+          menuSel,
           `.board-card[data-atom-id="${atomId}"]`,
         );
         if (!hovered.visible) {
@@ -761,7 +778,7 @@ for (const theme of THEMES) {
       // Left visible in the runner output as a named pending test rather
       // than deleted, so it is a task and not a gap. See the "First-run
       // status" section of this directory's README.
-      test.fixme(`component: the DRAG GRIP is hidden at rest and sits at the card's top LEFT, in both views [${comboName(combo)}]`, async ({
+      test(`component: the DRAG GRIP is hidden at rest and sits at the card's top LEFT, in both views [${comboName(combo)}]`, async ({
         page,
       }) => {
         // Explicitly both views, and explicitly the SIDE. The grip regressed
@@ -934,11 +951,18 @@ for (const theme of THEMES) {
       // Left visible in the runner output as a named pending test rather
       // than deleted, so it is a task and not a gap. See the "First-run
       // status" section of this directory's README.
-      test.fixme(`component: GROUP HEADER CONTROLS reach Rename and Ungroup, and neither touches an id or a digest [${comboName(combo)}]`, async ({
+      test(`component: GROUP HEADER CONTROLS reach Rename and Ungroup, and neither touches an id or a digest [${comboName(combo)}]`, async ({
         page,
       }) => {
-        const original = await readPageBytes(server);
-        await gotoFixture(page, server);
+        // ITS OWN SPACE. This test RENAMES a group and then UNGROUPS it, so on
+        // the shared server it leaves the fixture without one of its eleven
+        // groups and with a slug nobody else expects — which is what made the
+        // stale-digest test below report drift before anything had edited a
+        // card. A test that mutates the document boots its own.
+        const own = await startSpace();
+        try {
+        const original = await readPageBytes(own);
+        await gotoFixture(page, own);
         await setWidth(page, combo.width);
         const view = await openBoard(page);
         await setDensity(view, combo.density);
@@ -976,17 +1000,36 @@ for (const theme of THEMES) {
           (s.match(/(id|digest)="[^"]*"/g) ?? []).join("\n");
         const beforeIds = idsAndDigests(original);
 
+        // VISIBLE, not merely present. At compact density the panel folds
+        // Rename and Ungroup into the group's three-dot menu and gives
+        // `.board-group-actions` `display: none` — the buttons are still in
+        // the DOM. `count()` was therefore truthy and `click()` waited out
+        // the test on a button nobody can press. The `reach` check above
+        // already allows either shape; this is the direct-button half of it.
         const renameBtn = view.ev.locator(`[data-group-rename="${gid}"]`);
-        if (await renameBtn.count()) {
+        if (await renameBtn.isVisible().catch(() => false)) {
           await renameBtn.click();
-          const input = view.ev.locator(".board-slug-input");
-          if (await input.count()) {
+          // SCOPED TO THIS GROUP'S OWN RENAME FORM, and waited for.
+          // `.board-slug-input` on its own matches three forms — the group
+          // rename, the card slug and the atom slug — all built hidden, so
+          // `count()` was truthy and `fill()` then waited out the test on a
+          // hidden input.
+          const input = view.ev
+            .locator(
+              `.board-group[data-group-id="${gid}"] .board-group-rename .board-slug-input`,
+            )
+            .first();
+          const opened = await input
+            .waitFor({ state: "visible", timeout: 8000 })
+            .then(() => true)
+            .catch(() => false);
+          if (opened) {
             await input.fill("renamed-by-component-test");
             await page.keyboard.press("Enter");
             await settle(page, 6);
             await page.waitForTimeout(2000);
 
-            const renamed = await readPageBytes(server);
+            const renamed = await readPageBytes(own);
             if (!renamed.includes("renamed-by-component-test")) {
               await failWithArtifacts(
                 view.page,
@@ -1015,13 +1058,13 @@ for (const theme of THEMES) {
         }
 
         // --- Ungroup removes BOTH markers and leaves the rest untouched ---
-        const beforeUngroup = await readPageBytes(server);
+        const beforeUngroup = await readPageBytes(own);
         const ungroupBtn = view.ev.locator(`[data-group-ungroup="${gid}"]`);
-        if (await ungroupBtn.count()) {
+        if (await ungroupBtn.isVisible().catch(() => false)) {
           await ungroupBtn.click();
           await settle(page, 6);
           await page.waitForTimeout(2000);
-          const ungrouped = await readPageBytes(server);
+          const ungrouped = await readPageBytes(own);
 
           const markerCount = (s: string, needle: string) =>
             s.split(needle).length - 1;
@@ -1034,19 +1077,31 @@ for (const theme of THEMES) {
             "ungroup removes the closing marker too, not just the opening one",
           ).toBe(markerCount(beforeUngroup, "</atom-group>") - 1);
 
-          // Everything that is not a group marker must be byte-identical: the
-          // document must come back to exactly what it was before the group
-          // existed.
-          const withoutGroupMarkers = (s: string) =>
+          // Everything that is not a group marker must come back unchanged.
+          //
+          // BLANK-LINE RUNS ARE NORMALISED, and that is the plug's documented
+          // behaviour rather than a loosening. A loose group's markers sit on
+          // their own lines with a blank line each side, so removing a marker
+          // and nothing else would leave TWO blank lines where the document
+          // had one — `removeGroupMarkers` takes the marker's own blank line
+          // with it on purpose, and has a unit test named for it. Comparing
+          // byte-for-byte therefore failed on two blank lines that are
+          // supposed to go. Every other difference still fails: a changed
+          // character, a lost block, a rewritten id, slug or digest.
+          const contentOf = (s: string) =>
             s
               .split("\n")
               .filter((l) => !l.includes("atom-group"))
-              .join("\n");
+              .join("\n")
+              .replace(/\n{2,}/g, "\n\n");
           expect(
-            withoutGroupMarkers(ungrouped),
+            contentOf(ungrouped),
             "ungroup removes the two markers and nothing else — the document " +
               "returns to exactly what it was before the group existed",
-          ).toBe(withoutGroupMarkers(beforeUngroup));
+          ).toBe(contentOf(beforeUngroup));
+        }
+        } finally {
+          await own.stop();
         }
       });
 
@@ -1055,14 +1110,20 @@ for (const theme of THEMES) {
       // Left visible in the runner output as a named pending test rather
       // than deleted, so it is a task and not a gap. See the "First-run
       // status" section of this directory's README.
-      test.fixme(`component: the card EDITOR opens with the exact markdown, saves, cancels, and only grows downward [${comboName(combo)}]`, async ({
+      test(`component: the card EDITOR opens with the exact markdown, saves, cancels, and only grows downward [${comboName(combo)}]`, async ({
         page,
       }) => {
         // Board only, and that is a property rather than a gap: the inline
         // view HAS no card editor, because the page is the editor. That
         // absence is asserted at the end.
-        const original = await readPageBytes(server);
-        await gotoFixture(page, server);
+        //
+        // Its own space: this test SAVES text into a card, and the undo that
+        // puts it back is asynchronous. On the shared server the next test to
+        // read the page inherited the edit.
+        const own = await startSpace();
+        try {
+        const original = await readPageBytes(own);
+        await gotoFixture(page, own);
         await setWidth(page, combo.width);
         const view = await openBoard(page);
         await setDensity(view, combo.density);
@@ -1139,7 +1200,7 @@ for (const theme of THEMES) {
         await page.keyboard.press("Escape");
         await settle(page, 4);
         await page.waitForTimeout(1500);
-        const afterCancel = await readPageBytes(server);
+        const afterCancel = await readPageBytes(own);
         if (afterCancel.includes("CANCELLED-EDIT-SHOULD-NOT-PERSIST")) {
           await failWithArtifacts(
             view.page,
@@ -1161,7 +1222,7 @@ for (const theme of THEMES) {
         await page.keyboard.press(`${mod}+Enter`);
         await settle(page, 4);
         await page.waitForTimeout(2000);
-        const afterSave = await readPageBytes(server);
+        const afterSave = await readPageBytes(own);
         expect(
           afterSave,
           "Cmd-Enter commits the editor's text to the document",
@@ -1176,13 +1237,16 @@ for (const theme of THEMES) {
         // --- The inline view has no card editor --------------------------
         // Asserted as an absence, so an editor appearing there is caught too.
         await view.close();
-        await gotoFixture(page, server);
+        await gotoFixture(page, own);
         const inline = await openInline(page);
         expect(
           await page.locator(".board-card-edit, .atomdown-card-edit").count(),
           "the inline view has no card editor: the page IS the editor there",
         ).toBe(0);
         await inline.close();
+        } finally {
+          await own.stop();
+        }
       });
 
       // ---------------------------------------------------------------- 7
@@ -1190,10 +1254,17 @@ for (const theme of THEMES) {
       // Left visible in the runner output as a named pending test rather
       // than deleted, so it is a task and not a gap. See the "First-run
       // status" section of this directory's README.
-      test.fixme(`component: the STALE-DIGEST indicator marks the edited atom, and only that one [${comboName(combo)}]`, async ({
+      test(`component: the STALE-DIGEST indicator marks the edited atom, and only that one [${comboName(combo)}]`, async ({
         page,
       }) => {
-        await gotoFixture(page, server);
+        // ITS OWN SPACE, for both halves of what it asserts: it needs a page
+        // with NO drift to start from, and it deliberately creates drift by
+        // editing a card. On the shared server it inherited whatever the
+        // editor test above had left and reported drift before it had edited
+        // anything.
+        const own = await startSpace();
+        try {
+        await gotoFixture(page, own);
         await setWidth(page, combo.width);
         const view = await openBoard(page);
         await setDensity(view, combo.density);
@@ -1312,6 +1383,9 @@ for (const theme of THEMES) {
           "each row is a checkbox, because refreshing a digest is a per-atom " +
             "decision a person makes and never a bulk side effect",
         ).toBe(true);
+        } finally {
+          await own.stop();
+        }
       });
     }
   });
