@@ -107,6 +107,22 @@ function group(slug, body) {
  * width inside a member card. This tail takes every list item well past it.
  */
 function wrapTail(topic, i) {
+  // ONE CARD PER KIND, IN ONE GROUP, and the limit is measured rather than
+  // chosen. Tailing every list and blockquote atom, and then one in three,
+  // both made the page expensive enough that CodeMirror's incremental Lezer
+  // parse had not caught up by the time a rule 4 signature sweep reached the
+  // far end: those lines came back with `sb-line-h3` and
+  // `sb-blockquote-outside` missing and raw `##`, `>` and `[label](url)`
+  // markers in their text, and a signature keys on class list and text. It
+  // read as a state-machine defect and was a parse budget. Proven by running
+  // rule 4 against the previous fixture with the same CSS, where it passed.
+  //
+  // Rule 10a needs at least ONE wrapped line of each kind, so one card each
+  // is what it gets: the `loose` group's blockquote (i=3), its short ordered
+  // list (i=6) and its two-level bullet list (i=18). If the generator's shape
+  // cycle ever moves those, rule 10a fails with "no WRAPPED line was measured
+  // for ..." and names the kind.
+  if (topic !== "loose" || i % 3 !== 0) return "";
   return (
     ` It is written long on purpose, so this item wraps onto a second visual ` +
     `row at every editor width including full, and the hanging indent of ` +
@@ -168,18 +184,18 @@ group("decisions", () => {
       "blocked on an answer.",
   );
   // Rule 5: exactly one <ol> with exactly six <li>.
-  // Every item is long enough to WRAP at all four editor widths, so the
-  // hanging-indent measurement (rule 10) has a second visual row to read on
-  // an ORDERED list, which is the construct whose `1.` used to escape the
-  // card's left border.
+  //
+  // NOT lengthened to wrap. Rule 10a's wrapped ORDERED list is the `loose`
+  // group's short one; see `wrapTail`. Six wrapped items at the top of the
+  // page cost parse budget the rule does not need.
   push(
     [
-      "1. **History.** One commit is still local and later commits reverse it. Drop it, squash the pair, or push the contradiction, and write down which of the three you chose so the next reader does not have to work it out again.",
-      "2. **Stale ticket.** A closed ticket carries a title that now states the opposite of the rule it closed, so anyone who finds it by search reads the reverse of the decision and has no way to tell from the ticket alone.",
-      "3. **Rewritten policy.** An agent rewrote a conformance note to fit a change. Defensible, but read that paragraph before it is quoted anywhere, because the version in the history and the version on the page disagree.",
-      "4. **Editor core.** Approve a two-line change to the vendored editor, and the upstream pull request that carries it, or say which of the two you want held so the vendored tree and the upstream one do not drift apart.",
-      "5. **One file, not two.** This page exists twice. Collapse it to one, probably a symlink, and pick which of the two paths is the real one before anything else starts linking to whichever copy it found first.",
-      "6. **Five calls.** Listed in the next group. Those five gate the tickets underneath them, so the order they are answered in decides the order everything below can be started in, not just when it finishes.",
+      "1. **History.** One commit is still local and later commits reverse it. Drop it, squash the pair, or push the contradiction.",
+      "2. **Stale ticket.** A closed ticket carries a title that now states the opposite of the rule it closed.",
+      "3. **Rewritten policy.** An agent rewrote a conformance note to fit a change. Defensible, but read that paragraph.",
+      "4. **Editor core.** Approve a two-line change to the vendored editor, and the upstream pull request.",
+      "5. **One file, not two.** This page exists twice. Collapse to one, probably a symlink.",
+      "6. **Five calls.** Listed in the next group. Those five gate the tickets.",
     ].join("\n"),
   );
   push("Answer the six above in order. Do not start below them.");
