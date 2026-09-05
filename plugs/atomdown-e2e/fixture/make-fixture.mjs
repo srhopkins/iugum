@@ -96,6 +96,25 @@ function group(slug, body) {
   push(`<!-- </atom-group> -->`);
 }
 
+/**
+ * A tail long enough that the line it is on WRAPS at every editor width.
+ *
+ * Not decoration. The DoD for the hanging indent (iugum-3ad) measures the x
+ * of the first glyph on each visual ROW of a list item, and a line with one
+ * row has nothing to measure - so a fixture whose list items all fit on one
+ * row lets the whole assertion pass vacuously. The widest case is `full`,
+ * which is `min(1600px, 96%)` on a 1440px viewport: about 1294px of usable
+ * width inside a member card. This tail takes every list item well past it.
+ */
+function wrapTail(topic, i) {
+  return (
+    ` It is written long on purpose, so this item wraps onto a second visual ` +
+    `row at every editor width including full, and the hanging indent of ` +
+    `${topic} step ${i} can be measured on the row that follows the marker ` +
+    `rather than assumed from the stylesheet.`
+  );
+}
+
 /** Filler that varies by index so no two cards are byte-identical. */
 function filler(i, topic) {
   const shapes = [
@@ -103,9 +122,15 @@ function filler(i, topic) {
     () =>
       `Check ${i}. Read \`${topic}/step-${i}.md\` before the next change. The path is relative to the space root.`,
     () =>
-      `- ${topic} item ${i}a\n- ${topic} item ${i}b\n  - nested ${i}b1\n  - nested ${i}b2\n- ${topic} item ${i}c`,
+      `- ${topic} item ${i}a.${wrapTail(topic, i)}\n` +
+      `- ${topic} item ${i}b.${wrapTail(topic, i)}\n` +
+      `  - nested ${i}b1.${wrapTail(topic, i)}\n` +
+      `  - nested ${i}b2.${wrapTail(topic, i)}\n` +
+      `- ${topic} item ${i}c.${wrapTail(topic, i)}`,
     () =>
-      `> A quoted line for ${topic}, step ${i}. It wraps far enough to make the blockquote bar measurable against the card border.`,
+      `> A quoted line for ${topic}, step ${i}. It wraps far enough to make ` +
+      `the blockquote bar measurable against the card border.` +
+      wrapTail(topic, i),
     () => `### ${topic} step ${i}`,
     () =>
       (i % 16 < 8 ? "```sh\n" : "```bash\n") +
@@ -113,7 +138,9 @@ function filler(i, topic) {
       `iugum wiki --port 0 ./space-${i}\n` +
       "```",
     () =>
-      `1. first for ${topic} ${i}\n2. second for ${topic} ${i}\n3. third for ${topic} ${i}`,
+      `1. first for ${topic} ${i}.${wrapTail(topic, i)}\n` +
+      `2. second for ${topic} ${i}.${wrapTail(topic, i)}\n` +
+      `3. third for ${topic} ${i}.${wrapTail(topic, i)}`,
     () =>
       `A long reference for ${topic}: [a link label that is deliberately long enough to wrap inside a narrow card and reach the right border](https://example.invalid/atomdown/fixture/reference/${topic}/step-${i}?verbose=1&trace=1) and then some trailing prose.`,
   ];
@@ -141,14 +168,18 @@ group("decisions", () => {
       "blocked on an answer.",
   );
   // Rule 5: exactly one <ol> with exactly six <li>.
+  // Every item is long enough to WRAP at all four editor widths, so the
+  // hanging-indent measurement (rule 10) has a second visual row to read on
+  // an ORDERED list, which is the construct whose `1.` used to escape the
+  // card's left border.
   push(
     [
-      "1. **History.** One commit is still local and later commits reverse it. Drop it, squash the pair, or push the contradiction.",
-      "2. **Stale ticket.** A closed ticket carries a title that now states the opposite of the rule it closed.",
-      "3. **Rewritten policy.** An agent rewrote a conformance note to fit a change. Defensible, but read that paragraph.",
-      "4. **Editor core.** Approve a two-line change to the vendored editor, and the upstream pull request.",
-      "5. **One file, not two.** This page exists twice. Collapse to one, probably a symlink.",
-      "6. **Five calls.** Listed in the next group. Those five gate the tickets.",
+      "1. **History.** One commit is still local and later commits reverse it. Drop it, squash the pair, or push the contradiction, and write down which of the three you chose so the next reader does not have to work it out again.",
+      "2. **Stale ticket.** A closed ticket carries a title that now states the opposite of the rule it closed, so anyone who finds it by search reads the reverse of the decision and has no way to tell from the ticket alone.",
+      "3. **Rewritten policy.** An agent rewrote a conformance note to fit a change. Defensible, but read that paragraph before it is quoted anywhere, because the version in the history and the version on the page disagree.",
+      "4. **Editor core.** Approve a two-line change to the vendored editor, and the upstream pull request that carries it, or say which of the two you want held so the vendored tree and the upstream one do not drift apart.",
+      "5. **One file, not two.** This page exists twice. Collapse it to one, probably a symlink, and pick which of the two paths is the real one before anything else starts linking to whichever copy it found first.",
+      "6. **Five calls.** Listed in the next group. Those five gate the tickets underneath them, so the order they are answered in decides the order everything below can be started in, not just when it finishes.",
     ].join("\n"),
   );
   push("Answer the six above in order. Do not start below them.");
