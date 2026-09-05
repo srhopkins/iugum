@@ -40,6 +40,7 @@ import { test } from "@playwright/test";
 import {
   type Combo,
   combos,
+  type Locator,
   comboName,
   DENSITIES,
   expect,
@@ -121,6 +122,35 @@ async function firstCardMenu(view: View) {
   return menu;
 }
 
+/**
+ * Press a control and WAIT FOR THE POPOVER, not for three frames.
+ *
+ * The plug's click handler is asynchronous: the seam dispatches
+ * `editor:decorationClick` to a web worker, the worker re-reads the document
+ * through a syscall, writes the decoration config and nudges the editor. None
+ * of that is bounded by an animation frame, so `settle()` after the click is a
+ * race - it passed on a quiet machine and failed once under a loaded one, with
+ * zero popovers found. Waiting on the element itself is the same assertion
+ * with no clock in it.
+ */
+async function openPopover(view: View, control: Locator) {
+  await control.click({ force: true });
+  await view.page
+    .locator(".atomdown-menu-popover")
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await settle(view.page);
+}
+
+/** The mirror: press and wait for the popover to be GONE. */
+async function closePopover(view: View, control: Locator) {
+  await control.click({ force: true });
+  await view.page
+    .locator(".atomdown-menu-popover")
+    .waitFor({ state: "detached", timeout: 15_000 });
+  await settle(view.page);
+}
+
 // ---------------------------------------------------------------------------
 // 8a / 8b / 8g — the popover, and no picker
 // ---------------------------------------------------------------------------
@@ -135,8 +165,7 @@ test("8a: the card's three-dot control opens a popover and no picker", async ({
   expect(before.popovers, "no popover exists at rest").toBe(0);
 
   const menu = await firstCardMenu(view);
-  await menu.click({ force: true });
-  await settle(page);
+  await openPopover(view, menu);
 
   const open = await popoverState(view);
   if (open.popovers !== 1) {
@@ -193,8 +222,7 @@ test("8b: the popover's first child is an inert name-and-id label", async ({
   await gotoFixture(page, server);
   const view = await openInline(page);
   const menu = await firstCardMenu(view);
-  await menu.click({ force: true });
-  await settle(page);
+  await openPopover(view, menu);
 
   const open = await popoverState(view);
   expect(open.labelIsFirstChild, "the identity label is the FIRST child").toBe(
@@ -227,21 +255,21 @@ test("8b: the popover's first child is an inert name-and-id label", async ({
   ).toBe(1);
 
   // A second press on the button closes it, and so does a click elsewhere.
-  await menu.click({ force: true });
-  await settle(page);
+  await closePopover(view, menu);
   expect(
     (await popoverState(view)).popovers,
     "a second press on the control closes the popover",
   ).toBe(0);
 
-  await menu.click({ force: true });
-  await settle(page);
+  await openPopover(view, menu);
   expect((await popoverState(view)).popovers).toBe(1);
   await page.locator(".cm-line.atomdown-card-line").first().click({
     force: true,
     position: { x: 200, y: 4 },
   });
-  await settle(page);
+  await page
+    .locator(".atomdown-menu-popover")
+    .waitFor({ state: "detached", timeout: 15_000 });
   expect(
     (await popoverState(view)).popovers,
     "a click outside the popover closes it",
@@ -258,8 +286,7 @@ test("8g: the popover holds no text input, because one cannot work here", async 
   await gotoFixture(page, server);
   const view = await openInline(page);
   const menu = await firstCardMenu(view);
-  await menu.click({ force: true });
-  await settle(page);
+  await openPopover(view, menu);
   expect(
     (await popoverState(view)).inputs,
     "no input, textarea, select or contenteditable inside the popover: a " +
@@ -289,8 +316,7 @@ test("8a-group: the group control opens its own popover too", async ({
   const gmenu = page.locator(".atomdown-group-menu").first();
   await gmenu.scrollIntoViewIfNeeded();
   await settle(page);
-  await gmenu.click({ force: true });
-  await settle(page);
+  await openPopover(view, gmenu);
 
   const open = await popoverState(view);
   expect(open.popovers, "the group control opens a popover").toBe(1);
@@ -515,8 +541,7 @@ test("8e-open: an open popover keeps its own button visible", async ({
   await gotoFixture(page, server);
   const view = await openInline(page);
   const menu = await firstCardMenu(view);
-  await menu.click({ force: true });
-  await settle(page);
+  await openPopover(view, menu);
   // Pointer off the card: the popover is open, so the button must stay lit or
   // the control the popover belongs to vanishes under the reader's hand.
   await page.mouse.move(2, 2);
@@ -691,21 +716,18 @@ for (const combo of combos()) {
     await settle(page);
 
     const menu = await firstCardMenu(view);
-    await menu.click({ force: true });
-    await settle(page);
+    await openPopover(view, menu);
     await page.locator(".atomdown-menu-label-text").first().click({
       force: true,
     });
     await settle(page);
-    await menu.click({ force: true });
-    await settle(page);
+    await closePopover(view, menu);
 
     const gmenu = page.locator(".atomdown-group-menu").first();
     await gmenu.scrollIntoViewIfNeeded();
-    await gmenu.click({ force: true });
     await settle(page);
-    await gmenu.click({ force: true });
-    await settle(page);
+    await openPopover(view, gmenu);
+    await closePopover(view, gmenu);
 
     await setDensity(view, combo.density === "compact" ? "comfortable" : "compact");
     await setDensity(view, combo.density);
