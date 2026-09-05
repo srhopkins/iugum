@@ -34,6 +34,13 @@ const {
   widgetUnitKey,
   widgetBoxKey,
   cardMenuItems,
+  groupMenuItems,
+  menuPopoverHtml,
+  menuActionFromClasses,
+  menuOpenForCard,
+  menuOpenForGroup,
+  cardOpenKey,
+  MENU_GLYPH,
   minimalEdit,
   newAtomdownId,
   existingIds,
@@ -446,6 +453,181 @@ test("an implicit block's menu offers no id action at all", () => {
   const items = cardMenuItems("implicit-1", null, true, false);
   assert.deepEqual(items.map((i) => i.action), ["label", "group"]);
   assert.match(items[0].name, /no atom directive/);
+});
+
+// ---------------------------------------------------------------------------
+// THE POPOVER (iugum-caj). The card's own menu, not the host's picker.
+// ---------------------------------------------------------------------------
+
+test("the three-dot glyph is U+22EE, the VERTICAL ellipsis", () => {
+  // By code point, not by eye: U+22EE and U+22EF differ by one bit and look
+  // like the same three dots in a diff.
+  assert.equal(MENU_GLYPH, "&#8942;");
+  assert.equal(String.fromCodePoint(8942), "\u22ee");
+  // And the horizontal form it replaced is nowhere in the bundle's markup.
+  const bundle = readFileSync(
+    new URL("./atomdown-inline.plug.js", import.meta.url),
+    "utf8",
+  );
+  assert.equal(bundle.includes("&#8943;"), false);
+});
+
+test("a group's menu leads with identity and offers its two actions", () => {
+  const items = groupMenuItems("decisions", "KATZ94NM");
+  assert.equal(items[0].action, "label");
+  assert.match(items[0].name, /decisions/);
+  assert.match(items[0].name, /KATZ94NM/);
+  assert.deepEqual(items.map((i) => i.action), [
+    "label",
+    "rename-group",
+    "ungroup-group",
+  ]);
+});
+
+test("the popover's first child is the label, and it is not an action row", () => {
+  const html = menuPopoverHtml("card", cardMenuItems("claim", "4P8W2H6K", false, false));
+  const firstTag = html.indexOf("atomdown-menu-label");
+  const firstItem = html.indexOf("atomdown-menu-item");
+  assert.ok(firstTag > 0, "the label is rendered");
+  assert.ok(firstTag < firstItem, "and it comes before every action row");
+  // The label carries NO `atomdown-menu-item` and NO `atomdown-mi-` class, so
+  // a click on it matches no action and the popover stays open.
+  const label = html.slice(firstTag - 20, firstItem);
+  assert.equal(label.includes("atomdown-mi-"), false);
+});
+
+test("every action row names its own action in a class", () => {
+  const items = cardMenuItems("claim", "4P8W2H6K", false, true);
+  const html = menuPopoverHtml("card", items);
+  for (const item of items) {
+    if (item.action === "label") continue;
+    assert.ok(
+      html.includes("atomdown-mi-" + item.action),
+      "row " + item.action + " carries atomdown-mi-" + item.action,
+    );
+  }
+});
+
+test("the popover holds no input, because one cannot take focus in a widget", () => {
+  // The seam's widgetPressGuard preventDefaults a plain mousedown inside a
+  // widget, so a click focuses nothing and the keystrokes reach the DOCUMENT.
+  // Measured in plugs/atomdown-e2e/input-probe.test.ts.
+  const html = menuPopoverHtml("card", cardMenuItems("claim", "4P8W2H6K", false, false)) +
+    menuPopoverHtml("group", groupMenuItems("decisions", "KATZ94NM"));
+  for (const tag of ["<input", "<textarea", "<select", "contenteditable"]) {
+    assert.equal(html.includes(tag), false, "no " + tag + " in a popover");
+  }
+});
+
+test("a row's action is read back from the click's class list", () => {
+  assert.equal(
+    menuActionFromClasses(["atomdown-menu-item", "atomdown-mi-copy-id"]),
+    "copy-id",
+  );
+  assert.equal(menuActionFromClasses(["atomdown-menu-label"]), null);
+  assert.equal(menuActionFromClasses(["atomdown-card-menu"]), null);
+  assert.equal(menuActionFromClasses([]), null);
+  assert.equal(menuActionFromClasses(undefined), null);
+});
+
+test("a popover is remembered under the key a click reports", () => {
+  // The widget is named `box:atom:XXXX`; a click reports `atom:XXXX`, because
+  // widgetBoxKey strips the prefix. Comparing the two forms directly is the
+  // bug that stopped every card popover from opening.
+  assert.equal(cardOpenKey("box:atom:4P8W2H6K"), "atom:4P8W2H6K");
+  assert.equal(cardOpenKey("atom:4P8W2H6K"), "atom:4P8W2H6K");
+  assert.equal(
+    menuOpenForCard({ kind: "card", boxKey: "atom:4P8W2H6K" }, cardOpenKey("box:atom:4P8W2H6K")),
+    true,
+  );
+  assert.equal(
+    menuOpenForCard({ kind: "card", boxKey: "atom:OTHER123" }, cardOpenKey("box:atom:4P8W2H6K")),
+    false,
+  );
+  assert.equal(menuOpenForCard(null, "atom:4P8W2H6K"), false);
+  assert.equal(
+    menuOpenForGroup({ kind: "group", unitKey: "group:G1" }, "group:G1"),
+    true,
+  );
+  // A card's open menu never opens a group's popover, and the reverse.
+  assert.equal(
+    menuOpenForGroup({ kind: "card", boxKey: "atom:4P8W2H6K" }, "group:G1"),
+    false,
+  );
+  assert.equal(
+    menuOpenForCard({ kind: "group", unitKey: "group:G1" }, "atom:4P8W2H6K"),
+    false,
+  );
+});
+
+test("exactly one popover is drawn, on the card whose menu is open", () => {
+  const cards = computeCards(PAGE).cards;
+  const target = "box:atom:" + cards[0].atomIds[0];
+  const open = { kind: "card", boxKey: cardOpenKey(target) };
+  const closed = buildDecorations(PAGE, [], [], "comfortable", null);
+  const opened = buildDecorations(PAGE, [], [], "comfortable", open);
+
+  const count = (dec) =>
+    dec.widgets.filter((w) => w.html.includes("atomdown-menu-popover")).length;
+  assert.equal(count(closed), 0, "no popover with nothing open");
+  assert.equal(count(opened), 1, "one popover with one menu open");
+  const host = opened.widgets.find((w) =>
+    w.html.includes("atomdown-menu-popover")
+  );
+  assert.equal(host.id, target, "and it is on the card whose menu was opened");
+  assert.ok(
+    host.class.includes("atomdown-menu-open"),
+    "the host widget is marked open, so its button can stay visible",
+  );
+});
+
+test("opening a menu changes widgets only - no mark, fold or gesture moves", () => {
+  const cards = computeCards(PAGE).cards;
+  const open = { kind: "card", boxKey: cardOpenKey("box:atom:" + cards[0].atomIds[0]) };
+  const closed = buildDecorations(PAGE, [], [], "comfortable", null);
+  const opened = buildDecorations(PAGE, [], [], "comfortable", open);
+  // THE WHOLE POINT: a popover is presentation. If a mark or a fold moved,
+  // opening a menu could change the document's own layout or fold state.
+  assert.deepEqual(opened.marks, closed.marks);
+  assert.deepEqual(opened.folds, closed.folds);
+  assert.deepEqual(opened.gestures, closed.gestures);
+  assert.deepEqual(opened.lines, closed.lines);
+  assert.equal(opened.widgets.length, closed.widgets.length);
+  // ...and the widgets are at the same offsets, so nothing moves on screen.
+  assert.deepEqual(
+    opened.widgets.map((w) => [w.id, w.at, w.side]),
+    closed.widgets.map((w) => [w.id, w.at, w.side]),
+  );
+});
+
+test("a group's popover is drawn on the group bar, not on a card", () => {
+  const unit = computeUnits(PAGE).units.find((u) => u.kind === "group");
+  const opened = buildDecorations(PAGE, [], [], "comfortable", {
+    kind: "group",
+    unitKey: unit.unitKey,
+  });
+  const hosts = opened.widgets.filter((w) =>
+    w.html.includes("atomdown-menu-popover")
+  );
+  assert.equal(hosts.length, 1);
+  assert.equal(hosts[0].id, "unit:" + unit.unitKey);
+  assert.ok(hosts[0].html.includes("atomdown-menu-group"));
+});
+
+test("the grip and the menu are keyboard reachable", () => {
+  // Both carry tabindex, or their :focus rules in the stylesheet are dead and
+  // a tab user lands on a control at opacity 0.
+  const html = cardHeaderHtml(
+    { atomIds: ["4P8W2H6K"], atomSlug: "claim", implicit: false },
+    false,
+    "",
+    "",
+  );
+  const grip = html.slice(html.indexOf("atomdown-grip"));
+  const menu = html.slice(html.indexOf("atomdown-card-menu"));
+  assert.ok(grip.includes('tabindex="0"'), "the grip is focusable");
+  assert.ok(menu.includes('tabindex="0"'), "the menu button is focusable");
+  assert.ok(menu.includes('aria-haspopup="true"'), "and it announces a popup");
 });
 
 test("renaming an atom rewrites only its directive line", () => {
