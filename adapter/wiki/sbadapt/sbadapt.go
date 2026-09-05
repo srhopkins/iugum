@@ -12,6 +12,7 @@ import (
 	"github.com/srhopkins/iugum/contract"
 	"github.com/srhopkins/iugum/embedbin"
 	"github.com/srhopkins/iugum/plugin"
+	"github.com/srhopkins/iugum/spaceseed"
 )
 
 // Environment switches. The embedded release binary stays the default, so a
@@ -27,6 +28,13 @@ const (
 	envBin     = "IUGUM_WIKI_SB_BIN"
 	envSrc     = "IUGUM_WIKI_SB_SRC"
 	envRebuild = "IUGUM_WIKI_SB_REBUILD"
+	// envSeed controls the atomdown space assets that the program carries.
+	//
+	//	off    do not touch the space
+	//	force  take the built-in copy, even over a changed file
+	//
+	// The default is additive: write a missing file, keep a changed one.
+	envSeed = "IUGUM_WIKI_SEED"
 )
 
 func init() {
@@ -55,6 +63,9 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	if err := os.MkdirAll(opts.Space, 0o755); err != nil {
 		return err
 	}
+	if err := seedSpace(opts.Space); err != nil {
+		return err
+	}
 	path, cleanup, err := resolveBinary()
 	if cleanup != nil {
 		defer cleanup()
@@ -74,6 +85,23 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 		return fmt.Errorf("wiki: %w", err)
 	}
 	return nil
+}
+
+// seedSpace writes the compiled-in atomdown assets into the space. It runs
+// once per space per process, so the supervised restart in `iugum up` does
+// not repeat the log. A seed failure stops the server: a half-seeded space
+// draws the cards with no CSS, which looks like a broken feature.
+func seedSpace(space string) error {
+	switch os.Getenv(envSeed) {
+	case "off", "0", "no":
+		return nil
+	case "force":
+		_, err := spaceseed.Seed(space, spaceseed.Options{Force: true, Once: true, Log: os.Stdout})
+		return err
+	default:
+		_, err := spaceseed.Seed(space, spaceseed.Options{Once: true, Log: os.Stdout})
+		return err
+	}
 }
 
 // resolveBinary finds a SilverBullet binary to run. The second result removes
