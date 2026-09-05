@@ -634,6 +634,151 @@ function setAtomSlugInSource(sourceText, atomId, slug) {
   };
 }
 
+/** An attribute name this plug will write. The board's rule, restated. */
+const ATTR_NAME_RE = /^[A-Za-z_][\w.:-]*$/;
+
+/**
+ * Rewrites the WHOLE attribute list on one atom's directive line.
+ *
+ * This is the write half of the attribute form (iugum-etz). Pure, so the
+ * refusals below are unit-testable without a browser.
+ *
+ * THE ID IS TAKEN FROM THE SOURCE LINE, never from the caller. The form shows
+ * the id in a disabled row and never sends it back, so an id cannot be edited
+ * by any route through this function. Order is id, then slug, then whatever
+ * else the caller sent in the order it sent it - the order `atomdown emit`
+ * writes, so emitting afterwards is a no-op.
+ *
+ * A VALUE THAT CARRIES DIRECTIVE SYNTAX IS REFUSED, NOT ESCAPED, matching the
+ * board's rule for a pasted directive in a card body and for the same stated
+ * reason: escaping would silently store something other than what the reader
+ * typed, so the form would then disagree with the file about its own content,
+ * and a refusal a reader can act on beats a rewrite they cannot see.
+ *
+ * AND THE RESULT IS RE-PARSED BEFORE IT IS RETURNED. The refusals above are a
+ * blocklist, and a blocklist is a guess about what breaks a parser. Reading
+ * the rewritten line back with this plug's own `ATOM_TAG_RE` and `parseAttrs`
+ * and requiring the same id and the same name/value pairs is the property
+ * itself: whatever gets past the blocklist still cannot produce a line that
+ * means something different from what the form was showing.
+ */
+function setAtomAttrsInSource(sourceText, atomId, attrs) {
+  if (!Array.isArray(attrs)) {
+    return { ok: false, error: "Invalid attribute payload" };
+  }
+  const lines = String(sourceText || "").split("\n");
+  let lineIndex = -1;
+  let match = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(ATOM_TAG_RE);
+    if (!m) continue;
+    const idAttr = parseAttrs(m[2]).find(function (a) {
+      return a.name === "id";
+    });
+    if (idAttr && idAttr.value === atomId) {
+      lineIndex = i;
+      match = m;
+      break;
+    }
+  }
+  if (lineIndex === -1) {
+    return {
+      ok: false,
+      error:
+        "Could not find this atom's directive (implicit atom, or the page changed)",
+    };
+  }
+
+  const seen = {};
+  const cleaned = [];
+  for (let i = 0; i < attrs.length; i++) {
+    const a = attrs[i] || {};
+    const name = String(a.name == null ? "" : a.name).trim();
+    // A blank row is the form's own artefact - pressing Add and then saving -
+    // and dropping it is not a silent rewrite of anything the reader wrote.
+    if (name === "") continue;
+    if (name === "id") continue; // the id travels with the source line
+    if (!ATTR_NAME_RE.test(name)) {
+      return { ok: false, error: 'Not an attribute name: "' + name + '"' };
+    }
+    if (seen[name]) {
+      return { ok: false, error: "Two attributes named " + name };
+    }
+    seen[name] = true;
+    const value = String(a.value == null ? "" : a.value);
+    if (/[\n\r]/.test(value)) {
+      return {
+        ok: false,
+        error: "An attribute value is one line: " + name + " has a line break",
+      };
+    }
+    if (/<|>|"|--/.test(value)) {
+      return {
+        ok: false,
+        error:
+          "An Atomdown directive cannot be typed into an attribute value. " +
+          name + ' may not contain <, >, " or --.',
+      };
+    }
+    cleaned.push(
+      name === "slug"
+        ? { name: "slug", value: sanitizeSlug(value) }
+        : { name: name, value: value },
+    );
+  }
+  const withSlug = cleaned.filter(function (a) {
+    return a.name !== "slug" || a.value !== "";
+  });
+  const slugAttr = withSlug.find(function (a) { return a.name === "slug"; });
+  const rest = withSlug.filter(function (a) { return a.name !== "slug"; });
+  const ordered = [{ name: "id", value: atomId }]
+    .concat(slugAttr ? [slugAttr] : [])
+    .concat(rest);
+
+  const newLine = serializeAtomLine(match[1], ordered, match[3]);
+  // THE RE-PARSE. An emptied directive, or one a value broke out of, fails
+  // here rather than reaching the document.
+  const back = newLine.match(ATOM_TAG_RE);
+  if (!back) {
+    return {
+      ok: false,
+      error: "That attribute set does not read back as an atom directive",
+    };
+  }
+  const reparsed = parseAttrs(back[2]);
+  const sameId = reparsed.find(function (a) { return a.name === "id"; });
+  if (!sameId || sameId.value !== atomId) {
+    return { ok: false, error: "That attribute set loses the atom's id" };
+  }
+  if (
+    reparsed.length !== ordered.length ||
+    ordered.some(function (a, i) {
+      // Against the ESCAPED value, because that is what the line holds: an
+      // `&` is written as `&amp;` and `parseAttrs` does not decode it. The
+      // board's directive lines carry the same form.
+      return reparsed[i].name !== a.name ||
+        reparsed[i].value !== escapeAttrValue(a.value);
+    })
+  ) {
+    return {
+      ok: false,
+      error: "That attribute set does not read back as it was written",
+    };
+  }
+
+  lines[lineIndex] = newLine;
+  const newSlug = slugAttr ? slugAttr.value : "";
+  const text = lines.join("\n");
+  const conflict = slugConflict(sourceText, newSlug, atomId);
+  return {
+    ok: true,
+    text: text,
+    unchanged: text === sourceText,
+    slug: newSlug,
+    warning: conflict.warning,
+  };
+}
+
 /** Rebuilds an `<atom .../>` directive line from an attribute list. */
 function serializeAtomLine(prefix, attrs, suffix) {
   const attrText = attrs
@@ -783,8 +928,10 @@ function gripLine(unit) {
  * reader tabbing through the page is told the block is movable rather than
  * landing on something invisible.
  */
-function gripHtml(title) {
-  return '<span class="atomdown-grip" role="button" tabindex="0" title="' +
+function gripHtml(title, extraClass) {
+  const extra = extraClass ? " " + extraClass : "";
+  return '<span class="atomdown-grip' + extra +
+    '" role="button" tabindex="0" title="' +
     escapeHtml(title) + '">&#10303;</span>';
 }
 
@@ -989,8 +1136,9 @@ function densityClass(value) {
 }
 
 /**
- * The group header bar: collapse, grip, the kind, the group's readable name,
- * its id, how many atoms it holds, and a menu.
+ * The group header bar: the collapse chevron, the kind, the group's readable
+ * name, its id and how many atoms it holds. The grip and the three-dot menu
+ * are children of this widget too, but they are NOT on the bar - see below.
  *
  * The bar is also the group box's TOP EDGE. The group's opening marker line is
  * a directive and therefore collapsed, so it can carry no visible border, and
@@ -1000,15 +1148,38 @@ function densityClass(value) {
  * Every control carries its own class. The seam reports the classes of the
  * element that was clicked, so one widget can carry several controls without
  * needing a widget each.
+ *
+ * THE GRIP AND THE MENU SIT OUTSIDE THE GROUP CONTAINER, in the same two page
+ * gutters the card's controls use (iugum-938). They are the FIRST and the last
+ * child, so the DOM order reads left to right the way the screen does, and the
+ * stylesheet takes both out of the bar's flex flow and pins them to the bar's
+ * own border box. Three things follow from that, and each was a reason:
+ *
+ *  - the two views agree. A card's controls are in the gutter, hover-only; the
+ *    group's were inside a saturated accent bar, always visible. Steve's
+ *    report was exactly that disagreement.
+ *  - the bar gets its width back for the name, the id and the count, which is
+ *    what it is for.
+ *  - a control on the page ground needs no hover treatment of its own. The
+ *    translucent wash exists because an opaque chip on the accent fill reads
+ *    as a hole punched through the bar; off the bar there is no fill to punch.
+ *    The collapse chevron stays on the bar and keeps the wash.
+ *
+ * VERTICAL ALIGNMENT IS THE BAR'S ROW, not the container's centre, and that is
+ * also the collision rule. A group's controls on the bar's row cannot meet a
+ * member card's controls, because the bar is a row of its own above every
+ * member; centring on the whole container would park the group's grip beside
+ * an arbitrary member card, where two grips in one gutter say nothing about
+ * which one moves the group.
  */
 function groupHeaderHtml(unit, memberCount, directiveText, collapsed, popover) {
   const name = slugOrId(unit.groupSlug, unit.groupId);
   const word = memberCount === 1 ? "card" : "cards";
   return [
+    gripHtml("Drag to move the whole group " + name, "atomdown-group-grip"),
     '<span class="atomdown-group-collapse" title="' +
     (collapsed ? "Expand this group" : "Collapse this group") + '">' +
     (collapsed ? "&#9656;" : "&#9662;") + "</span>",
-    '<span class="atomdown-grip atomdown-group-grip" title="Drag to move the whole group">&#10303;</span>',
     '<span class="atomdown-group-kind">group</span>',
     '<span class="atomdown-group-name" title="' +
     escapeHtml(
@@ -2277,10 +2448,13 @@ async function applyCollapse(unitKey) {
  * nothing: it is the label, the same way the panel's popover puts identity at
  * the top of the menu rather than making you hunt for it.
  *
- * `atomdown edit attributes` is deliberately NOT here. The panel needs a form
- * because its cards are a copy of the document; inline the directive line is
- * the attributes, one keystroke away, so the menu offers to put the cursor
- * there instead and the peek shows the line while you are in it.
+ * "Edit attributes" OPENS A FORM, the way the panel's does (iugum-etz). It
+ * used to put the cursor on the directive line and stop there, which is what
+ * Steve reported: choosing it showed the raw atomdown in the card and no form.
+ * The form lives in a panel, not in the popover - see attrFormHtml for the
+ * measured reason. "Show the directive line" keeps the old behaviour as its
+ * own row, because reading the raw bytes in place is still useful and it is
+ * what the peek exists for.
  */
 function cardMenuItems(name, id, implicit, inGroup) {
   const items = [{
@@ -2304,6 +2478,12 @@ function cardMenuItems(name, id, implicit, inGroup) {
     });
     items.push({
       name: "Edit attributes",
+      description:
+        "Open this atom's attributes in a form. The name (slug) comes first, and Save is one undo step.",
+      action: "attrs",
+    });
+    items.push({
+      name: "Show the directive line",
       description:
         "Put the cursor on this atom's directive line. The line IS the attributes, and the peek shows it while the cursor is there.",
       action: "reveal",
@@ -2429,6 +2609,8 @@ async function runCardMenuAction(action, boxKey, unitKey) {
       return { ok: true, copied: name };
     case "rename":
       return await renameAtomHere(atomId, slug);
+    case "attrs":
+      return await editAttrsHere(atomId);
     case "reveal":
       return await revealDirective(atomId);
     case "ungroup":
@@ -2480,6 +2662,400 @@ async function renameAtomHere(atomId, currentSlug) {
     return result;
   }
   if (result.text === current) return { ok: true, unchanged: true };
+  await applyEdit(current, result.text);
+  await warnUser(result.warning);
+  return { ok: true, slug: result.slug };
+}
+
+// ---------------------------------------------------------------------------
+// THE ATTRIBUTE FORM (iugum-etz)
+//
+// WHERE IT LIVES, AND WHY IT IS NOT IN THE POPOVER. The seam's
+// `widgetPressGuard` calls preventDefault on a plain mousedown inside any
+// widget, so an input in the popover takes no focus from a click and the
+// characters typed next go INTO THE DOCUMENT. That is measured, in
+// `plugs/atomdown-e2e/input-probe.test.ts`, and rule 8g is the guard rail that
+// says so. The popover still holds no input; 8g is unchanged.
+//
+// So the form needs a surface that CAN hold focus, and one already exists in
+// this host: a SilverBullet panel. `editor.showPanel` renders its HTML in an
+// iframe outside the editor's DOM entirely (silverbullet client/components/
+// panel.tsx), the guard cannot reach into it, and it is the very surface the
+// board panel's own attribute form runs in and has worked in all along. So
+// this reuses a proven focusable surface and changes no vendored code.
+//
+// WHY NOT THE BOARD PANEL ITSELF, which was the recommendation to start from.
+// Two measured costs. The board panel renders all 84 cards of the fixture and
+// covers the whole window, so an attribute edit means leaving the page, losing
+// the reading position and waiting for a full re-render; and reaching one
+// card's popover from another plug needs a message into the board's iframe
+// that does not exist yet, which is more new surface than this form is. This
+// form is one atom's attributes and about 120 lines of panel script.
+//
+// WHY NOT `editor.prompt` PER FIELD. It is one field per modal, so it cannot
+// present the slug first alongside the rest, and it has nowhere to put Add and
+// Remove. The bead says so and the measurement agrees.
+//
+// THE PANEL SLOT IS "modal", the same slot the board uses. That is deliberate
+// rather than an oversight: a modal panel is the one slot that does not resize
+// the editor, so opening this form moves no card. The board occupies the same
+// slot when it is open, and when it is open it covers the page, so no inline
+// card is on screen to open this form from.
+// ---------------------------------------------------------------------------
+
+/** Which atom the form is open for, or null. Presentation state. */
+let attrFormAtomId = null;
+
+/** The theme tokens the panel iframe copies from the parent document. */
+const ATTR_THEME_VARS = [
+  "--root-background-color",
+  "--root-color",
+  "--ui-surface-background-color",
+  "--ui-surface-color",
+  "--ui-surface-border-color",
+  "--ui-surface-section-background-color",
+  "--ui-surface-hover-background-color",
+  "--ui-accent-color",
+  "--ui-accent-contrast-color",
+  "--subtle-color",
+  "--link-color",
+];
+
+/**
+ * The form's markup and its panel script, as a pure pair.
+ *
+ * `atom` is `{ id, slug, attrs }`, where `attrs` is every attribute the
+ * directive line carries, in source order, INCLUDING id and slug: the form
+ * decides how to present them rather than being handed a pre-filtered list, so
+ * what it shows and what the file holds cannot disagree.
+ *
+ * THE SLUG IS FIRST AND LABELLED, matching the board exactly - same wording,
+ * same placeholder shape - because a slug is the one attribute a human reads
+ * and the two views may not disagree about it. The id is a disabled row: it is
+ * identity, it is never editable, and hiding it would leave the reader with no
+ * way to see which atom the form is for.
+ */
+function attrFormHtml(atom) {
+  const id = String(atom && atom.id ? atom.id : "");
+  const slug = String(atom && atom.slug ? atom.slug : "");
+  const rows = ((atom && atom.attrs) || []).filter(function (a) {
+    return a.name !== "id" && a.name !== "slug";
+  });
+  const data = JSON.stringify({ id: id, slug: slug, attrs: rows });
+  const style = `
+    :root {
+      --root-background-color: #ffffff;
+      --root-color: #37352f;
+      --ui-surface-background-color: #ffffff;
+      --ui-surface-border-color: #e9e9e7;
+      --ui-surface-section-background-color: #f7f6f3;
+      --ui-surface-hover-background-color: #f1f0ee;
+      --ui-accent-color: #2383e2;
+      --ui-accent-contrast-color: #ffffff;
+      --subtle-color: #787774;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      background: var(--root-background-color);
+      color: var(--root-color);
+      font-family: var(--attr-font-family, system-ui, sans-serif);
+      font-size: 13px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow: auto;
+    }
+    .ad-attr-form {
+      width: min(560px, 100%);
+      margin: 8vh 0 24px;
+      padding: 16px;
+      background: var(--ui-surface-background-color);
+      border: 1px solid var(--ui-surface-border-color);
+      border-radius: 8px;
+    }
+    .ad-attr-title { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+    .ad-attr-sub {
+      font-size: 11px;
+      color: var(--subtle-color);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 12px;
+    }
+    .ad-attr-slug { margin-bottom: 12px; }
+    .ad-attr-label {
+      display: block;
+      font-size: 11px;
+      color: var(--subtle-color);
+      margin-bottom: 3px;
+    }
+    .ad-attr-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .ad-attr-name, .ad-attr-value, .ad-attr-slug-input {
+      font-family: inherit;
+      font-size: 13px;
+      padding: 4px 6px;
+      color: var(--root-color);
+      background: var(--ui-surface-section-background-color);
+      border: 1px solid var(--ui-surface-border-color);
+      border-radius: 4px;
+      min-width: 0;
+    }
+    .ad-attr-slug-input { width: 100%; }
+    .ad-attr-name { flex: 0 0 34%; }
+    .ad-attr-value { flex: 1 1 auto; }
+    .ad-attr-name:disabled, .ad-attr-value:disabled { opacity: 0.6; }
+    .ad-attr-remove {
+      flex: 0 0 auto;
+      font: inherit;
+      cursor: pointer;
+      color: var(--subtle-color);
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 0 7px;
+    }
+    .ad-attr-remove:hover { color: var(--root-color); }
+    .ad-attr-remove:disabled { visibility: hidden; }
+    .ad-attr-actions { display: flex; gap: 6px; margin-top: 12px; }
+    .ad-attr-actions button {
+      font: inherit;
+      cursor: pointer;
+      padding: 5px 10px;
+      color: var(--root-color);
+      background: var(--ui-surface-section-background-color);
+      border: 1px solid var(--ui-surface-border-color);
+      border-radius: 4px;
+    }
+    .ad-attr-actions button:hover {
+      background: var(--ui-surface-hover-background-color);
+    }
+    .ad-attr-save {
+      margin-left: auto;
+      font-weight: 600;
+    }
+    .ad-attr-status {
+      min-height: 16px;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--subtle-color);
+    }
+  `;
+  const html = "<style>" + style + "</style>" +
+    '<div class="ad-attr-form" role="dialog" aria-label="Atomdown attributes">' +
+    '<div class="ad-attr-title">Attributes</div>' +
+    '<div class="ad-attr-sub" id="ad-attr-id">' + escapeHtml(id) + "</div>" +
+    '<div class="ad-attr-slug">' +
+    '<label class="ad-attr-label" for="ad-attr-slug-input">' +
+    "Name (slug) - readable alias, not the id</label>" +
+    '<input class="ad-attr-slug-input" id="ad-attr-slug-input" type="text" ' +
+    'spellcheck="false" placeholder="unnamed - the card shows ' +
+    escapeHtml(id) + '" value="' + escapeHtml(slug) + '">' +
+    "</div>" +
+    '<label class="ad-attr-label">Attributes</label>' +
+    '<div class="ad-attr-list" id="ad-attr-list"></div>' +
+    '<div class="ad-attr-actions">' +
+    '<button type="button" class="ad-attr-add" id="ad-attr-add">+ Add attribute</button>' +
+    '<button type="button" class="ad-attr-cancel" id="ad-attr-cancel">Cancel</button>' +
+    '<button type="button" class="ad-attr-save" id="ad-attr-save">Save</button>' +
+    "</div>" +
+    '<div class="ad-attr-status" id="ad-attr-status"></div>' +
+    "</div>";
+
+  const script = `
+    var DATA = ${data};
+    var THEME_VARS = ${JSON.stringify(ATTR_THEME_VARS)};
+
+    // The theme tokens live on the PARENT document's <html> and custom
+    // properties do not cross an iframe boundary. This panel is srcDoc and
+    // same-origin, so read the parent's computed values and copy them, the
+    // same road the board panel's applyParentTheme() uses. On failure the
+    // :root fallbacks above are a light-theme snapshot, never a dark guess.
+    function applyParentTheme() {
+      try {
+        var pd = window.parent && window.parent.document;
+        if (!pd || !pd.documentElement) return;
+        var cs = window.parent.getComputedStyle(pd.documentElement);
+        THEME_VARS.forEach(function (n) {
+          var v = cs.getPropertyValue(n);
+          if (v && v.trim()) {
+            document.documentElement.style.setProperty(n, v.trim());
+          }
+        });
+        var font = cs.getPropertyValue("--editor-font").trim();
+        if (!font) {
+          var ed = pd.querySelector("#sb-editor .cm-content");
+          if (ed) font = window.parent.getComputedStyle(ed).fontFamily;
+        }
+        if (font && !/^Times\\b/.test(font)) {
+          document.documentElement.style.setProperty("--attr-font-family", font);
+        }
+      } catch (e) {}
+    }
+    applyParentTheme();
+    window.addEventListener("message", function (e) {
+      if (e.data && e.data.type === "theme") applyParentTheme();
+    });
+
+    var listEl = document.getElementById("ad-attr-list");
+    var slugEl = document.getElementById("ad-attr-slug-input");
+    var statusEl = document.getElementById("ad-attr-status");
+
+    function addRow(name, value, locked) {
+      var row = document.createElement("div");
+      row.className = "ad-attr-row";
+      var n = document.createElement("input");
+      n.className = "ad-attr-name";
+      n.type = "text";
+      n.spellcheck = false;
+      n.placeholder = "name";
+      n.value = name || "";
+      var v = document.createElement("input");
+      v.className = "ad-attr-value";
+      v.type = "text";
+      v.spellcheck = false;
+      v.placeholder = "value";
+      v.value = value == null ? "" : value;
+      var rm = document.createElement("button");
+      rm.className = "ad-attr-remove";
+      rm.type = "button";
+      rm.textContent = "\\u00d7";
+      rm.title = "Remove this attribute";
+      if (locked) {
+        n.disabled = true;
+        v.disabled = true;
+        rm.disabled = true;
+      }
+      rm.addEventListener("click", function () { row.remove(); });
+      row.appendChild(n);
+      row.appendChild(v);
+      row.appendChild(rm);
+      listEl.appendChild(row);
+      return row;
+    }
+
+    // The id row is first and disabled: identity is shown and never editable.
+    addRow("id", DATA.id, true);
+    DATA.attrs.forEach(function (a) { addRow(a.name, a.value, false); });
+
+    document.getElementById("ad-attr-add").addEventListener("click", function () {
+      var row = addRow("", "", false);
+      row.querySelector(".ad-attr-name").focus();
+    });
+
+    function close() {
+      syscall("system.invokeFunction", "atomdown-inline.closeAttrForm");
+    }
+    document.getElementById("ad-attr-cancel").addEventListener("click", close);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") close();
+    });
+
+    document.getElementById("ad-attr-save").addEventListener("click", async function () {
+      var attrs = [];
+      Array.prototype.slice.call(listEl.querySelectorAll(".ad-attr-row"))
+        .forEach(function (row) {
+          var n = row.querySelector(".ad-attr-name");
+          var v = row.querySelector(".ad-attr-value");
+          // The id row travels with the source line, never through here.
+          if (n.disabled) return;
+          attrs.push({ name: n.value, value: v.value });
+        });
+      // Slug FIRST, so the rewritten directive reads id, slug, then the rest.
+      // The worker sanitizes it and drops it when it is empty.
+      attrs.unshift({ name: "slug", value: slugEl.value });
+      statusEl.textContent = "Saving...";
+      try {
+        var result = await syscall(
+          "system.invokeFunction",
+          "atomdown-inline.saveAttrs",
+          DATA.id,
+          JSON.stringify(attrs)
+        );
+        if (result && result.ok) {
+          statusEl.textContent = "Saved.";
+          close();
+        } else {
+          statusEl.textContent =
+            (result && result.error) || "Save failed";
+        }
+      } catch (e) {
+        statusEl.textContent = "Save failed: " + e.message;
+      }
+    });
+
+    // FOCUS THE SLUG FIELD, and this is the whole reason the form is in a
+    // panel. In the popover a click focused nothing and the keystrokes went
+    // into the document; here the field takes focus on open.
+    slugEl.focus();
+    slugEl.select();
+  `;
+  return { html: html, script: script };
+}
+
+/**
+ * "Edit attributes" for one atom: open the form.
+ *
+ * Reads the atom's directive line fresh rather than trusting whatever the
+ * popover was drawn from, the same "re-read, do not trust the client" rule
+ * every write path here uses.
+ */
+async function editAttrsHere(atomId) {
+  if (!atomId) return { ok: false, error: "This block has no atom directive" };
+  const text = await syscall("editor.getText");
+  const lines = String(text || "").split("\n");
+  let attrs = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(ATOM_TAG_RE);
+    if (!m) continue;
+    const parsed = parseAttrs(m[2]);
+    const idAttr = parsed.find(function (a) { return a.name === "id"; });
+    if (idAttr && idAttr.value === atomId) {
+      attrs = parsed;
+      break;
+    }
+  }
+  if (!attrs) {
+    const message =
+      "Could not find this atom's directive (implicit atom, or the page changed)";
+    await warnUser(message);
+    return { ok: false, error: message };
+  }
+  const slugAttr = attrs.find(function (a) { return a.name === "slug"; });
+  const form = attrFormHtml({
+    id: atomId,
+    slug: slugAttr ? slugAttr.value : "",
+    attrs: attrs,
+  });
+  attrFormAtomId = atomId;
+  await syscall("editor.showPanel", "modal", 0, form.html, form.script);
+  return { ok: true, id: atomId };
+}
+
+/** Shut the attribute form. Called by its Cancel button and after a save. */
+async function closeAttrForm() {
+  attrFormAtomId = null;
+  try {
+    await syscall("editor.hidePanel", "modal");
+  } catch (e) {
+    // Nothing to hide is not a failure.
+  }
+  return { ok: true };
+}
+
+/**
+ * The form's Save. ONE editor transaction, so one undo reverts the whole save
+ * however many attributes it changed.
+ */
+async function saveAttrs(atomId, attrsJson) {
+  let requested;
+  try {
+    requested = JSON.parse(attrsJson);
+  } catch (e) {
+    return { ok: false, error: "Invalid attribute payload" };
+  }
+  const current = await syscall("editor.getText");
+  const result = setAtomAttrsInSource(current, atomId, requested);
+  if (!result.ok) return result;
+  if (result.unchanged) return { ok: true, unchanged: true };
   await applyEdit(current, result.text);
   await warnUser(result.warning);
   return { ok: true, slug: result.slug };
@@ -2631,6 +3207,8 @@ const functionMapping = {
   onDecorationLasso,
   groupSelection,
   ungroupSelection,
+  saveAttrs,
+  closeAttrForm,
 };
 
 const manifest = {
@@ -2697,6 +3275,14 @@ const manifest = {
       path: "./atomdown-inline.js:ungroupSelection",
       command: { name: "Atomdown: Ungroup" },
     },
+    // The attribute form's two callbacks. No command: the form is reached
+    // from a card's own menu, and its panel script invokes these by name.
+    saveAttrs: {
+      path: "./atomdown-inline.js:saveAttrs",
+    },
+    closeAttrForm: {
+      path: "./atomdown-inline.js:closeAttrForm",
+    },
   },
 };
 
@@ -2710,6 +3296,8 @@ const internals = {
   removeGroupMarkers,
   setGroupSlugInSource,
   setAtomSlugInSource,
+  setAtomAttrsInSource,
+  attrFormHtml,
   serializeAtomLine,
   firstBoxKey,
   widgetUnitKey,
