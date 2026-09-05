@@ -469,6 +469,325 @@ for (const density of DENSITIES) {
 }
 
 // ---------------------------------------------------------------------------
+// 8d-group — the GROUP's two controls, outside the group container (iugum-938)
+//
+// The same property as 8d, measured against the group header widget's own
+// border box, which is the group box's top edge and carries the 2px accent
+// outline. Steve: "the cards and groups were supposed to have same behavior,
+// groups still show inside the container."
+//
+// AND THE COLLISION RULE, asserted rather than described. A member card's
+// controls are in the same two gutters, so the two sets must not meet. The
+// rule the plug states is "the group's controls are on the BAR's row, member
+// cards keep theirs on their own rows", and the bar is a row of its own above
+// every member - so the vertical bands are disjoint. There is a second,
+// independent separation worth asserting because it is what makes the first
+// one forgiving: a member card's head is inset by the group's padding plus the
+// outline, so its controls sit in a lane about 10px right of the group's.
+// ---------------------------------------------------------------------------
+
+async function groupControlOffsets(view: View) {
+  return await view.ev.evaluate(() => {
+    const out: any[] = [];
+    const bars = Array.from(
+      document.querySelectorAll(".sb-decoration-widget.atomdown-group-header"),
+    ) as HTMLElement[];
+    for (const bar of bars) {
+      const grip = bar.querySelector(":scope > .atomdown-group-grip") as
+        | HTMLElement
+        | null;
+      const menu = bar.querySelector(":scope > .atomdown-group-menu") as
+        | HTMLElement
+        | null;
+      const caret = bar.querySelector(".atomdown-group-collapse") as
+        | HTMLElement
+        | null;
+      if (!grip || !menu) continue;
+      const b = bar.getBoundingClientRect();
+      const g = grip.getBoundingClientRect();
+      const m = menu.getBoundingClientRect();
+      if (b.width === 0 || g.width === 0 || m.width === 0) continue;
+      const scroller = document.querySelector(".cm-scroller") as HTMLElement;
+      const sBox = scroller.getBoundingClientRect();
+      const clipLeft = sBox.left;
+      const clipRight = sBox.left + scroller.clientWidth;
+      // The hit test, because a clipped element still reports its full rect.
+      const hit = (el: HTMLElement) => {
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        if (x < clipLeft + 2 || x > clipRight - 2) return "off-scroller";
+        const probe = document.elementFromPoint(x, y);
+        if (!probe || !probe.closest(".cm-editor")) return "not-measurable";
+        return probe === el || el.contains(probe) ? "painted" : "covered";
+      };
+      out.push({
+        groupId: (bar.querySelector(".atomdown-group-id")?.textContent ?? "")
+          .trim(),
+        // Positive means clear of the group's border, outside it.
+        gripClear: +(b.left - g.right).toFixed(2),
+        menuClear: +(m.left - b.right).toFixed(2),
+        gripIsLeft: g.left < b.left,
+        menuIsRight: m.right > b.right,
+        gripPaint: hit(grip),
+        menuPaint: hit(menu),
+        // Clearance from the scroller's own client edges, which is the number
+        // that shrinks as the content column widens.
+        gripFromScroller: +(g.left - clipLeft).toFixed(2),
+        menuFromScroller: +(clipRight - m.right).toFixed(2),
+        // The bar keeps the chevron, at full size and always visible.
+        caretVisible: caret
+          ? parseFloat(getComputedStyle(caret).opacity) > 0.99
+          : false,
+        caretFontSize: caret ? getComputedStyle(caret).fontSize : null,
+        caretInsideBar: caret
+          ? caret.getBoundingClientRect().left >= b.left &&
+            caret.getBoundingClientRect().right <= b.right
+          : false,
+        // Rows and lanes, for the collision assertion below.
+        gripRect: { top: g.top, bottom: g.bottom, left: g.left, right: g.right },
+        menuRect: { top: m.top, bottom: m.bottom, left: m.left, right: m.right },
+      });
+    }
+    return out;
+  });
+}
+
+/** Every member card's own gutter controls, with the group they sit in. */
+async function memberControlRects(view: View) {
+  return await view.ev.evaluate(() => {
+    const out: any[] = [];
+    const heads = Array.from(
+      document.querySelectorAll(".atomdown-card-head.atomdown-nested"),
+    ) as HTMLElement[];
+    for (const head of heads) {
+      const grip = head.querySelector(".atomdown-grip") as HTMLElement | null;
+      const menu = head.querySelector(".atomdown-card-menu") as
+        | HTMLElement
+        | null;
+      if (!grip || !menu) continue;
+      const g = grip.getBoundingClientRect();
+      const m = menu.getBoundingClientRect();
+      if (g.width === 0 || m.width === 0) continue;
+      out.push({
+        gripRect: { top: g.top, bottom: g.bottom, left: g.left, right: g.right },
+        menuRect: { top: m.top, bottom: m.bottom, left: m.left, right: m.right },
+      });
+    }
+    return out;
+  });
+}
+
+for (const density of DENSITIES) {
+  for (const width of WIDTHS) {
+    test(`8d-group: the group's controls sit outside the group container [${width}/${density}]`, async ({
+      page,
+    }) => {
+      await gotoFixture(page, server);
+      await setWidth(page, width);
+      const view = await openInline(page);
+      await setDensity(view, density);
+      // A hover inside the group, so the hover-only controls are laid out
+      // where a reader would see them. Their boxes exist at opacity 0 either
+      // way, but measuring the revealed state is measuring what is used.
+      const bar = page.locator(".atomdown-group-header").first();
+      await bar.scrollIntoViewIfNeeded();
+      await bar.hover({ force: true });
+      await settle(page);
+
+      const offsets = await groupControlOffsets(view);
+      expect(offsets.length, "there are group controls on screen to measure")
+        .toBeGreaterThan(0);
+
+      const bad = offsets.filter(
+        (o) =>
+          !o.gripIsLeft || !o.menuIsRight || o.gripClear <= 0 ||
+          o.menuClear <= 0,
+      );
+      if (bad.length) {
+        await failWithArtifacts(
+          page,
+          8,
+          "a group control is not outside the group container",
+          { width, theme: "light", density } as Combo,
+          { measured: offsets.length, bad: bad.slice(0, 10) },
+          `${bad.length} of ${offsets.length} group(s): the grip's RIGHT ` +
+            `edge must be left of the group container's left border and the ` +
+            `menu's LEFT edge right of its right border. Worst: ` +
+            `gripClear=${bad[0].gripClear}px menuClear=${bad[0].menuClear}px.`,
+        );
+      }
+
+      // NOT CLIPPED, by hit test rather than by rect: a clipped element still
+      // reports its full unclipped rect.
+      const clipped = offsets.filter(
+        (o) => o.gripPaint === "covered" || o.menuPaint === "covered",
+      );
+      if (clipped.length) {
+        await failWithArtifacts(
+          page,
+          8,
+          "a group control is not painted where its rect says it is",
+          { width, theme: "light", density } as Combo,
+          clipped.slice(0, 10),
+          `document.elementFromPoint at the control's own centre returned ` +
+            `something else, so the control is covered or clipped.`,
+        );
+      }
+      const offScroller = offsets.filter(
+        (o) => o.gripFromScroller < 0 || o.menuFromScroller < 0,
+      );
+      expect(
+        offScroller.length,
+        "no group control leaves the editor's scroll container",
+      ).toBe(0);
+
+      // THE BAR KEEPS THE CHEVRON, inside it, full size and always visible at
+      // both densities. That rule predates this change and must survive it.
+      const chevron = offsets.filter((o) => !o.caretVisible || !o.caretInsideBar);
+      expect(
+        chevron.length,
+        "the collapse chevron stays inside the bar and stays visible: " +
+          JSON.stringify(chevron.slice(0, 3)),
+      ).toBe(0);
+      expect(
+        new Set(offsets.map((o) => o.caretFontSize)).size,
+        "the chevron is one size, whatever the density",
+      ).toBe(1);
+
+      // THE COLLISION RULE. Two independent separations, both asserted.
+      const members = await memberControlRects(view);
+      expect(members.length, "there are member cards with their own controls")
+        .toBeGreaterThan(0);
+      const overlap = (
+        a: { top: number; bottom: number; left: number; right: number },
+        b: typeof a,
+      ) =>
+        Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.75 &&
+        Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.75;
+      const collisions: any[] = [];
+      for (const g of offsets) {
+        for (const m of members) {
+          if (overlap(g.gripRect, m.gripRect)) {
+            collisions.push({ what: "grip vs member grip", g: g.gripRect, m: m.gripRect });
+          }
+          if (overlap(g.menuRect, m.menuRect)) {
+            collisions.push({ what: "menu vs member menu", g: g.menuRect, m: m.menuRect });
+          }
+        }
+      }
+      if (collisions.length) {
+        await failWithArtifacts(
+          page,
+          8,
+          "a group control collides with a member card's control",
+          { width, theme: "light", density } as Combo,
+          collisions.slice(0, 6),
+          `${collisions.length} overlap(s). The rule is that a group's ` +
+            `controls sit on the group header BAR's row and a member card ` +
+            `keeps its own on its own row, so the two can never share a row ` +
+            `- not for the first member and not for the last.`,
+        );
+      }
+
+      // ...and the lanes differ, which is the second separation: a member
+      // card's head is inset by the group's padding plus its outline, so its
+      // controls sit to the RIGHT of the group's in the left gutter and to
+      // the LEFT of them in the right gutter.
+      const lanes = members.every((m) =>
+        offsets.every((g) =>
+          m.gripRect.left > g.gripRect.left &&
+          m.menuRect.right < g.menuRect.right
+        )
+      );
+      expect(
+        lanes,
+        "a member card's controls sit in a different lane from the group's",
+      ).toBe(true);
+    });
+  }
+}
+
+test("8e-group: the group's controls are hidden at rest and revealed by a hover anywhere inside the group", async ({
+  page,
+}) => {
+  await gotoFixture(page, server);
+  const view = await openInline(page);
+  await page.mouse.move(2, 2);
+  await settle(page);
+
+  const read = async () =>
+    await view.ev.evaluate(() => {
+      const bar = document.querySelector(
+        ".sb-decoration-widget.atomdown-group-header",
+      )!;
+      const grip = bar.querySelector(":scope > .atomdown-group-grip")!;
+      const menu = bar.querySelector(":scope > .atomdown-group-menu")!;
+      const caret = bar.querySelector(".atomdown-group-collapse")!;
+      return {
+        grip: parseFloat(getComputedStyle(grip).opacity),
+        menu: parseFloat(getComputedStyle(menu).opacity),
+        caret: parseFloat(getComputedStyle(caret).opacity),
+      };
+    });
+
+  const bar = page.locator(".atomdown-group-header").first();
+  await bar.scrollIntoViewIfNeeded();
+  await page.mouse.move(2, 2);
+  await settle(page);
+  const rest = await read();
+  expect(rest.grip, "the group grip is invisible at rest").toBe(0);
+  expect(rest.menu, "the group's three-dot control is invisible at rest").toBe(
+    0,
+  );
+  expect(rest.caret, "the chevron is NOT hover-only: it is always visible")
+    .toBe(1);
+
+  // A HOVER OVER A MEMBER CARD, not over the bar. That is the scope the
+  // group's chrome already follows, and plain :hover on the bar cannot reach
+  // it - the seam's hover class on the group's first line does.
+  const member = page
+    .locator(".cm-line.atomdown-card-line.atomdown-group-line")
+    .first();
+  await member.scrollIntoViewIfNeeded();
+  await bar.scrollIntoViewIfNeeded();
+  await member.hover({ force: true });
+  await settle(page);
+  const overCard = await read();
+  expect(
+    overCard.grip,
+    "hovering a member card reveals the GROUP's grip",
+  ).toBeGreaterThan(0);
+  expect(
+    overCard.menu,
+    "hovering a member card reveals the GROUP's menu",
+  ).toBeGreaterThan(0);
+
+  // KEYBOARD FOCUS TOO, or a tab user moves through an invisible control.
+  await page.mouse.move(2, 2);
+  await settle(page);
+  expect((await read()).menu, "back to invisible off hover").toBe(0);
+  await view.ev.evaluate(() => {
+    (document.querySelector(
+      ".sb-decoration-widget.atomdown-group-header > .atomdown-group-menu",
+    ) as HTMLElement).focus();
+  });
+  await settle(page);
+  expect(
+    (await read()).menu,
+    "a focused group menu is visible",
+  ).toBeGreaterThan(0);
+  await view.ev.evaluate(() => {
+    (document.querySelector(
+      ".sb-decoration-widget.atomdown-group-header > .atomdown-group-grip",
+    ) as HTMLElement).focus();
+  });
+  await settle(page);
+  expect((await read()).grip, "a focused group grip is visible")
+    .toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
 // 8e — hidden at rest, shown on hover AND on keyboard focus
 // ---------------------------------------------------------------------------
 
@@ -586,7 +905,15 @@ test("8h: the group control's hover works on the accent fill, not against it", a
   await bar.scrollIntoViewIfNeeded();
   await settle(page);
 
-  const control = bar.locator(".atomdown-group-menu");
+  // THE CONTROL THIS MEASURES IS THE COLLAPSE CHEVRON, and that is a
+  // retarget rather than a relaxation (iugum-938). The three-dot menu used to
+  // sit on the bar and was half of this defect; it is in the page gutter now,
+  // on the page's own ground, where there is no accent fill to punch a hole
+  // in. The chevron stays on the bar, was the SAME solid white chip, and is
+  // now the only control this property can apply to. The property itself is
+  // unchanged: a wash, not an opaque chip, measured as a composited colour.
+  // The menu's own half is asserted below, as "still not opaque".
+  const control = bar.locator(".atomdown-group-collapse");
   await control.hover({ force: true });
   await settle(page);
 
@@ -628,8 +955,11 @@ test("8h: the group control's hover works on the accent fill, not against it", a
     const caretEl = barEl.querySelector(".atomdown-group-collapse")!;
     return {
       bar: rgba(getComputedStyle(barEl).backgroundColor),
-      menu: rgba(getComputedStyle(menuEl).backgroundColor),
+      // `menu` here is the control STILL ON THE BAR - the chevron. The name
+      // is kept so the failure message below reads as it always did.
+      menu: rgba(getComputedStyle(caretEl).backgroundColor),
       caret: rgba(getComputedStyle(caretEl).backgroundColor),
+      gutterMenu: rgba(getComputedStyle(menuEl).backgroundColor),
     };
   });
 
@@ -669,26 +999,32 @@ test("8h: the group control's hover works on the accent fill, not against it", a
     "the wash is light, so the control lifts off the fill",
   ).toBeGreaterThan(160);
 
-  // The collapse caret shares the rule and must share the fix: it is on the
-  // same bar and was the same solid white chip.
-  await control.page().locator(".atomdown-group-collapse").first().hover({
-    force: true,
-  });
+  // AND THE CONTROL THAT LEFT THE BAR IS STILL NOT AN OPAQUE CHIP. It is in
+  // the page gutter now, where an opaque background would read as a chip
+  // floating in the margin rather than as a hole in the bar - the same defect
+  // in a different place, so the same assertion follows it out.
+  await bar.locator(".atomdown-group-menu").hover({ force: true });
   await settle(page);
-  const caret = await view.ev.evaluate(() => {
+  const gutter = await view.ev.evaluate(() => {
     const v = getComputedStyle(
-      document.querySelector(".atomdown-group-header .atomdown-group-collapse")!,
+      document.querySelector(
+        ".sb-decoration-widget.atomdown-group-header > .atomdown-group-menu",
+      )!,
     ).backgroundColor;
-    const srgb = v.match(/color\(\s*srgb\s+\S+\s+\S+\s+\S+\s*\/\s*([\d.eE+-]+)\s*\)/);
+    const srgb = v.match(
+      /color\(\s*srgb\s+\S+\s+\S+\s+\S+\s*\/\s*([\d.eE+-]+)\s*\)/,
+    );
     if (srgb) return parseFloat(srgb[1]);
     const m = v.match(/rgba?\(([^)]+)\)/);
     if (!m) return 1;
-    const parts = m[1].split(/[,\s/]+/).filter(Boolean).map((n) => parseFloat(n));
+    const parts = m[1].split(/[,\s/]+/).filter(Boolean).map((n) =>
+      parseFloat(n)
+    );
     return parts.length > 3 ? parts[3] : 1;
   });
   expect(
-    caret,
-    "the collapse caret's hover is a wash too, not an opaque chip",
+    gutter,
+    "the group's three-dot control, now in the gutter, paints no opaque chip",
   ).toBeLessThan(0.9);
 });
 

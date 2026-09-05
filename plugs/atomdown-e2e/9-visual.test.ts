@@ -96,6 +96,7 @@ import {
   expect,
   gotoFixture,
   openInline,
+  type Page,
   type SBServer,
   setDensity,
   settle,
@@ -304,6 +305,55 @@ async function clipAroundCard(view: View) {
   return box;
 }
 
+/**
+ * A clip box around the first group bar, wide enough to hold both gutters.
+ *
+ * WHY THE BAR IS NO LONGER AN ELEMENT SCREENSHOT (iugum-938). The group's grip
+ * and its three-dot menu sit OUTSIDE the group container now, in the same two
+ * page gutters the card's controls use. An element screenshot of the bar
+ * frames both of them out, so the baseline would no longer contain the
+ * subject - the same reason the card's captures were already a clip.
+ */
+async function clipAroundBar(view: View) {
+  return await view.ev.evaluate(() => {
+    const bar = document.querySelector(
+      ".sb-decoration-widget.atomdown-group-header",
+    )!;
+    const r = bar.getBoundingClientRect();
+    const gutter = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue(
+        "--board-chrome-gutter",
+      ),
+    ) || 22;
+    const pad = Math.ceil(gutter) + 8;
+    return {
+      x: Math.max(0, Math.floor(r.left - pad)),
+      y: Math.max(0, Math.floor(r.top - 4)),
+      width: Math.ceil(r.width + pad * 2),
+      height: Math.ceil(Math.max(r.height, 20) + 8),
+    };
+  });
+}
+
+/**
+ * Put the real pointer on the first element matching `sel` WITHOUT scrolling.
+ *
+ * `locator.hover()` scrolls its target into view, and a scroll after a clip
+ * box has been computed photographs the wrong part of the page. This reads the
+ * element's own rect and moves the mouse there, so the viewport does not move.
+ */
+async function hoverInside(page: Page, sel: string) {
+  const point = await page.evaluate((s) => {
+    const el = document.querySelector(s) as HTMLElement | null;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, sel);
+  if (!point) throw new Error(`rule 9: nothing to hover for ${sel}`);
+  await page.mouse.move(point.x, point.y);
+}
+
 const SNAPSHOT_OPTS = {
   animations: "disabled" as const,
   caret: "hide" as const,
@@ -331,30 +381,157 @@ for (const combo of combos()) {
       const bar = page.locator(".atomdown-group-header").first();
       await bar.scrollIntoViewIfNeeded();
       await settle(page, 3);
+      // A CLIP, NOT AN ELEMENT SCREENSHOT, since iugum-938: the group's grip
+      // and menu are outside the container, so a box tight to the bar frames
+      // the subject out. Same reason the card's captures are already clips.
+      const clip = await clipAroundBar(view);
 
-      // AT REST: the bar's resting tint, and no chip anywhere.
+      // AT REST: the bar's resting tint, no chip anywhere, and both gutters
+      // EMPTY - the two controls are hover-only now, so a control visible in
+      // this baseline is itself the regression.
       await page.mouse.move(2, 2);
       await settle(page, 3);
-      await expect(bar).toHaveScreenshot(
+      await expect(page).toHaveScreenshot(
         `group-bar-rest-${comboName(combo).replace(/\//g, "-")}.png`,
-        SNAPSHOT_OPTS,
+        { ...SNAPSHOT_OPTS, clip },
       );
 
-      // THE DEFECT'S OWN STATE: the pointer inside the group, so the bar is at
-      // full accent, with the three-dot control hovered. A solid white chip
-      // here is the hole Steve saw.
-      await bar.locator(".atomdown-group-menu").hover({ force: true });
+      // HOVERED ANYWHERE INSIDE THE GROUP: the bar goes to full accent. The
+      // pointer is on a MEMBER CARD, which is the scope the group's chrome
+      // follows and the one plain :hover on the bar cannot reach.
+      //
+      // WHAT THIS BASELINE COMPARES IS THE BAR'S FILL, not the two controls.
+      // Their glyphs are coloured transparent like every other glyph here,
+      // and they carry no background of their own by design, so they
+      // contribute no pixels - which is the font trade this whole rule makes.
+      // That the controls appear on hover, and where, is measured numerically
+      // by 8e-group and 8d-group, the same split as 8h and this rule.
+      //
+      // A REAL MOUSE MOVE TO A COMPUTED POINT, never `locator.hover()`. A
+      // locator hover scrolls its target into view, which moved the bar after
+      // the clip had been computed - the first draft of this baseline
+      // photographed a card three rows further down. The clip is fixed for
+      // all four captures on purpose, so what changes between them is the
+      // state and nothing else.
+      // THIS GROUP's own first member line - the bar's next sibling - and not
+      // the document's first `.atomdown-group-line`, which belongs to
+      // whichever group comes first in the page rather than to the group in
+      // the clip. Hovering the wrong group left the bar at its resting tint,
+      // so the "hovered" baseline was byte-identical to the "rest" one.
+      await hoverInside(
+        page,
+        ".sb-decoration-widget.atomdown-group-header + .cm-line",
+      );
       await settle(page, 3);
-      await expect(bar).toHaveScreenshot(
+      await expect(page).toHaveScreenshot(
+        `group-bar-hover-${comboName(combo).replace(/\//g, "-")}.png`,
+        { ...SNAPSHOT_OPTS, clip },
+      );
+
+      // THE DEFECT'S OWN STATE, followed to where the control went: the bar
+      // at full accent with the three-dot control under the pointer. It is on
+      // the page ground now rather than on the fill, so what this proves has
+      // shifted from "no hole in the bar" to "no chip in the margin"; both are
+      // the same thing a number cannot describe.
+      await hoverInside(
+        page,
+        ".sb-decoration-widget.atomdown-group-header > .atomdown-group-menu",
+      );
+      await settle(page, 3);
+      await expect(page).toHaveScreenshot(
         `group-bar-menu-hover-${comboName(combo).replace(/\//g, "-")}.png`,
-        SNAPSHOT_OPTS,
+        { ...SNAPSHOT_OPTS, clip },
       );
 
-      // The collapse caret shares the rule, so it shares the baseline.
-      await bar.locator(".atomdown-group-collapse").hover({ force: true });
+      // The collapse caret is the control STILL ON THE FILL, so it is the one
+      // the original defect's baseline now belongs to.
+      await hoverInside(
+        page,
+        ".sb-decoration-widget.atomdown-group-header .atomdown-group-collapse",
+      );
       await settle(page, 3);
-      await expect(bar).toHaveScreenshot(
+      await expect(page).toHaveScreenshot(
         `group-bar-caret-hover-${comboName(combo).replace(/\//g, "-")}.png`,
+        { ...SNAPSHOT_OPTS, clip },
+      );
+    });
+
+    test(`9: the group's popover, open [${comboName(combo)}]`, async ({
+      page,
+    }) => {
+      await gotoFixture(page, server);
+      await setWidth(page, combo.width);
+      const view = await openInline(page);
+      await setDensity(view, combo.density);
+      await readyForCapture(view);
+      await hideChromeText(view);
+
+      const bar = page.locator(".atomdown-group-header").first();
+      await bar.scrollIntoViewIfNeeded();
+      await settle(page, 3);
+      await bar.locator(".atomdown-group-menu").click({ force: true });
+      await page
+        .locator(".atomdown-menu-popover")
+        .waitFor({ state: "visible", timeout: 15_000 });
+      await page.mouse.move(2, 2);
+      await settle(page, 3);
+
+      const pop = page.locator(".atomdown-menu-popover").first();
+      await expect(pop).toHaveScreenshot(
+        `group-popover-${comboName(combo).replace(/\//g, "-")}.png`,
+        SNAPSHOT_OPTS,
+      );
+    });
+
+    test(`9: the attribute form [${comboName(combo)}]`, async ({ page }) => {
+      // The form is a panel iframe, so its own document is what is captured
+      // (iugum-etz). It carries the theme it copied from the parent, which is
+      // the thing worth photographing: a form that renders a dark theme's
+      // fallback light palette is a defect no behavioural rule can see.
+      await gotoFixture(page, server);
+      await setWidth(page, combo.width);
+      const view = await openInline(page);
+      await setDensity(view, combo.density);
+      await readyForCapture(view);
+
+      const menu = page
+        .locator(".sb-decoration-widget.atomdown-card-header .atomdown-card-menu")
+        .first();
+      await menu.scrollIntoViewIfNeeded();
+      await settle(page, 3);
+      await menu.click({ force: true });
+      await page
+        .locator(".atomdown-menu-popover")
+        .waitFor({ state: "visible", timeout: 15_000 });
+      await page
+        .locator(".atomdown-menu-item.atomdown-mi-attrs")
+        .first()
+        .click({ force: true });
+
+      const panel = page.locator(".sb-modal .sb-panel iframe");
+      await panel.waitFor({ state: "visible", timeout: 15_000 });
+      const frame = page.frameLocator(".sb-modal .sb-panel iframe");
+      await frame.locator("#ad-attr-slug-input").waitFor({
+        state: "visible",
+        timeout: 15_000,
+      });
+      // Same font policy as the rest of rule 9: the glyphs go transparent so
+      // the fills, borders and radii are what is compared. Inside the frame,
+      // because a style tag on the parent cannot reach it.
+      await frame.locator("#ad-attr-slug-input").evaluate(() => {
+        const s = document.createElement("style");
+        s.textContent = `.ad-attr-form, .ad-attr-form * {
+          color: transparent !important;
+          text-shadow: none !important;
+          caret-color: transparent !important;
+        }
+        .ad-attr-form input::placeholder { color: transparent !important; }`;
+        document.head.appendChild(s);
+      });
+      await settle(page, 3);
+
+      await expect(frame.locator(".ad-attr-form")).toHaveScreenshot(
+        `attr-form-${comboName(combo).replace(/\//g, "-")}.png`,
         SNAPSHOT_OPTS,
       );
     });
