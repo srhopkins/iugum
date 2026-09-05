@@ -96,7 +96,7 @@ here. One script drives the whole sequence and installs the result as the
 `//go:embed` target:
 
 ```sh
-scripts/build-wiki-blob.sh      # then: scripts/build.sh
+scripts/build-wiki-blob.sh      # stages, compiles the blob, rebuilds iugum
 ```
 
 The staging step is a command in this program (`iugum stage-wiki-assets`),
