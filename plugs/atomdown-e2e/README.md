@@ -15,9 +15,15 @@ scripts/atomdown-fe-check.sh --visual   # rule 9, the visual baselines, only
 scripts/atomdown-fe-check.sh --visual --update-snapshots   # re-take them
 ```
 
-The default runs **two Playwright projects**: `atomdown` (rules 1 to 8) and
-`visual` (rule 9). They are separate because rule 9 needs its own browser
-policy - see "Rule 9" below.
+The default runs **two Playwright projects**: `atomdown` (the behavioural rules
+- 1 to 8 and 10) and `visual` (rule 9). They are separate because rule 9 needs
+its own browser policy - see "Rule 9" below.
+
+The `atomdown` project names its rule numbers explicitly. `[1-8]-` was correct
+while 8 was the highest and it silently stopped matching when rule 10 arrived,
+because `10-` holds no digit-then-dash: the file was collected by no project at
+all and the rule ran nowhere. A regex whose failure mode is "the test does not
+run" has to name its files.
 
 ## Rule 1 has two halves: content and chrome
 
@@ -106,6 +112,49 @@ So this suite measures the rendered document in a real browser.
 | 4 | **State machine round trips.** Collapse, view on/off, raw/rendered, density (through the command AND through the header button) and the four editor widths each return to an identical DOM signature; reload persistence keeps on ON, off OFF and the density where it was left, scoped per page. | A group that would not expand after collapse. The header toggle doing nothing on first press while the command worked. Close-then-reload reopening the board. |
 | 5 | **Rendering fidelity.** No `<!-- <atom`, no `sha256:`, no `](http`, no bare `##` or `**` outside code. Positively: one `<ol>` with six `<li>`, one `<table>` with 10 rows, an `<a href>` in every ticket cell. | Raw markdown reaching the reader. An ordered list rendering as a run-on paragraph. |
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
+| 10 | **The hanging indent, and what a density may move.** Row 0's first glyph starts at `content box + text-indent` and every later row starts at `content box`; horizontal distances are identical across densities and vertical ones are not; at compact the stroke changes colour and nothing else. | A wrapped bullet whose continuation rows aligned UNDER the marker, because the card's inset was `padding-left !important` plus `text-indent: 0 !important`. A density that halved the distance from a card's border to its first glyph. |
+
+## Rule 10: the hanging indent, and what a density is allowed to move
+
+`10-hanging-indent-and-density.test.ts`. Three properties, from Steve's report
+that "bullets don't look good, usually on bullets the indentation stays
+consistent".
+
+**10a measures VISUAL ROWS, not elements.** A soft-wrapped line is one element
+with several rows, so `getBoundingClientRect` returns their union and cannot
+see them. A `Range` over the line's contents returns one client rect per row,
+which is the only reading of "the x of the first glyph on each visual row" the
+DOM offers.
+
+One property covers every construct: row 0's first glyph starts at
+`content box + text-indent`, and every later row's starts at `content box`.
+Where a marker is rendered the client makes `text-indent` the negative of
+`padding-left`, so row 0 starts at the marker and the rest start after it. Where
+no marker is rendered the indent is zero and every row starts on the same x.
+The client's inline pair is asserted separately on the lines that carry it,
+because that pair is the exact thing the old override destroyed - CSS that
+clobbered it again would still satisfy the row arithmetic, on rows that no
+longer hang.
+
+**It cannot pass vacuously.** A line with one visual row has no continuation
+row to align, so 10a counts the WRAPPED lines it measured per kind - bullet,
+nested bullet, ordered, blockquote - and fails when any kind reached zero. The
+fixture's list items and blockquotes are written long enough to wrap at all
+four editor widths for that reason (`wrapTail` in
+`fixture/make-fixture.mjs`), and 10a also fails when fewer than two bullet
+indent levels were seen, which is the two-level nested list.
+
+**10b asserts both halves of the density split.** Equal horizontal distances
+alone would pass on a density that had stopped doing anything, so the vertical
+distances are asserted to DIFFER in the same test. It also asserts the group
+outline's width is unchanged across densities, which is the half of the old
+"the group outline does not change" rule that is kept - the style and the
+resting colour are what vary now.
+
+**10c reads the page background off `#sb-root`,** which is the element the
+client paints `--root-background-color` on. `document.documentElement` carries
+the app chrome's own colour, and comparing against it is how the assertion
+would pass while the card was the wrong shade.
 
 ## Rule 8: the card's controls
 
