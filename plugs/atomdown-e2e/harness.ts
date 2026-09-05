@@ -234,22 +234,25 @@ export async function startSpace(
   }
 
   const spaceDir = await mkdtemp(join(tmpdir(), "atomdown-fe-"));
-  const plugDir = join(REPO_ROOT, "plugs");
 
+  // NO PLUG COPIES IN THE SPACE. The server binary compiles both plugs and the
+  // library page into its read-only underlay at `Library/Atomdown/` (see
+  // `spaceassets`), and `scripts/atomdown-fe-check.sh` stages the working
+  // tree's copies into that binary before it runs, so what the suite measures
+  // is what the binary ships.
+  //
+  // Seeding a copy as well is not a shadow, it is a SECOND PLUG.
+  // `Space.listPlugs` returns every `*.plug.js` the space can see, so a copy in
+  // `_plug/` loads next to the compiled one: two instances, each with its own
+  // collapsed-group memory, both answering every click and both writing
+  // `editorDecorations`. Measured: an "expand every group" sweep over eleven
+  // groups came back with nine still shut, the two instances undoing each
+  // other, and which nine moved between runs. Writing the copy to the
+  // underlay's own path instead does shadow it, but the plug then failed to
+  // load at all after a reload — "Command Atomdown: Toggle Inline View not
+  // found" — so the space holds no copy either way.
   const files: Record<string, string> = {
     [`${FIXTURE_PAGE}.md`]: await fixtureMarkdown(),
-    "_plug/atomdown-inline.plug.js": await readFile(
-      join(plugDir, "atomdown-inline", "atomdown-inline.plug.js"),
-      "utf8",
-    ),
-    "_plug/atomdown-board.plug.js": await readFile(
-      join(plugDir, "atomdown-board", "atomdown-board.plug.js"),
-      "utf8",
-    ),
-    "Library/Atomdown/Inline.md": await readFile(
-      join(plugDir, "atomdown-inline", "library", "Atomdown Inline.md"),
-      "utf8",
-    ),
     "Library/Styles/EditorWidth.md": await readFile(
       join(import.meta.dirname, "fixture", "EditorWidth.md"),
       "utf8",
@@ -379,10 +382,31 @@ export async function settle(page: Page, frames = 3) {
  * exercises the real command path rather than the plug's internals.
  */
 export async function runCommand(page: Page, name: string) {
-  await page.evaluate(
-    async (n) => await (globalThis as any).client.runCommandByName(n),
-    name,
-  );
+  // RETRY WHILE THE COMMAND DOES NOT EXIST YET.
+  //
+  // A plug's commands are registered when the client loads the plug, and the
+  // client loads plugs asynchronously after the editor is up — `sbRuntime.ready`
+  // says the editor is ready, not that every plug is in. So a command run
+  // straight after a reload threw "Command Atomdown: Toggle Inline View not
+  // found", which is a race in the driver and nothing about the view.
+  //
+  // Only that one error is retried, and only for ten seconds. Anything the
+  // command itself throws propagates on the first try, and a command that never
+  // appears still fails, with its own message.
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      await page.evaluate(
+        async (n) => await (globalThis as any).client.runCommandByName(n),
+        name,
+      );
+      break;
+    } catch (err) {
+      const missing = String(err).includes("not found");
+      if (!missing || Date.now() > deadline) throw err;
+      await page.waitForTimeout(250);
+    }
+  }
   await settle(page);
 }
 
@@ -503,6 +527,33 @@ export async function openBoard(page: Page): Promise<View> {
       await settle(page);
     },
   };
+}
+
+/**
+ * The board panel's frame, if the panel is open right now.
+ *
+ * `openBoard` cannot answer this: it RUNS THE TOGGLE, so calling it on an open
+ * panel closes it. A test that reloads the page and then wants the panel it
+ * expects to still be open needs the frame and not the toggle.
+ *
+ * Bounded, and null rather than a throw when the panel is shut, because "is it
+ * open" is the question the caller is asking.
+ */
+export async function boardFrame(
+  page: Page,
+  timeoutMs = 5000,
+): Promise<Frame | null> {
+  const iframe = page.locator(BOARD_FRAME_SELECTOR);
+  try {
+    await iframe.waitFor({ state: "attached", timeout: timeoutMs });
+  } catch {
+    return null;
+  }
+  const handle = await iframe.elementHandle({ timeout: timeoutMs }).catch(
+    () => null,
+  );
+  if (!handle) return null;
+  return await handle.contentFrame();
 }
 
 /**
@@ -980,10 +1031,14 @@ export async function sweepBoxes(
   // One pass is therefore correct and cheap there.
   const scroller = view.kind === "inline" ? ".cm-scroller" : ".board-cards";
 
-  const metrics = await view.ev.evaluate((sel) => {
-    const el = document.querySelector(sel) ?? document.scrollingElement!;
-    return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
-  }, scroller);
+  const readMetrics = () =>
+    view.ev.evaluate((sel) => {
+      const el = document.querySelector(sel) ?? document.scrollingElement!;
+      return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    }, scroller);
+  // Re-read every stop: CodeMirror's `scrollHeight` is an estimate until it
+  // has realised the lines, so the first reading ends the sweep early.
+  let metrics = await readMetrics();
 
   const step = Math.max(200, Math.floor(metrics.clientHeight * 0.6));
   const byId = new Map<string, Box>();
@@ -1005,8 +1060,9 @@ export async function sweepBoxes(
       // has correct geometry, and re-measuring it only churns the map.
       if (!byId.has(id)) byId.set(id, box);
     }
+    metrics = await readMetrics();
     if (y + metrics.clientHeight >= metrics.scrollHeight) break;
-    if (stops > 60) break; // a runaway guard, never reached by this fixture
+    if (stops > 120) break; // a runaway guard, never reached by this fixture
   }
 
   // Leave the editor where the test found it.
@@ -1133,68 +1189,82 @@ export async function sweepEach(
     );
     await settle(view.page, 4);
 
-    const readKeys = (): Promise<string[]> =>
-      view.ev.evaluate((sel) =>
-        Array.from(document.querySelectorAll(sel)).map((el) => {
-          // Look at the element AND the unit it belongs to.
-          //
-          // A control keyed only on itself collides with every other copy of
-          // itself: every collapse caret reads "caret" and nothing else, so a
-          // sweep over `.atomdown-group-collapse` visited 1 of 11 groups and
-          // reported it. The caret's identity is its GROUP's identity, which
-          // lives on the header the caret sits in.
-          const unit =
-            el.closest(
-              "[data-atom-id],[data-group-id],.atomdown-card-header,.atomdown-group-header,.board-card,.board-group",
-            ) ?? el;
-          const chip = unit.querySelector(
-            ".board-card-id,.board-group-id,.atomdown-card-id,.atomdown-group-id",
-          );
-          const own =
-            el.getAttribute("data-atom-id") ??
-            el.getAttribute("data-group-id") ??
-            el.getAttribute("data-group-collapse") ??
-            unit.getAttribute("data-atom-id") ??
-            unit.getAttribute("data-group-id");
-          if (own) return own;
-          const id = chip?.textContent?.trim();
-          if (id) return id;
-          // A card with no Atomdown id — the implicit card a fenced code
-          // block produces — has a header that reads only "no id", the same
-          // for every one of them, so the key needs the card's own first line
-          // of content. Keyed on the first FOLLOWING LINE THAT HAS TEXT rather
-          // than on a fixed number of siblings: a sibling count makes the key
-          // depend on how CodeMirror had recycled its elements at that moment,
-          // and the same card then keys differently at two scroll stops.
-          const ownText = (unit.textContent ?? "").replace(/\s+/g, " ").trim();
-          let next = unit.nextElementSibling;
-          let following = "";
-          for (let i = 0; next && i < 6; i++) {
-            const t = (next.textContent ?? "").replace(/\s+/g, " ").trim();
-            if (t) {
-              following = t;
-              break;
+    // ONE EVALUATE READS THE KEYS AND PICKS THE NEXT ONE.
+    //
+    // Reading the list in one call and choosing in the caller is a second
+    // round trip the DOM can change under, and the whole point of the key is
+    // that it names an element rather than a position. So the choice happens
+    // in the page, next to the list it chose from, and the caller gets the key
+    // and the index it had at that instant.
+    const takeNext = (): Promise<{ key: string; index: number } | null> =>
+      view.ev.evaluate(
+        ({ sel, done }) => {
+          const key = (el: Element): string => {
+            // Look at the element AND the unit it belongs to.
+            //
+            // A control keyed only on itself collides with every other copy
+            // of itself: every collapse caret reads "caret" and nothing else,
+            // so a sweep over `.atomdown-group-collapse` visited 1 of 11
+            // groups and reported it. The caret's identity is its GROUP's
+            // identity, which lives on the header the caret sits in.
+            const unit =
+              el.closest(
+                "[data-atom-id],[data-group-id],.atomdown-card-header,.atomdown-group-header,.board-card,.board-group",
+              ) ?? el;
+            const chip = unit.querySelector(
+              ".board-card-id,.board-group-id,.atomdown-card-id,.atomdown-group-id",
+            );
+            const own = el.getAttribute("data-atom-id") ??
+              el.getAttribute("data-group-id") ??
+              el.getAttribute("data-group-collapse") ??
+              unit.getAttribute("data-atom-id") ??
+              unit.getAttribute("data-group-id");
+            if (own) return own;
+            const id = chip?.textContent?.trim();
+            if (id) return id;
+            // A card with no Atomdown id — the implicit card a fenced code
+            // block produces — has a header that reads only "no id", the same
+            // for every one of them, so the key needs the card's own first
+            // line of content. Keyed on the first FOLLOWING LINE THAT HAS
+            // TEXT rather than on a fixed number of siblings: a sibling count
+            // makes the key depend on how CodeMirror had recycled its
+            // elements at that moment, and the same card then keys
+            // differently at two scroll stops.
+            const ownText = (unit.textContent ?? "").replace(/\s+/g, " ")
+              .trim();
+            let next = unit.nextElementSibling;
+            let following = "";
+            for (let i = 0; next && i < 6; i++) {
+              const t = (next.textContent ?? "").replace(/\s+/g, " ").trim();
+              if (t) {
+                following = t;
+                break;
+              }
+              next = next.nextElementSibling;
             }
-            next = next.nextElementSibling;
+            return `text:${ownText} | ${following}`.slice(0, 160);
+          };
+          const seenHere = new Set(done);
+          const all = Array.from(document.querySelectorAll(sel));
+          for (let i = 0; i < all.length; i++) {
+            const k = key(all[i]);
+            if (seenHere.has(k)) continue;
+            return { key: k, index: i };
           }
-          return `text:${ownText} | ${following}`.slice(0, 160);
-        }),
-        selector,
+          return null;
+        },
+        { sel: selector, done: seen },
       );
 
-    // Re-read the key list after EVERY interaction, and act on the first
-    // unseen index rather than iterating a snapshot.
-    //
-    // The snapshot version deadlocked. Hovering a card puts `hoverClasses` on
-    // its group's lines, which is a CodeMirror transaction, which rebuilds
-    // line elements — so `nth(i)` for the next card pointed at a detached
-    // node and `boundingBox()` sat there until the 180-second test timeout.
     for (;;) {
-      const keys: string[] = await readKeys();
-      const i = keys.findIndex((k) => !seen.includes(k));
-      if (i < 0) break;
-      seen.push(keys[i]);
-      await fn(view.ev.locator(selector).nth(i), keys[i], seen.length - 1);
+      const next = await takeNext();
+      if (next === null) break;
+      seen.push(next.key);
+      await fn(
+        view.ev.locator(selector).nth(next.index),
+        next.key,
+        seen.length - 1,
+      );
     }
 
     // RE-READ THE DOCUMENT'S HEIGHT EVERY STOP. `fn` is an interaction, and
@@ -1212,6 +1282,41 @@ export async function sweepEach(
     if (y / step > 200) break;
   }
   return seen;
+}
+
+/**
+ * Put the real pointer over an element, without waiting for it to be clickable.
+ *
+ * `locator.hover()` is the obvious call and it is the wrong one for a sweep
+ * over a virtualised editor. It runs Playwright's actionability checks, and the
+ * interaction before it has usually just caused a CodeMirror transaction —
+ * `hoverClasses` alone rebuilds every line element of a group — so the element
+ * the locator resolved a moment ago is detached and `hover` waits out its
+ * timeout. At 84 cards and eight seconds each that is eleven minutes, which the
+ * suite reports as a three-minute test timeout and nothing else. Measured: that
+ * is exactly how rule 2's inline pointer sweep failed.
+ *
+ * Reading the box once and moving the mouse to it is the same pointer event
+ * from the browser's point of view, and it cannot wait: a detached element
+ * returns no box and the caller moves on.
+ */
+export async function hoverBox(
+  view: View,
+  locator: Locator,
+): Promise<Rect | null> {
+  const box = await locator.boundingBox({ timeout: 5000 }).catch(() => null);
+  if (!box) return null;
+  await view.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  return {
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
+    top: box.y,
+    right: box.x + box.width,
+    bottom: box.y + box.height,
+    left: box.x,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1597,7 +1702,10 @@ export async function visibleText(
 // ---------------------------------------------------------------------------
 
 export type Signature = {
-  /** One entry per box: its classes, its rect rounded to a pixel, its text. */
+  /**
+   * One entry per distinct box: its classes, its left edge, its size, its
+   * text. Vertical position is deliberately absent — see `signature`.
+   */
   entries: string[];
   count: number;
 };
@@ -1647,6 +1755,7 @@ export async function signature(view: View): Promise<Signature> {
         const base = document.querySelector(scr);
         const origin = base?.getBoundingClientRect() ?? { left: 0, top: 0 };
         const offset = base?.scrollTop ?? 0;
+        void offset;
         return Array.from(document.querySelectorAll(sel)).map((el) => {
           const r = el.getBoundingClientRect();
           const classes = String(el.className).trim().split(/\s+/).sort()
@@ -1654,10 +1763,20 @@ export async function signature(view: View): Promise<Signature> {
           const text = (el.textContent ?? "").replace(/\s+/g, " ").trim()
             .slice(0, 80);
           const round = (v: number) => Math.round(v);
+          // NO VERTICAL POSITION IN THE KEY, and that is measured rather than
+          // convenient. CodeMirror estimates the height of every line it has
+          // not realised yet and refines the estimate as it scrolls, so the
+          // same line's document-relative top moved 14px between two stops of
+          // one sweep. Keeping it made the union collect the same element
+          // several times over: 945 entries for 189 elements on a freshly
+          // opened view, against 189 after the same view had been scrolled
+          // through, so a correct round trip failed on nothing but height
+          // estimation. Left, width, height, classes and text are all stable.
+          // Vertical movement is rule 3's, and rule 3 measures it against a
+          // card it scrolls to, with a tolerance.
           return [
             classes,
             round(r.left - origin.left),
-            round(r.top - origin.top + offset),
             round(r.width),
             round(r.height),
             text,
@@ -1676,10 +1795,12 @@ export async function signature(view: View): Promise<Signature> {
       { sel: scroller, top },
     );
 
-  const metrics = await view.ev.evaluate((sel) => {
-    const el = document.querySelector(sel) ?? document.scrollingElement!;
-    return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
-  }, scroller);
+  const readMetrics = () =>
+    view.ev.evaluate((sel) => {
+      const el = document.querySelector(sel) ?? document.scrollingElement!;
+      return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    }, scroller);
+  let metrics = await readMetrics();
 
   const seen = new Set<string>();
   const step = Math.max(200, Math.floor(metrics.clientHeight * 0.6));
@@ -1687,8 +1808,15 @@ export async function signature(view: View): Promise<Signature> {
     await scrollTo(y);
     await settle(view.page, 3);
     for (const entry of await read()) seen.add(entry);
+    // THE HEIGHT IS RE-READ EVERY STOP. CodeMirror estimates the height of
+    // every line it has not realised yet, so `scrollHeight` at the start of a
+    // sweep is a guess that gets better as the sweep goes. Holding the first
+    // guess ended the sweep early and lost the last group of the document:
+    // 293 elements against 308 for the same state, reported as 15 cards that
+    // "went missing" on a width round trip where nothing had happened.
+    metrics = await readMetrics();
     if (y + metrics.clientHeight >= metrics.scrollHeight) break;
-    if (stops > 60) break; // a runaway guard, never reached by this fixture
+    if (stops > 120) break; // a runaway guard, never reached by this fixture
   }
   // Leave the view where a reader would find it, and where the next signature
   // starts, so nothing downstream depends on the sweep's last stop.

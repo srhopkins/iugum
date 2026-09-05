@@ -52,19 +52,43 @@ say() { printf 'atomdown-fe: %s\n' "$1"; }
 # rust-embed. Building it takes about 90 seconds, so it is rebuilt only when it
 # is missing or older than the client sources it embeds. That is the difference
 # between a gate people keep and a gate people bypass.
+#
+# THE PLUGS ARE PART OF THE BINARY, so they are part of the cache key. Both
+# plug bundles and the library page that carries their CSS are compiled into
+# the server's read-only underlay (`spaceassets`, `docs/wiki-space-assets.md`),
+# and the suite seeds no copy into its space — a copy is a SECOND plug, not an
+# override, and two instances of the same plug undo each other. So a plug change
+# has to reach the binary before the suite can see it.
 needs_build=0
 if [ ! -x "$BIN" ]; then
   needs_build=1
   say "no server binary at target/release/silverbullet"
-elif [ -n "$(find "$SB/client" -newer "$BIN" -type f -print -quit 2>/dev/null)" ]; then
-  needs_build=1
-  say "client sources are newer than the built binary"
+else
+  for src in "$SB/client" "$ROOT/plugs/atomdown-board" "$ROOT/plugs/atomdown-inline"; do
+    if [ -n "$(find "$src" -newer "$BIN" -type f -name '*.ts' -print -quit 2>/dev/null)$(find "$src" -newer "$BIN" -type f -name '*.js' -print -quit 2>/dev/null)$(find "$src" -newer "$BIN" -type f -name '*.md' -print -quit 2>/dev/null)" ]; then
+      needs_build=1
+      say "$(basename "$src") is newer than the built binary"
+    fi
+  done
 fi
 
 if [ "$needs_build" = 1 ]; then
   say "building the release server (about 90s, cached after this)"
   build_start=$(date +%s)
-  ( cd "$SB" && npm run build >/dev/null && cargo build --release -p silverbullet )
+  # The staging step goes BETWEEN the two halves of the build: npm writes
+  # client_bundle/base_fs, iugum adds Library/Atomdown to it, cargo compiles it
+  # in. Same sequence as scripts/build-wiki-blob.sh, without installing the
+  # result as the //go:embed blob.
+  ( cd "$SB" && npm run build >/dev/null )
+  stager="$ROOT/iugum"
+  if [ ! -x "$stager" ]; then
+    say "no ./iugum to stage the space assets; building a static one"
+    CGO_ENABLED=0 go build -o "$ROOT/iugum-fe-stager" "$ROOT"
+    stager="$ROOT/iugum-fe-stager"
+  fi
+  "$stager" stage-wiki-assets "$SB"
+  [ -x "$ROOT/iugum-fe-stager" ] && rm -f "$ROOT/iugum-fe-stager"
+  ( cd "$SB" && cargo build --release -p silverbullet )
   say "build took $(( $(date +%s) - build_start ))s"
 else
   say "reusing the cached server binary ($(date -r "$BIN" '+%Y-%m-%d %H:%M'))"

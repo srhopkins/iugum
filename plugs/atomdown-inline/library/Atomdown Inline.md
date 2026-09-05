@@ -6,9 +6,13 @@ tags: meta
 The `atomdown-inline` plug draws the Atomdown card view on the page itself. This
 page supplies the two things a plug cannot: the header-bar button, and the CSS.
 
-Copy this page into your space as `Library/Atomdown/Inline`, and copy
-`atomdown-inline.plug.js` into the space's `_plug/` directory. Reload the
-browser once so SilverBullet picks up both.
+This page and the plug bundle are compiled into the SilverBullet binary that
+`iugum wiki` runs, so a space needs no copy of either. To override one, put your
+copy at the same path the binary uses - this page at `Library/Atomdown/Inline`,
+the bundle at `Library/Atomdown/Plugs/atomdown-inline.plug.js` - and reload the
+browser once. Do NOT put the bundle in `_plug/`: SilverBullet loads every
+`*.plug.js` a space can see, so a copy there runs the plug a second time
+alongside the compiled one.
 
 # The header-bar icon
 

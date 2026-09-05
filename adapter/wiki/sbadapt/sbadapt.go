@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	"github.com/srhopkins/iugum/contract"
@@ -65,6 +66,7 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 		return err
 	}
 	warnIfNoSpaceAssets(os.Stderr, path)
+	warnIfDuplicatePlugs(os.Stderr, opts.Space)
 	args := []string{"-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space}
 	// SilverBullet 2.10.0 and later need --single for one-space mode. Version
 	// 2.9.0 and earlier reject the flag, so ask the binary what it accepts.
@@ -93,6 +95,34 @@ func warnIfNoSpaceAssets(w io.Writer, bin string) {
 	}
 	fmt.Fprintf(w, "wiki: this SilverBullet binary carries no %s assets, so the atomdown card view has no CSS and no header button.\n", spaceassets.Namespace)
 	fmt.Fprintf(w, "wiki: rebuild the embedded binary with scripts/build-wiki-blob.sh, then rebuild iugum.\n")
+}
+
+// warnIfDuplicatePlugs says what to do when the space still holds a hand-copied
+// plug bundle in _plug.
+//
+// The plugs are compiled into the SilverBullet binary under
+// spaceassets.Namespace, and SilverBullet's own Space.listPlugs loads EVERY
+// *.plug.js the space can see. A leftover copy in _plug therefore does not
+// replace the compiled one, it adds a second one: two instances of the same
+// plug, each with its own memory, both answering every click and both writing
+// the same config key. Measured on an 11-group page, collapsing every group and
+// then expanding every group left nine of them shut, and which nine moved
+// between runs, because the two instances undid each other.
+//
+// A space file at the compiled path is a deliberate override and stays silent.
+// A copy in _plug is the old install instruction and cannot be an override,
+// because the loader does not know the two files are the same plug.
+func warnIfDuplicatePlugs(w io.Writer, space string) {
+	names, err := filepath.Glob(filepath.Join(space, "_plug", "atomdown-*.plug.js"))
+	if err != nil || len(names) == 0 {
+		return
+	}
+	sort.Strings(names)
+	fmt.Fprintf(w, "wiki: this space holds %d hand-copied atomdown plug bundle(s) in _plug, and the same plugs are compiled into the SilverBullet binary.\n", len(names))
+	fmt.Fprintf(w, "wiki: SilverBullet loads both, so every atomdown control runs twice and the two copies fight. Delete these and reload the browser once:\n")
+	for _, name := range names {
+		fmt.Fprintf(w, "wiki:   %s\n", name)
+	}
 }
 
 // resolveBinary finds a SilverBullet binary to run. The second result removes

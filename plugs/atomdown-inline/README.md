@@ -25,29 +25,60 @@ and the plug only decorates what is already there.
 
 ## The collapse caret, and why it cannot go out of step
 
-The caret does not alternate. Each press reads the editor's own fold set —
-`foldedFroms` on the seam's click event, the `from` offset of every configured
-fold range that is folded right now — and declares the opposite for the group
-that was pressed. Every other group's flag is taken from that same report, so a
-fold the reader made from the gutter, or with the fold command, is adopted
-rather than contradicted. Nothing is carried over from the last press.
+The collapsed set is the state, and one press flips one entry of it. The seam
+then makes the editor's fold set match, on EVERY editor update - so the flag
+owns the state of a group, and a fold made from the gutter, by the fold command,
+or by CodeMirror's own "clear the folds covering the cursor" rule is put back to
+what the flag says. The caret cannot end up one press behind. The one exception
+is the reader's: a group holding the text cursor is not folded, because that
+would hide the cursor inside it.
 
-That is the fix for a caret that went dead. The earlier version alternated a
-remembered flag, which was correct until anything else folded the same range
-once; after that the caret was permanently one press behind and the group would
-not reopen. The flag still reaches the editor declaratively through the seam's
-`collapsed`, so applying the same value twice is the same result.
+Three separate defects made the caret look dead before, and all three are gone:
+
+* **The wrong group.** A click in a block widget reports the position of the
+  nearest TEXT, and once a neighbouring group is folded that position is in the
+  neighbour's range. Reading the click's `unit:` mark therefore named the wrong
+  group. A control in a widget now takes its unit from the widget's own name,
+  which this plug put there.
+* **The cursor clearing a fold.** CodeMirror places the text cursor on
+  mousedown, and its fold state drops any fold covering the selection head, so
+  pressing a caret with several groups shut reopened a group nobody pressed. The
+  seam now stops a press on widget chrome from placing the cursor at all.
+* **A lost update.** Each press reads the set, changes one entry and writes it
+  back, with four syscalls in between. Two presses in flight together both read
+  the set as it was before either, so the second write lost the first press.
+  Presses are queued.
+
+A fourth cause was not in this plug at all, and it is worth knowing because a
+space can still have it: a hand-copied bundle in `_plug/` runs the plug a SECOND
+time next to the compiled one, and the two instances undo each other. See
+Install below; `iugum wiki` warns and names the files.
 
 The set is remembered per page in `clientStore`, so a reload draws the groups
 the reader left shut.
 
 ## Install
 
-Three files, all copies into the space:
+**Nothing to copy.** The plug bundle and the library page are compiled into the
+SilverBullet binary `iugum wiki` runs, under `Library/Atomdown/`, and every
+space reads them from there. See `docs/wiki-space-assets.md`.
+
+**Delete a hand-copied bundle if you have one.** SilverBullet loads EVERY
+`*.plug.js` the space can see, so a leftover `_plug/atomdown-inline.plug.js`
+does not override the compiled one — it adds a second instance, and the two
+answer every click and write the same config key. `iugum wiki` names the files
+when it finds them:
 
 ```sh
-cp atomdown-inline.plug.js         /path/to/space/_plug/atomdown-inline.plug.js
-cp "library/Atomdown Inline.md"    "/path/to/space/Library/Atomdown/Inline.md"
+rm /path/to/space/_plug/atomdown-inline.plug.js
+```
+
+To run a working-tree copy instead of the compiled one, put it where the binary
+keeps it, so the space file shadows the underlay rather than joining it:
+
+```sh
+cp atomdown-inline.plug.js "/path/to/space/Library/Atomdown/Plugs/atomdown-inline.plug.js"
+cp "library/Atomdown Inline.md" "/path/to/space/Library/Atomdown/Inline.md"
 ```
 
 Then reload the browser once. The library page carries the two things a plug

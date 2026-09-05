@@ -51,8 +51,6 @@ const {
   directivePeekHtml,
   toggleAction,
   toggleCollapsed,
-  groupFoldRanges,
-  collapsedFromFolds,
   collapsedKey,
   buildDecorations,
   emptyDecorations,
@@ -617,8 +615,10 @@ test("the toggle follows what is on screen, not the remembered flag", () => {
 // ---------------------------------------------------------------------------
 
 test("collapsing is a set, so the caret can never desynchronise", () => {
-  // The bug this replaces alternated fold/unfold from memory, so one fold
-  // from the gutter left the caret stuck.
+  // The flags own the state: the seam reconciles the editor's fold set to them
+  // on every update, so a fold made from the gutter is put back and one press
+  // always flips exactly one group. Nothing reads the editor here, which is
+  // what makes a press deterministic instead of a race against the seam.
   assert.deepEqual(toggleCollapsed([], "AAAAAAAA"), ["AAAAAAAA"]);
   assert.deepEqual(toggleCollapsed(["AAAAAAAA"], "AAAAAAAA"), []);
   assert.deepEqual(
@@ -664,55 +664,6 @@ test("every widget the plug emits is named after the unit or box it draws", () =
       `widget ${widget.class} has no unit or box name: ${widget.id}`,
     );
   }
-});
-
-test("a group's foldable range is the one the decorations declare", () => {
-  // The editor reports its fold state by `from` offset, so these two have to
-  // agree to the character or the caret can match no group at all.
-  const payload = buildDecorations(PAGE, [], []);
-  assert.deepEqual(
-    groupFoldRanges(PAGE).map((r) => ({ from: r.from, to: r.to })),
-    payload.folds.map((f) => ({ from: f.from, to: f.to })),
-  );
-  assert.deepEqual(groupFoldRanges(PAGE).map((r) => r.groupId), ["7K3M9X2D"]);
-});
-
-test("the caret decides fold or unfold from the editor's fold set, not memory", () => {
-  const range = groupFoldRanges(PAGE)[0];
-
-  // Nothing folded: the press collapses.
-  assert.deepEqual(collapsedFromFolds(PAGE, [], "7K3M9X2D", []), ["7K3M9X2D"]);
-  // Already folded: the press expands, whatever memory believed.
-  assert.deepEqual(
-    collapsedFromFolds(PAGE, [range.from], "7K3M9X2D", []),
-    [],
-  );
-  // THE DEFECT. The reader folded it from the gutter, so memory says open and
-  // the editor says folded. The old alternation collapsed it again — no
-  // visible change, a caret that looks dead. This expands it.
-  assert.deepEqual(
-    collapsedFromFolds(PAGE, [range.from], "7K3M9X2D", []),
-    [],
-  );
-  // And the mirror case: memory says folded, the editor says open.
-  assert.deepEqual(
-    collapsedFromFolds(PAGE, [], "7K3M9X2D", ["7K3M9X2D"]),
-    ["7K3M9X2D"],
-  );
-  // Two presses return to the start, from any starting memory.
-  const shut = collapsedFromFolds(PAGE, [], "7K3M9X2D", []);
-  assert.deepEqual(collapsedFromFolds(PAGE, [range.from], "7K3M9X2D", shut), []);
-});
-
-test("without a fold report the caret still alternates, so an older client works", () => {
-  assert.deepEqual(
-    collapsedFromFolds(PAGE, undefined, "7K3M9X2D", []),
-    ["7K3M9X2D"],
-  );
-  assert.deepEqual(
-    collapsedFromFolds(PAGE, undefined, "7K3M9X2D", ["7K3M9X2D"]),
-    [],
-  );
 });
 
 test("a collapsed group asks the seam to fold it, and says so in its caret", () => {
