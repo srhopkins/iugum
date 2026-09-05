@@ -401,8 +401,22 @@ html {
   box-shadow: inset 1px 0 0 0 var(--editor-blockquote-border-color);
 }
 
+/* AND THE ONE CASE WHERE ZEROING THE INDENT IS STILL RIGHT. Once the cursor
+   leaves a blockquote the client REPLACES its `>` with nothing -
+   `invisibleDecoration` is `Decoration.replace({})` in
+   client/codemirror/util.ts - and still outdents the first row, by 1ch. So
+   the first row would sit 1ch left of every row below it with no marker in
+   the gap: not a hanging indent, just a ragged first line. There is no marker
+   to hang, so there is no hanging indent to keep. Zero the indent and let one
+   padding hold every row on the same x, after the bar.
+
+   This is the ONLY text-indent override left, and it is here because the
+   glyph the indent makes room for is not rendered. A blockquote that is also
+   a list item carries the client's INLINE pair, which beats this, so it keeps
+   its own marker's hanging indent. */
 #sb-main .cm-editor .cm-line.atomdown-card-line.sb-blockquote-outside {
   padding-left: 1ch;
+  text-indent: 0;
 }
 
 /* Same treatment for an admonition's 4px bar, for the reason in the
@@ -560,10 +574,10 @@ html {
   margin-left: var(--ad-inset);
   margin-right: var(--ad-inset);
   position: relative;
-  /* Vertical from the density, horizontal from the constant. The two gutter
-     controls are offset from THIS box, so a horizontal value that moved with
-     the density would move them too. Same requirement-2 split the card lines
-     use. */
+  /* Vertical is this density's own, and compact zeroes it in its own rule.
+     Horizontal is the CONSTANT: the two gutter controls are offset from THIS
+     box, so a horizontal value that moved with the density would move them
+     too - the same requirement-2 split the card lines use. */
   padding-top: 4px;
   padding-bottom: 4px;
   padding-left: var(--board-card-padding-x);
@@ -1266,9 +1280,9 @@ html {
   position: absolute;
   top: 0;
   /* --ad-frame, not --ad-inset: the compact header widget sets `border: none`
-     below, so its padding box starts on the content column and the offset has
-     to carry the group's stroke as well. With --ad-inset it landed 2px inside
-     a member card's own border. */
+     in the rule above, so its padding box starts on the content column and
+     this offset has to carry the group's stroke as well. With --ad-inset it
+     landed 2px inside a member card's own border. */
   left: var(--ad-frame);
   right: var(--ad-frame);
   z-index: 6;
