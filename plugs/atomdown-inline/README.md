@@ -426,15 +426,86 @@ which makes CodeMirror call `preventDefault` on `mousedown`, and a prevented
 header widget left `document.activeElement` on `.cm-content`, and **the
 characters typed next went into the document**. An in-popover attribute form
 would therefore type the reader's attribute values into the page, which is the
-one thing this view may never do. So every row is a button, text entry goes
-through `editor.prompt` - a modal dialog with a focused field of its own - and
-the row that edits attributes puts the cursor on the directive line, where the
-peek shows the raw bytes. Rule 8g asserts the popover holds no input, so the
-day someone adds one, the suite says why they cannot.
+one thing this view may never do. So every row is a button, and text entry goes
+somewhere that can hold focus: `editor.prompt` for a single value, and the
+attribute form below for a whole directive line. Rule 8g asserts the popover
+holds no input, so the day someone adds one, the suite says why they cannot.
 
 **No Escape key.** A plug cannot listen for a keystroke, and binding a command
 to Escape would consume it everywhere else in the editor. The popover closes on
 a second press of its button, on any click outside it, and on any action.
+
+## The attribute form
+
+"Edit attributes" in a card's menu opens **a form**, the way the board panel's
+own menu does: the name (slug) first in its own labelled field, the id shown in
+a disabled row, then one name/value row per remaining attribute, with Add
+attribute, Remove, Cancel and Save.
+
+**It is not in the popover, and that is the measured constraint above rather
+than a layout preference.** An input inside a seam widget takes no focus from a
+click, and the characters typed next go into the document. So the form needs a
+surface that can hold focus, and this host already has one: a SilverBullet
+panel. `editor.showPanel` renders its HTML in an iframe outside the editor's
+DOM entirely, where the press guard cannot reach, and that is the very surface
+the board panel's attribute form has always run in. The panel slot is `modal`,
+which is the one slot that does not resize the editor, so opening the form
+moves no card.
+
+**Why not simply open the board panel**, which was the first suggestion. The
+board renders every card on the page and covers the whole window, so an
+attribute edit would mean leaving the page and losing the reading position; and
+driving one card's popover from another plug needs a message into the board's
+iframe that does not exist. The form is one atom's attributes.
+
+**Rules the write path holds, all unit-tested on a pure function
+(`setAtomAttrsInSource`) rather than through the browser:**
+
+- the id comes from the SOURCE LINE, never from the form, so no route through
+  here can edit an id. An `id` row in the payload is ignored.
+- attribute order is id, then slug, then the rest, which is the order `atomdown
+  emit` writes.
+- the slug is sanitized and an empty one removes the attribute.
+- **a value carrying directive syntax is REFUSED, not escaped** - the board's
+  rule for a pasted directive, and the same stated reason: escaping would
+  silently store something other than what the reader typed.
+- **and the rewritten line is re-parsed before it is returned.** The refusal
+  list is a blocklist and a blocklist is a guess; reading the line back with
+  this plug's own regex and requiring the same id and the same pairs is the
+  property itself. An emptied directive fails here rather than reaching the
+  page.
+- one `editor.replaceRange`, so one undo reverts a whole save.
+
+"Show the directive line" is the row that used to be called Edit attributes: it
+puts the cursor on the directive, where the peek shows the raw bytes. It is
+still there because reading the bytes in place is still useful.
+
+Rules 8j, 8k and 8l of the front-end suite assert the focus, the shape and the
+refusals.
+
+## The group's two controls, outside the group container
+
+Same treatment as the card's, and for the reason Steve gave: "the cards and
+groups were supposed to have same behavior, groups still show inside the
+container". The group's drag grip is in the LEFT page gutter and its vertical
+three-dot menu in the RIGHT one, both `--board-chrome-gutter` (22px) outside
+the group header widget's own border box, which is the group box's top edge and
+carries the 2px accent outline. Both are hover-only, revealed by a hover
+anywhere inside the group - including over a member card - and by keyboard
+focus.
+
+**They sit on the bar's row**, not at the container's vertical centre. That is
+also the collision rule with a member card's own gutter controls: the bar is a
+row of its own above every member, so the two sets can never share a row. A
+second separation makes it forgiving rather than exact - a member card's head
+is inset by the group's padding plus the outline, so its controls sit in a lane
+about 10px inboard of the group's.
+
+**The bar keeps** the collapse chevron, GROUP, the name, the id and the count.
+The chevron stays inside the bar at full size and always visible at both
+densities. It is also the only control left on the saturated accent fill, so it
+keeps the translucent hover wash; the three-dot menu, now on the page's own
+ground, takes the card menu's opacity-and-colour treatment instead.
 
 ## Visual baselines, and how to update them
 
