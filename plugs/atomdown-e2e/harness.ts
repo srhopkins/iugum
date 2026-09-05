@@ -702,13 +702,24 @@ export type Box = {
 };
 
 /**
- * The things that must stay inside a box.
+ * CONTENT: the things that must stay inside a box.
  *
- * Deliberately a list rather than `*`. A box's own chrome is not a child that
- * has to fit, a zero-area or `display: contents` node produces a rect that is
- * inside everything and proves nothing, and the interesting cases are named
- * explicitly so a reader can see that list markers, table cells, blockquote
- * bars, fenced code and links are all actually covered.
+ * Deliberately a list rather than `*`. A zero-area or `display: contents` node
+ * produces a rect that is inside everything and proves nothing, and the
+ * interesting cases are named explicitly so a reader can see that list
+ * markers, table cells, blockquote bars, fenced code and links are all
+ * actually covered.
+ *
+ * WHAT IS NOT IN HERE, and why that is a rule rather than an omission. The
+ * inline view's per-card CHROME — the drag grip, the three-dot button and its
+ * popover — deliberately sits OUTSIDE the card's border, in the page gutter
+ * (`iugum-caj`). Chrome is not content: it is not part of the document, it
+ * appears only on hover or focus, and pinning it inside the box is exactly
+ * what used to spend 28px of every card's width on it. So rule 1 checks
+ * chrome against a DIFFERENT set of properties — see `CHROME_SELECTOR`,
+ * `measureChrome` and `chromeViolations` below — rather than not checking it.
+ * The board panel's chrome does stay inside its card, so `.board-card-menu`
+ * and `.board-group-btn` remain in this list and are still checked as content.
  */
 export const CHILD_SELECTOR = [
   ".cm-line",
@@ -1204,6 +1215,256 @@ export function containmentViolations(boxes: Box[]): Violation[] {
             overflowPx: Number(overflow.toFixed(2)),
             boundRect: b,
             childRect: c,
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// CHROME: the other half of rule 1
+// ---------------------------------------------------------------------------
+
+/**
+ * The inline view's per-card and per-group CHROME.
+ *
+ * These four controls and the popover are allowed outside the box they belong
+ * to. What they are NOT allowed to do is the three things that would make the
+ * design a defect rather than a choice:
+ *
+ *   1. be CLIPPED, so the reader sees half a control or none of it,
+ *   2. leave the editor's scroll container, which both hides them and can grow
+ *      a horizontal scrollbar on a page that had none,
+ *   3. land on the group's own 2px accent outline, where a control reads as a
+ *      notch cut out of the group's border.
+ *
+ * Board chrome is not in this list: it stays inside its card and is checked as
+ * content, through `CHILD_SELECTOR`.
+ */
+export const CHROME_SELECTOR = [
+  ".atomdown-grip",
+  ".atomdown-card-menu",
+  ".atomdown-group-menu",
+  ".atomdown-group-collapse",
+  ".atomdown-menu-popover",
+].join(",");
+
+export type ChromeItem = {
+  label: string;
+  rect: Rect;
+  /** The box this chrome belongs to: the card head, or the group bar. */
+  owner: string;
+  ownerRect: Rect;
+  /** The editor's scroll container, which is the only real clipper. */
+  clipRect: Rect;
+  /**
+   * Is the element actually PAINTED where its rect says it is?
+   *
+   * A rect alone proves nothing: a clipped element still reports its full
+   * unclipped rect. `document.elementFromPoint` at the element's own centre is
+   * the proof, because a clipped pixel belongs to whatever is behind it. An
+   * `opacity: 0` element is still hit-tested, so a control hidden at rest
+   * answers this correctly without being revealed first.
+   */
+  painted: boolean;
+  /**
+   * Could the paint test run here at all? False when the element's centre is
+   * off the scroller or under the app's fixed top bar. `painted` is reported
+   * true in that case, because "not measurable" is not "clipped" — the
+   * geometric checks still run.
+   */
+  hitTestable: boolean;
+  /** What was actually on top at that point, for the failure message. */
+  hit: string | null;
+  /**
+   * The x range of the group's accent outline on this chrome's own row, when
+   * the chrome belongs to a card inside a group. `null` for a top-level card.
+   */
+  groupOutline: { left: number; right: number; width: number } | null;
+};
+
+/**
+ * Measure every piece of inline chrome on screen, in ONE layout pass.
+ *
+ * `hover` is a CSS class the caller can force on, so the popover and the
+ * revealed states can be measured. Nothing here reveals anything itself: the
+ * suite drives the real pointer for that.
+ */
+export async function measureChrome(view: View): Promise<ChromeItem[]> {
+  if (view.kind !== "inline") return [];
+  return view.ev.evaluate((sel) => {
+    const asRect = (r: DOMRect) => ({
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+      left: r.left,
+    });
+    const scroller = document.querySelector(".cm-scroller") as HTMLElement;
+    if (!scroller) return [];
+    // The CLIENT box, not the bounding rect: a scrollbar is not usable space.
+    const sBox = scroller.getBoundingClientRect();
+    const clipRect = {
+      x: sBox.left,
+      y: sBox.top,
+      width: scroller.clientWidth,
+      height: scroller.clientHeight,
+      top: sBox.top,
+      left: sBox.left,
+      right: sBox.left + scroller.clientWidth,
+      bottom: sBox.top + scroller.clientHeight,
+    };
+
+    const out: any[] = [];
+    for (const el of Array.from(document.querySelectorAll(sel))) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const cx0 = r.left + r.width / 2;
+      const cy0 = r.top + r.height / 2;
+      // WHETHER THE PAINT TEST CAN BE TRUSTED HERE. It cannot in three cases,
+      // and each would otherwise read as clipping when it is not:
+      //
+      //  - the CENTRE is outside the scroller's client box. A control whose
+      //    top edge is on screen and whose middle is not returns no hit; that
+      //    is scrolling.
+      //  - `elementFromPoint` returns null: the point is outside the window.
+      //  - the hit is outside `.cm-editor`: the app's own fixed top bar is
+      //    over that point. Editor content scrolls under it by design.
+      //
+      // THIS ONLY GATES THE PAINT CHECK, never the geometric ones. Gating all
+      // three was a real bug in this helper: a control pushed 400px into the
+      // margin has its centre off the scroller, so skipping it here meant the
+      // one defect the "may sit outside the card" allowance opens up was the
+      // one defect that could not be reported.
+      const inHitRegion = cx0 >= clipRect.left + 2 &&
+        cx0 <= clipRect.right - 2 &&
+        cy0 >= clipRect.top + 2 && cy0 <= clipRect.bottom - 2;
+      const probe = inHitRegion ? document.elementFromPoint(cx0, cy0) : null;
+      const hitTestable = probe != null &&
+        probe.closest(".cm-editor") != null;
+      const owner = el.closest(
+        ".atomdown-card-head, .sb-decoration-widget.atomdown-group-header",
+      ) as HTMLElement | null;
+      if (!owner) continue;
+
+      const hit = probe;
+      // AN ANCESTOR ON TOP STILL MEANS COVERED. `hit.contains(el)` was in
+      // this condition and made the check unfalsifiable: an overlay drawn as
+      // the header widget's own `::after` hit-tests as the header widget,
+      // which is the control's parent, so every covered control read as
+      // painted. Only the element itself, or something inside it, counts.
+      const painted = !hitTestable || hit === el || el.contains(hit!);
+
+      // The group's outline, for a member card only. The group's side border
+      // is drawn on the card's own LINE element (`.atomdown-group-line`), and
+      // the header widget for a member card carries a copy of it, so the band
+      // is read off whichever of those is on this chrome's row.
+      let groupOutline: any = null;
+      const nestedHeader = el.closest(
+        ".sb-decoration-widget.atomdown-card-header.atomdown-nested",
+      ) as HTMLElement | null;
+      const bandHost = nestedHeader;
+      if (bandHost) {
+        const br = bandHost.getBoundingClientRect();
+        const bw = parseFloat(getComputedStyle(bandHost).borderLeftWidth) || 0;
+        groupOutline = { left: br.left, right: br.left + bw, width: bw };
+        // The right band too, reported as the wider of the two overlaps by
+        // `chromeViolations`, which checks both edges.
+        (groupOutline as any).rightBandLeft = br.right - bw;
+        (groupOutline as any).rightBandRight = br.right;
+      }
+
+      out.push({
+        label: el.tagName.toLowerCase() + "." +
+          (el.className || "").toString().split(" ").filter(Boolean).join("."),
+        rect: asRect(r),
+        owner: (owner.className || "").toString().split(" ")[0] ||
+          owner.tagName.toLowerCase(),
+        ownerRect: asRect(owner.getBoundingClientRect()),
+        clipRect,
+        hitTestable,
+        painted,
+        hit: hit
+          ? hit.tagName.toLowerCase() + "." +
+            (hit.className || "").toString().split(" ")[0]
+          : null,
+        groupOutline,
+      });
+    }
+    return out;
+  }, CHROME_SELECTOR);
+}
+
+export type ChromeViolation = {
+  chrome: string;
+  owner: string;
+  kind: "clipped" | "outside-clipper" | "overlaps-group-outline";
+  detail: string;
+  px: number;
+  chromeRect: Rect;
+};
+
+/**
+ * The chrome rules, as the counterpart of `containmentViolations`.
+ *
+ * Chrome may sit outside its box. It may not be clipped, it may not leave the
+ * editor's scroll container, and it may not sit on the group's accent outline.
+ * A rule that only said "must be outside the card" would pass for a control
+ * pushed off the window, which is the failure mode worth catching.
+ */
+export function chromeViolations(items: ChromeItem[]): ChromeViolation[] {
+  const out: ChromeViolation[] = [];
+  for (const item of items) {
+    if (!item.painted) {
+      out.push({
+        chrome: item.label,
+        owner: item.owner,
+        kind: "clipped",
+        detail:
+          `nothing of it is painted at its own centre; ` +
+          `${item.hit ?? "no element"} is on top there`,
+        px: 0,
+        chromeRect: item.rect,
+      });
+    }
+    const overLeft = item.clipRect.left + EPS - item.rect.left;
+    const overRight = item.rect.right - (item.clipRect.right - EPS);
+    for (const [side, px] of [["left", overLeft], ["right", overRight]] as const) {
+      if (px > 0) {
+        out.push({
+          chrome: item.label,
+          owner: item.owner,
+          kind: "outside-clipper",
+          detail: `${px.toFixed(2)}px past the ${side} edge of .cm-scroller`,
+          px: Number(px.toFixed(2)),
+          chromeRect: item.rect,
+        });
+      }
+    }
+    const band: any = item.groupOutline;
+    if (band && band.width > 0) {
+      const bands: [string, number, number][] = [
+        ["left", band.left, band.right],
+        ["right", band.rightBandLeft, band.rightBandRight],
+      ];
+      for (const [side, from, to] of bands) {
+        const overlap =
+          Math.min(item.rect.right, to) - Math.max(item.rect.left, from);
+        if (overlap > EPS) {
+          out.push({
+            chrome: item.label,
+            owner: item.owner,
+            kind: "overlaps-group-outline",
+            detail:
+              `${overlap.toFixed(2)}px of it sits on the group's ` +
+              `${band.width}px ${side} outline`,
+            px: Number(overlap.toFixed(2)),
+            chromeRect: item.rect,
           });
         }
       }

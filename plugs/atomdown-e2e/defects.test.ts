@@ -29,8 +29,10 @@
 
 import { test, type Page } from "@playwright/test";
 import {
+  chromeViolations,
   containmentViolations,
   directiveStates,
+  measureChrome,
   expect,
   gotoFixture,
   openInline,
@@ -158,6 +160,137 @@ test.describe("rule 1 — containment", () => {
         `and it must name the table as the child that escaped, not something ` +
           `incidental. Got: ${right.slice(0, 3).map((v) => v.child).join(" | ")}`,
       ).toBe(true);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // The CHROME half of rule 1 (iugum-caj). The card's controls are allowed
+  // outside the card; these three cases are the ways that stops being a
+  // choice and becomes a defect.
+  // ---------------------------------------------------------------------
+
+  test("fails when a control is pushed out of the editor's scroll container", async ({
+    page,
+  }) => {
+    // The failure mode the "may sit outside the card" allowance opens up: a
+    // gutter wide enough to put the control off the scroller, where the reader
+    // cannot see it and the page may grow a horizontal scrollbar it never had.
+    // 400px is past the page margin at every editor width.
+    const server: SBServer = await startSpace();
+    try {
+      await gotoFixture(page, server);
+      const view = await openInline(page);
+      // `!important`, because the plug's own space-style declares this knob
+      // on `html` too and wins the cascade otherwise. Custom properties take
+      // `!important` like any other declaration.
+      await injectDefect(
+        page,
+        `html { --board-chrome-gutter: 400px !important; }`,
+      );
+      await settle(page);
+      const violations = chromeViolations(await measureChrome(view));
+      const off = violations.filter((v) => v.kind === "outside-clipper");
+      expect(
+        off.length,
+        "rule 1's chrome half must report a control pushed past the " +
+          ".cm-scroller edge",
+      ).toBeGreaterThan(0);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("fails when a control is clipped by something on top of it", async ({
+    page,
+  }) => {
+    // A rect alone cannot see this: the control still reports its full rect.
+    // Only the hit test does. An opaque layer over the gutter is the shape a
+    // real regression takes - a widget or a line pseudo-element gaining a
+    // background and a z-index.
+    const server: SBServer = await startSpace();
+    try {
+      await gotoFixture(page, server);
+      const view = await openInline(page);
+      // The overlay goes on the HEADER WIDGET, not on the card's lines: the
+      // controls are vertically centred in the header, which sits above the
+      // card's first line, so an overlay over a line never reaches them.
+      await injectDefect(
+        page,
+        `#sb-main .cm-editor .sb-decoration-widget.atomdown-card-header::after {
+           content: "";
+           position: absolute;
+           left: -60px;
+           right: -60px;
+           top: -10px;
+           bottom: -10px;
+           background: red;
+           z-index: 50;
+         }`,
+      );
+      await settle(page);
+      const violations = chromeViolations(await measureChrome(view));
+      const clipped = violations.filter((v) => v.kind === "clipped");
+      expect(
+        clipped.length,
+        "rule 1's chrome half must report a control that is covered where " +
+          "its own rect says it is painted",
+      ).toBeGreaterThan(0);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("fails when a control lands on the group's accent outline", async ({
+    page,
+  }) => {
+    // A member card's control has to clear the group's 2px outline as well as
+    // the card's own border, or it reads as a notch cut out of the group. A
+    // zero gutter puts it exactly there.
+    const server: SBServer = await startSpace();
+    try {
+      await gotoFixture(page, server);
+      const view = await openInline(page);
+      await injectDefect(
+        page,
+        // A 12px outline with a 16px gutter puts the control's whole box
+        // inside the band: a member card's head starts at the outline plus
+        // the group's 8px interior padding, so -16px lands 4px into a 12px
+        // outline. The real values (2px and 22px) clear it by 12px.
+        `html {
+           --board-chrome-gutter: 16px !important;
+           --board-group-border-width: 12px !important;
+         }`,
+      );
+      await settle(page);
+      const violations = chromeViolations(await measureChrome(view));
+      const onOutline = violations.filter(
+        (v) => v.kind === "overlaps-group-outline",
+      );
+      expect(
+        onOutline.length,
+        "rule 1's chrome half must report a control sitting on the group's " +
+          "own outline",
+      ).toBeGreaterThan(0);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("chrome passes clean, so the three assertions above are not vacuous", async ({
+    page,
+  }) => {
+    const server: SBServer = await startSpace();
+    try {
+      await gotoFixture(page, server);
+      const view = await openInline(page);
+      await settle(page);
+      const violations = chromeViolations(await measureChrome(view));
+      expect(
+        violations,
+        "the unbroken page must report no chrome violation at all",
+      ).toEqual([]);
     } finally {
       await server.stop();
     }
