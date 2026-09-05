@@ -1048,7 +1048,7 @@ group's three-dot menu, with the current density as a state readout.
 | card slug and id | on the header | in the three-dot menu |
 | grip and three-dot button | in the header row, hover-only | floating in the card's top corners, hover-only |
 | group bar | chevron, grip, `GROUP`, name, id, count, Rename, Ungroup | chevron, grip, name, bare count, three-dot menu |
-| group outline | 2px accent | **identical** |
+| group outline | 2px accent | **identical** — in this panel. The inline view narrowed the rule: presence and geometry identical, stroke style and resting colour may vary. See `plugs/atomdown-inline/README.md`, "The group outline's rule, narrowed" |
 | collapse chevron | full size, always visible | **identical** |
 | content (headings, tables, body text) | full rendered size | **identical** |
 
@@ -1211,7 +1211,8 @@ renamed.
 | `--board-group-padding` | `8px` | a group container's inner padding (compact: `4px`) |
 | `--board-group-card-gap` | `8px` | the space between two member cards (compact: `4px`) |
 | `--board-group-header-padding` | `5px 8px` | the group bar's padding, which is what thins it (compact: `1px 4px`) |
-| `--board-group-border-width` | `2px` | the group outline. **The same at both densities** — it is structure, not chrome |
+| `--board-group-border-width` | `2px` | the group outline. **The same at both densities** — it is structure, not chrome. The inline view keeps that width and position and varies the stroke STYLE with the density; see its README |
+| `--board-card-padding-x` / `-y` | — | inline only, for now. The inline view splits `--board-card-padding` and `--board-group-padding` into a horizontal and a vertical half, so a density moves the vertical one only. Both derive from the knob names above, so setting `--board-card-padding` on `html` still moves both views |
 | `--board-group-quiet-border` | `40%` | how much accent a resting group's outline keeps |
 | `--board-group-quiet-header` | `16%` | how much accent a resting group's header bar keeps |
 | `--board-stale-border-color` | `#b7791f` | the border of a card whose content digest is stale. **Amber, not red, and never the accent** — see below |
