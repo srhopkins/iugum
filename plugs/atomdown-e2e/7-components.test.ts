@@ -228,7 +228,9 @@ for (const theme of THEMES) {
           await setDensity(view, combo.density);
           const s = sel(view);
 
-          // Exists once per atom, plus the fenced-code implicit cards.
+          // Exists once per atom. `FIXTURE.cards` used to be higher than
+          // `FIXTURE.atoms` because a fenced code block left an uncovered
+          // block; the current atomdown build does not. See the harness.
           const sweep = await sweepBoxes(view, {
             name: "card",
             selector: s.cardHeader,
