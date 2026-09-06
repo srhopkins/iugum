@@ -138,11 +138,20 @@ longer hang.
 
 **It cannot pass vacuously.** A line with one visual row has no continuation
 row to align, so 10a counts the WRAPPED lines it measured per kind - bullet,
-nested bullet, ordered, blockquote - and fails when any kind reached zero. The
-fixture's list items and blockquotes are written long enough to wrap at all
-four editor widths for that reason (`wrapTail` in
-`fixture/make-fixture.mjs`), and 10a also fails when fewer than two bullet
-indent levels were seen, which is the two-level nested list.
+nested bullet, ordered, blockquote - and fails when any kind reached zero. It
+also fails when fewer than two bullet indent levels were seen, which is the
+two-level nested list.
+
+**ONE WRAPPED CARD PER KIND, and the limit is measured.** `wrapTail` in
+`fixture/make-fixture.mjs` lengthens exactly three of the `loose` group's
+atoms: its blockquote, its short ordered list and its two-level bullet list.
+Tailing every list and blockquote atom, and then one in three, both made the
+page expensive enough that CodeMirror's incremental Lezer parse had not caught
+up by the time a rule 4 signature sweep reached the far end - those lines came
+back with their `sb-line-h3` and `sb-blockquote-outside` classes missing and
+raw `##`, `>` and `[label](url)` markers in their text, which reads as a
+state-machine defect and is a parse budget. Proven by running rule 4 against
+the previous fixture with the same stylesheet, where it passed.
 
 **10b asserts both halves of the density split.** Equal horizontal distances
 alone would pass on a density that had stopped doing anything, so the vertical
@@ -329,6 +338,17 @@ Stated rather than hidden.
   test can await from outside. The waits are generous; a slow machine could
   still read early, which would show up as an unexpected byte comparison
   rather than a wrong pass.
+- **A signature sweep against an incremental parse.** `signature` is a scroll
+  sweep over a virtualised editor whose syntax tree is parsed incrementally, so
+  a sweep can reach the far end of the document before Lezer has: those lines
+  report their `sb-line-*` classes missing and raw markdown markers in their
+  text, and a signature keys on exactly class list and text. Rule 4 therefore
+  RE-MEASURES once before it reports a mismatch. That stabilises the
+  measurement and loosens no comparison: the state after the round trip does
+  not change while it is read, so a real "did not restore" failure is still
+  there on the second reading, and the failure record says whether a re-read
+  happened. Same class of artefact as the `scrollHeight` estimate the sweep
+  already re-reads at every stop.
 - **`atomdown lint` and `atomdown verify`** need the `atomdown` binary. Rule 6
   looks for it on `$ATOMDOWN_BIN`, `~/go/bin`, `/usr/local/bin`,
   `/opt/homebrew/bin`, then the sibling checkout, and SKIPS those two checks
@@ -337,11 +357,11 @@ Stated rather than hidden.
 
 ## Status
 
-**Green on the fast matrix, both views, both densities: every rule, every
-component test, rule 8's eight properties and rule 9's twelve baselines.** No
-`test.fixme` is left in the suite. One test still skips with a reason rather
-than failing — the grip drag, when a synthetic pointer drag produces no change;
-see "what is not deterministic" above.
+**Green on the fast matrix, both views, both densities: every rule including
+10, every component test, rule 8's eight properties and rule 9's twelve
+baselines.** No `test.fixme` is left in the suite. One test still skips with a
+reason rather than failing — the grip drag, when a synthetic pointer drag
+produces no change; see "what is not deterministic" above.
 
 **Three things the density work found, worth knowing before changing the
 suite.** A page load resets `html[data-editor-width]`, so any test that
@@ -397,8 +417,14 @@ estimates the rest.
 - **`locator.hover()` waits out its timeout on a rebuilt element.** Putting
   `hoverClasses` on a group rebuilds every line element in it, so the element a
   locator resolved a moment ago is detached; at 82 cards that is eleven minutes
-  and it reads as a three-minute test timeout. Hovers in a sweep are real mouse
-  moves — `hoverBox` in the harness.
+  and it reads as a three-minute test timeout. Hovers are real mouse moves —
+  `hoverBox` in the harness. It is not only sweeps: the grip-drag test hovered
+  its source card with `locator.hover()` and got away with it until the
+  fixture's cards grew tall enough that the hover had to scroll first.
+- **An attribute is not an identity either, across a transaction.** The same
+  rebuild takes any attribute a test stamped with it, so a wait on
+  `[data-...]` after a hover waits forever. Rule 10c addresses its target line
+  by TEXT, which survives both a scroll and a rebuild.
 - **An index is not an identity.** `sweepEach` chooses the next key in the page,
   next to the list it chose from, rather than reading the list in one call and
   acting on `nth(i)` in another.
