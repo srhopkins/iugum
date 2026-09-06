@@ -1003,6 +1003,23 @@ function clickHandler(
  * reader clicked the background" is. A click that lands inside `contentDOM`
  * is left alone here: the handler above already has it, and reporting it
  * twice would make one press two gestures.
+ *
+ * IT TRACKS ITS OWN PRESS, AND THAT IS THE POINT OF THE `scrollDOM`
+ * LISTENER RATHER THAN A `contentDOM` ONE. `moved` used to be hardcoded
+ * false here, with a comment saying the margin listener could not see a
+ * press. It could not, and the consequence was rule 8i: every drop in rule 8
+ * releases in the GUTTER, which is outside `contentDOM`, so a grip drag that
+ * reordered the document was then reported as an unmoved background click.
+ * The plug read that as "clicked empty background", cleared the selection and
+ * wrote the decorations back from text it had already read — which raced the
+ * drag's own edit and restored the pre-drop order. The drop looked like it
+ * did nothing.
+ *
+ * `scrollDOM` CONTAINS `contentDOM`, so one listener sees the press wherever
+ * it started — on a grip inside the content, or in the margin — and the
+ * travel it measures is the same measurement `clickHandler` makes. Two
+ * listeners measuring one gesture must agree, and the only way to guarantee
+ * that is to measure it the same way from the same event stream.
  */
 function backgroundClickHandler(
   client: Client,
@@ -1010,8 +1027,17 @@ function backgroundClickHandler(
 ) {
   return ViewPlugin.fromClass(
     class {
+      private pressedAt: { x: number; y: number } | null = null;
+
+      private onPress = (event: MouseEvent) => {
+        if (event.button !== 0) return;
+        this.pressedAt = { x: event.clientX, y: event.clientY };
+      };
+
       private onClick = (event: MouseEvent) => {
         if (event.button !== 0) return;
+        const press = this.pressedAt;
+        this.pressedAt = null;
         const target = event.target;
         if (!(target instanceof Node)) return;
         if (this.view.contentDOM.contains(target)) return;
@@ -1024,10 +1050,12 @@ function backgroundClickHandler(
           classes: [],
           marks: [],
           onText: false,
-          // A drag that ENDS in the margin is still a drag. The margin
-          // listener sees no press of its own, so it reports the honest
-          // answer for the gesture it can see: not moved.
-          moved: false,
+          // A drag that ENDS in the margin is still a drag, and now the
+          // listener can say so: the press it recorded may have started on a
+          // grip inside the content column.
+          moved: press !== null &&
+            (Math.abs(event.clientX - press.x) >= DRAG_THRESHOLD_PX ||
+              Math.abs(event.clientY - press.y) >= DRAG_THRESHOLD_PX),
           metaKey: event.metaKey,
           ctrlKey: event.ctrlKey,
           altKey: event.altKey,
@@ -1039,10 +1067,15 @@ function backgroundClickHandler(
       };
 
       constructor(readonly view: EditorView) {
+        // The press listener is deliberately NOT filtered to the margin: a
+        // drag that ends there can start anywhere, including on a grip inside
+        // the content column. The click listener does the filtering.
+        view.scrollDOM.addEventListener("mousedown", this.onPress);
         view.scrollDOM.addEventListener("click", this.onClick);
       }
 
       destroy() {
+        this.view.scrollDOM.removeEventListener("mousedown", this.onPress);
         this.view.scrollDOM.removeEventListener("click", this.onClick);
       }
     },
