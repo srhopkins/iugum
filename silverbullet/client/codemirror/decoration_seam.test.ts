@@ -472,3 +472,23 @@ test("the drag handle is part of a widget's identity", () => {
   expect(widgetWith("grip").eq(widgetWith("grip"))).toBe(true);
   expect(widgetWith("grip").eq(widgetWith("other"))).toBe(false);
 });
+
+// ---------------------------------------------------------------------------
+// WHERE THE CLICK PAYLOAD IS ASSERTED, and why not here.
+//
+// `iugum-oip` added two fields to `DecorationClickEvent`: `shiftKey`, without
+// which a receiver cannot tell a range-extending click from an ordinary one,
+// and `onText`, which says whether the point was on text at all so that "the
+// reader clicked the background" is expressible. It also added a second
+// listener, `backgroundClickHandler`, on `view.scrollDOM` — CodeMirror puts
+// every `domEventHandlers` handler on `contentDOM`, and the page margin is
+// not in `contentDOM`, so a click there reached nothing.
+//
+// None of that is asserted in this file, on purpose. All three need a real
+// pointer against a laid-out editor: a `MouseEvent` this file constructs has
+// no position in any layout, so `posAtCoords` cannot answer, and a stub that
+// made it answer would be asserting the stub. They are asserted end to end in
+// `plugs/atomdown-e2e/11-selection.test.ts` — 11c for `shiftKey`, 11d for the
+// background click, and 11h for the press path itself — which runs in the
+// pre-push gate. Stated here so a reader of this file is not misled into
+// thinking the seam's whole surface is covered by it.

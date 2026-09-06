@@ -274,6 +274,23 @@ html {
      than a surface. */
   --board-group-surface: transparent;
   --board-card-selected-surface: var(--ui-surface-hover-background-color, #eaeaea);
+
+  /* THE CARD'S BORDER WHEN THE POINTER IS IN IT. iugum-oip.
+
+     Steve, on the live page: "the CARD border does not change on hover; only
+     the GROUP border does." He was right, and it was not a missing class. The
+     seam puts `atomdown-card-hover` on every line of the hovered card
+     already, and this stylesheet used it - to un-mute the header's name and
+     to reveal the two gutter controls. Nothing anywhere read it for the box's
+     own edge, so the one thing a reader looks at to answer "which card am I
+     on" was the one thing that never moved.
+
+     The accent, the same colour the group's border uses, so the two boxes
+     answer that question in one visual language: the group's edge says which
+     group, the card's edge says which card inside it. It is a colour change
+     only - no width, no shadow, no inset - because rule 3 says reading the
+     page may not move it. */
+  --board-card-border-hover-color: var(--board-accent-color);
 }
 
 /* ------------------------------------------------------------------ */
@@ -504,6 +521,49 @@ html {
    only, so the card does not move and neither does anything under it. */
 .cm-line.atomdown-card-line.atomdown-card-hover::before {
   border-color: var(--board-card-border-color);
+}
+
+/* ------------------------------------------------------------------ */
+/* THE CARD'S OWN BORDER, UNDER THE POINTER. iugum-oip.                */
+/*                                                                     */
+/* `atomdown-card-hover` is put on every line of the hovered card by   */
+/* the seam's `hoverClasses`, for the reason `hoverClasses` exists at  */
+/* all: a card is a RUN of sibling `.cm-line` elements with nothing    */
+/* wrapping them, so CSS `:hover` cannot name the run. This is the     */
+/* rule that reads it for the box's edge. It sets the colour on the    */
+/* `::before` that draws the box, and it has to name every side that   */
+/* rule sets - `border-color` alone would be overridden by the         */
+/* longhand `border-left`/`border-right` above.                        */
+/*                                                                     */
+/* WHY IT COMES AFTER, and not with a higher specificity: both         */
+/* selectors are two classes plus a pseudo element, so source order    */
+/* decides, and later is this one. A `:not(.atomdown-card-hover)`      */
+/* resting rule was the alternative and it is worse here: the resting  */
+/* colour is also the SELECTED card's, and a card can be selected and  */
+/* hovered at once.                                                    */
+/* ------------------------------------------------------------------ */
+
+.cm-line.atomdown-card-line.atomdown-card-hover::before {
+  border-left-color: var(--board-card-border-hover-color);
+  border-right-color: var(--board-card-border-hover-color);
+}
+
+.cm-line.atomdown-card-line.atomdown-card-hover.atomdown-card-last::before {
+  border-bottom-color: var(--board-card-border-hover-color);
+}
+
+/* The card's TOP edge and top corners live on the header widget above the
+   card's first line, so the top of the same box is coloured there. `:has(+
+   .cm-line.atomdown-card-hover)` is the same next-sibling test this
+   stylesheet already uses to un-mute the header's text. `box-shadow` is the
+   hairline under the strip and it is part of the same edge, so it moves too;
+   leaving it behind drew a resting-grey line across a highlighted box. */
+.sb-decoration-widget.atomdown-card-header:has(
+    + .cm-line.atomdown-card-hover
+  ) {
+  border-color: var(--board-card-border-hover-color);
+  box-shadow: inset 0 calc(-1 * var(--board-card-border-width)) 0
+    var(--board-card-border-hover-color);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1434,6 +1494,13 @@ html {
   border-top-style: var(--board-card-border-style);
   border-top-left-radius: var(--board-card-radius);
   border-top-right-radius: var(--board-card-radius);
+}
+
+/* And the top edge follows the pointer at this density too. iugum-oip's DoD
+   names both densities, and at compact the top edge is HERE rather than on
+   the header widget, so the comfortable rule cannot cover it. */
+.cm-line.atomdown-compact-line.atomdown-card-first.atomdown-card-hover::before {
+  border-top-color: var(--board-card-border-hover-color);
 }
 
 /* NO ROOM IS RESERVED AT THE TOP RIGHT ANY MORE. The three-dot button used to

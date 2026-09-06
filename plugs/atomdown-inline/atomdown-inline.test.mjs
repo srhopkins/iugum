@@ -52,6 +52,7 @@ const {
   slugOrId,
   dedupeKeys,
   isContiguousUnitSelection,
+  applyClickSelection,
   lineStarts,
   gripLine,
   contentFirstLine,
@@ -1336,6 +1337,118 @@ test("contiguity does not care what order the keys arrive in", () => {
 test("dedupeKeys keeps first-seen order", () => {
   assert.deepEqual(dedupeKeys(["b", "a", "b"]), ["b", "a"]);
   assert.deepEqual(dedupeKeys(undefined), []);
+});
+
+// ---------------------------------------------------------------------------
+// WHAT A CLICK DOES TO THE SELECTION (`applyClickSelection`), the whole rule
+// as a pure function.
+//
+// `iugum-oip`: on the live page a plain click on a card selected nothing and
+// an alt-drag lost its selection a millisecond later. The decision used to be
+// three inline `if`s inside the click handler, where the only branch for a
+// plain click on a card CLEARED — so a click could unselect and never select.
+// It is a function with these tests now, because the branch that was wrong is
+// the branch no test could reach without a browser and a pointer.
+// ---------------------------------------------------------------------------
+
+const ORDER = ["atom:A", "atom:B", "group:G", "atom:D"];
+
+test("a plain click selects that one unit and anchors there", () => {
+  const out = applyClickSelection(ORDER, [], null, "atom:B", {});
+  assert.deepEqual(out.selected, ["atom:B"]);
+  assert.equal(out.anchor, "atom:B");
+});
+
+test("a plain click REPLACES a selection rather than clearing it", () => {
+  // The defect, stated as a test: this used to return an empty selection.
+  const out = applyClickSelection(ORDER, ["atom:A"], "atom:A", "atom:B", {});
+  assert.deepEqual(out.selected, ["atom:B"]);
+});
+
+test("a modifier click adds, and the same click again removes", () => {
+  const added = applyClickSelection(
+    ORDER,
+    ["atom:A"],
+    "atom:A",
+    "atom:B",
+    { metaKey: true },
+  );
+  assert.deepEqual(added.selected, ["atom:A", "atom:B"]);
+  const removed = applyClickSelection(
+    ORDER,
+    added.selected,
+    added.anchor,
+    "atom:B",
+    { ctrlKey: true },
+  );
+  assert.deepEqual(removed.selected, ["atom:A"]);
+});
+
+test("shift extends from the anchor and takes the units between", () => {
+  const out = applyClickSelection(
+    ORDER,
+    ["atom:A"],
+    "atom:A",
+    "atom:D",
+    { shiftKey: true },
+  );
+  // group:G is in the range and nobody clicked it. That is the property.
+  assert.deepEqual(out.selected, ["atom:A", "atom:B", "group:G", "atom:D"]);
+  assert.equal(out.anchor, "atom:A", "the anchor does not move");
+});
+
+test("shift extends backwards too", () => {
+  const out = applyClickSelection(
+    ORDER,
+    ["group:G"],
+    "group:G",
+    "atom:A",
+    { shiftKey: true },
+  );
+  assert.deepEqual(out.selected, ["atom:A", "atom:B", "group:G"]);
+});
+
+test("a second shift-click re-extends from the same anchor", () => {
+  const first = applyClickSelection(
+    ORDER,
+    ["atom:A"],
+    "atom:A",
+    "atom:D",
+    { shiftKey: true },
+  );
+  const second = applyClickSelection(
+    ORDER,
+    first.selected,
+    first.anchor,
+    "atom:B",
+    { shiftKey: true },
+  );
+  assert.deepEqual(second.selected, ["atom:A", "atom:B"]);
+});
+
+test("shift with no anchor yet is a plain click", () => {
+  const out = applyClickSelection(ORDER, [], null, "atom:B", {
+    shiftKey: true,
+  });
+  assert.deepEqual(out.selected, ["atom:B"]);
+  assert.equal(out.anchor, "atom:B");
+});
+
+test("no unit under the pointer clears, and never selects", () => {
+  const out = applyClickSelection(ORDER, ["atom:A", "atom:B"], "atom:A", null, {
+    metaKey: true,
+  });
+  assert.deepEqual(out.selected, []);
+  assert.equal(out.anchor, null);
+});
+
+test("an anchor the order no longer knows is a plain click", () => {
+  // After an ungroup the anchor can name a unit that is gone. A stale key
+  // cannot anchor a range, so the click means what an unmodified one means.
+  const out = applyClickSelection(ORDER, [], "group:GONE", "atom:B", {
+    shiftKey: true,
+  });
+  assert.deepEqual(out.selected, ["atom:B"]);
 });
 
 // ---------------------------------------------------------------------------

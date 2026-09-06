@@ -256,9 +256,43 @@ export type DecorationClickEvent = {
   marks: string[];
   /** `id` (or `class`) of the widget clicked, when the click was in one. */
   widget?: string;
+  /**
+   * Was the point on TEXT, rather than on the editor's own empty space?
+   *
+   * False for the page margin, the gutter and the area under the last line.
+   * `marks` is empty whenever this is false and no widget was hit, so a
+   * receiver can treat "clicked the background" as its own gesture — which is
+   * what "click off it to deselect" and "click outside to close" both are.
+   */
+  onText: boolean;
+  /**
+   * Did the pointer TRAVEL between the press and this click?
+   *
+   * A press and a release in about the same place is a click. A press, a
+   * move and a release is a DRAG, and inside text a drag is the browser
+   * selecting text — so a receiver that treats a click as "select this
+   * block" must not treat a drag as one too.
+   *
+   * Travel, not `getSelection()`, and that is measured rather than
+   * preferred: a plain click inside text also collapses a selection there,
+   * so asking "is there a selection" answers yes for both gestures. The
+   * board panel decides the same question the same way.
+   */
+  moved: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
+  /**
+   * Was shift held?
+   *
+   * ADDED FOR `iugum-oip`, and its absence was a defect rather than a gap in
+   * an otherwise complete set. A click carries four modifiers and this event
+   * reported three, so a receiver could implement add-to-selection but not
+   * extend-a-range: shift-click was undetectable. `DecorationDragEvent` and
+   * `DecorationLassoEvent` both already carried all four, so the click event
+   * was the odd one out.
+   */
+  shiftKey: boolean;
 };
 
 /** Payload of the `editor:decorationSelect` app event. */
@@ -842,9 +876,35 @@ function clickHandler(
   config: DecorationConfig,
   field: StateField<SeamState>,
 ) {
+  /**
+   * Where the press that produced the next click started.
+   *
+   * Recorded here rather than asked for later, because by the time `click`
+   * fires the press is gone and no event carries its position. It is the only
+   * way to tell a click from a drag, and telling them apart is what lets a
+   * receiver select a block on a click while leaving a text drag alone. Null
+   * when a click arrives with no press behind it, which a synthetic
+   * `element.click()` does — such a click is reported as not moved, because
+   * it did not.
+   */
+  let pressedAt: { x: number; y: number } | null = null;
+
   return EditorView.domEventHandlers({
+    mousedown: (event: MouseEvent) => {
+      if (event.button === 0) {
+        pressedAt = { x: event.clientX, y: event.clientY };
+      }
+      // Observing only. Returning true here would make CodeMirror
+      // `preventDefault` every press in the document.
+      return false;
+    },
     click: (event: MouseEvent, view: EditorView) => {
       if (event.button !== 0) return;
+      const press = pressedAt;
+      pressedAt = null;
+      const moved = press !== null &&
+        (Math.abs(event.clientX - press.x) >= DRAG_THRESHOLD_PX ||
+          Math.abs(event.clientY - press.y) >= DRAG_THRESHOLD_PX);
       let lineClasses: string[] = [];
       const classes: string[] = [];
       let widget: string | undefined;
@@ -879,24 +939,45 @@ function clickHandler(
       // A widget carries the offset it was configured at, which is the
       // position the caller meant anyway.
       let pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      // WAS THE POINT ON TEXT AT ALL? The precise `posAtCoords` above is the
+      // only thing that can say, and the answer is a fact about the gesture
+      // rather than a detail of this function — so it travels with it.
+      const onText = pos !== null;
       if (pos === null && widget !== undefined) {
         const rule = config.widgets.find((w) => ruleName(w) === widget);
         if (rule) pos = Math.min(rule.at, view.state.doc.length);
       }
-      if (pos === null) return;
+      if (pos === null) {
+        // A CLICK INSIDE THE CONTENT THAT IS ON NOTHING: the blank line
+        // between two decorated ranges, or the space under the last line. It
+        // used to be dropped here, and dropping it cost the reader two
+        // gestures — "clear the selection" and "shut the open popover" both
+        // mean clicking off the thing, and neither could be expressed at all
+        // (`iugum-oip`).
+        //
+        // It is reported with the NEAREST position and an EMPTY mark list.
+        // Empty rather than the marks at that nearest position, because the
+        // nearest range to a point in the gap between two cards is one of
+        // them, and reporting its marks would turn "I clicked the gap" into
+        // "I clicked that card" — the opposite gesture.
+        pos = posAt(view, event.clientX, event.clientY);
+      }
       const payload: DecorationClickEvent = {
         page: pageName,
         pos,
         line: view.state.doc.lineAt(pos).number,
         lineClasses,
         classes,
-        marks: markNames(
-          marksIn(liveMarks(view.state, field, config), pos, pos),
-        ),
+        marks: onText || widget !== undefined
+          ? markNames(marksIn(liveMarks(view.state, field, config), pos, pos))
+          : [],
+        onText,
+        moved,
         ...(widget !== undefined ? { widget } : {}),
         metaKey: event.metaKey,
         ctrlKey: event.ctrlKey,
         altKey: event.altKey,
+        shiftKey: event.shiftKey,
       };
       safeRun(async () => {
         await client.dispatchAppEvent("editor:decorationClick", payload);
@@ -905,6 +986,67 @@ function clickHandler(
       return false;
     },
   });
+}
+
+/**
+ * A click in the editor's own margin, OUTSIDE the content column.
+ *
+ * A SECOND LISTENER IS NECESSARY, not a tidy-up. CodeMirror registers every
+ * handler from `EditorView.domEventHandlers` on `contentDOM`, and the page
+ * margin is not in `contentDOM` — it belongs to `.cm-scroller`. So the click
+ * handler above cannot see the margin at all, whatever it does with
+ * coordinates. Measured on the fixture (`iugum-oip`): a click at the left
+ * margin landed with `event.target` = `.cm-scroller` and produced no seam
+ * event of any kind, so "click off the cards to deselect" was unreachable.
+ *
+ * It reports the same event with an EMPTY mark list, which is what "the
+ * reader clicked the background" is. A click that lands inside `contentDOM`
+ * is left alone here: the handler above already has it, and reporting it
+ * twice would make one press two gestures.
+ */
+function backgroundClickHandler(
+  client: Client,
+  pageName: string,
+) {
+  return ViewPlugin.fromClass(
+    class {
+      private onClick = (event: MouseEvent) => {
+        if (event.button !== 0) return;
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (this.view.contentDOM.contains(target)) return;
+        const pos = posAt(this.view, event.clientX, event.clientY);
+        const payload: DecorationClickEvent = {
+          page: pageName,
+          pos,
+          line: this.view.state.doc.lineAt(pos).number,
+          lineClasses: [],
+          classes: [],
+          marks: [],
+          onText: false,
+          // A drag that ENDS in the margin is still a drag. The margin
+          // listener sees no press of its own, so it reports the honest
+          // answer for the gesture it can see: not moved.
+          moved: false,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+        };
+        safeRun(async () => {
+          await client.dispatchAppEvent("editor:decorationClick", payload);
+        });
+      };
+
+      constructor(readonly view: EditorView) {
+        view.scrollDOM.addEventListener("click", this.onClick);
+      }
+
+      destroy() {
+        this.view.scrollDOM.removeEventListener("click", this.onClick);
+      }
+    },
+  );
 }
 
 function selectionWatcher(
@@ -1505,6 +1647,8 @@ export function decorationSeam(client: Client, pageName: string): Extension[] {
   }
   if (config.events.click) {
     extensions.push(clickHandler(client, pageName, config, field));
+    // The margin, which `contentDOM` does not cover. See the function.
+    extensions.push(backgroundClickHandler(client, pageName));
   }
   if (config.events.selection) {
     extensions.push(selectionWatcher(client, pageName, config, field));
