@@ -96,6 +96,41 @@ function group(slug, body) {
   push(`<!-- </atom-group> -->`);
 }
 
+/**
+ * A tail long enough that the line it is on WRAPS at every editor width.
+ *
+ * Not decoration. The DoD for the hanging indent (iugum-3ad) measures the x
+ * of the first glyph on each visual ROW of a list item, and a line with one
+ * row has nothing to measure - so a fixture whose list items all fit on one
+ * row lets the whole assertion pass vacuously. The widest case is `full`,
+ * which is `min(1600px, 96%)` on a 1440px viewport: about 1294px of usable
+ * width inside a member card. This tail takes every list item well past it.
+ */
+function wrapTail(topic, i) {
+  // ONE CARD PER KIND, IN ONE GROUP, and the limit is measured rather than
+  // chosen. Tailing every list and blockquote atom, and then one in three,
+  // both made the page expensive enough that CodeMirror's incremental Lezer
+  // parse had not caught up by the time a rule 4 signature sweep reached the
+  // far end: those lines came back with `sb-line-h3` and
+  // `sb-blockquote-outside` missing and raw `##`, `>` and `[label](url)`
+  // markers in their text, and a signature keys on class list and text. It
+  // read as a state-machine defect and was a parse budget. Proven by running
+  // rule 4 against the previous fixture with the same CSS, where it passed.
+  //
+  // Rule 10a needs at least ONE wrapped line of each kind, so one card each
+  // is what it gets: the `loose` group's blockquote (i=3), its short ordered
+  // list (i=6) and its two-level bullet list (i=18). If the generator's shape
+  // cycle ever moves those, rule 10a fails with "no WRAPPED line was measured
+  // for ..." and names the kind.
+  if (topic !== "loose" || i % 3 !== 0) return "";
+  return (
+    ` It is written long on purpose, so this item wraps onto a second visual ` +
+    `row at every editor width including full, and the hanging indent of ` +
+    `${topic} step ${i} can be measured on the row that follows the marker ` +
+    `rather than assumed from the stylesheet.`
+  );
+}
+
 /** Filler that varies by index so no two cards are byte-identical. */
 function filler(i, topic) {
   const shapes = [
@@ -103,9 +138,15 @@ function filler(i, topic) {
     () =>
       `Check ${i}. Read \`${topic}/step-${i}.md\` before the next change. The path is relative to the space root.`,
     () =>
-      `- ${topic} item ${i}a\n- ${topic} item ${i}b\n  - nested ${i}b1\n  - nested ${i}b2\n- ${topic} item ${i}c`,
+      `- ${topic} item ${i}a.${wrapTail(topic, i)}\n` +
+      `- ${topic} item ${i}b.${wrapTail(topic, i)}\n` +
+      `  - nested ${i}b1.${wrapTail(topic, i)}\n` +
+      `  - nested ${i}b2.${wrapTail(topic, i)}\n` +
+      `- ${topic} item ${i}c.${wrapTail(topic, i)}`,
     () =>
-      `> A quoted line for ${topic}, step ${i}. It wraps far enough to make the blockquote bar measurable against the card border.`,
+      `> A quoted line for ${topic}, step ${i}. It wraps far enough to make ` +
+      `the blockquote bar measurable against the card border.` +
+      wrapTail(topic, i),
     () => `### ${topic} step ${i}`,
     () =>
       (i % 16 < 8 ? "```sh\n" : "```bash\n") +
@@ -113,7 +154,9 @@ function filler(i, topic) {
       `iugum wiki --port 0 ./space-${i}\n` +
       "```",
     () =>
-      `1. first for ${topic} ${i}\n2. second for ${topic} ${i}\n3. third for ${topic} ${i}`,
+      `1. first for ${topic} ${i}.${wrapTail(topic, i)}\n` +
+      `2. second for ${topic} ${i}.${wrapTail(topic, i)}\n` +
+      `3. third for ${topic} ${i}.${wrapTail(topic, i)}`,
     () =>
       `A long reference for ${topic}: [a link label that is deliberately long enough to wrap inside a narrow card and reach the right border](https://example.invalid/atomdown/fixture/reference/${topic}/step-${i}?verbose=1&trace=1) and then some trailing prose.`,
   ];
@@ -141,6 +184,10 @@ group("decisions", () => {
       "blocked on an answer.",
   );
   // Rule 5: exactly one <ol> with exactly six <li>.
+  //
+  // NOT lengthened to wrap. Rule 10a's wrapped ORDERED list is the `loose`
+  // group's short one; see `wrapTail`. Six wrapped items at the top of the
+  // page cost parse budget the rule does not need.
   push(
     [
       "1. **History.** One commit is still local and later commits reverse it. Drop it, squash the pair, or push the contradiction.",

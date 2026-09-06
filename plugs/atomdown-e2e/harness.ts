@@ -65,25 +65,36 @@ export const FIXTURE_PAGE = "Todo/running";
 /**
  * What is in the fixture, as numbers the tests assert against.
  *
- * These are not decoration. A containment sweep that measured 6 of 84 cards
+ * These are not decoration. A containment sweep that measured 6 of 82 cards
  * would report zero violations and pass, so the counts are what prove the
  * sweep reached the end of the document.
  *
  * The fixture holds two fenced code blocks, because Steve named fenced code as
- * a containment case, and that is why `cards` is 84 rather than 82.
+ * a containment case.
  */
 export const FIXTURE = {
   atoms: 82,
   groups: 11,
   /**
-   * Cards drawn, in BOTH views: the 82 atoms plus one per fenced code block.
-   * `atomdown materialize` leaves a fence's opening line outside the atom it
-   * creates, so each fence is an uncovered block that both views draw as a
-   * card marked implicit. `atomdown` counts 82 atoms for the same file. Both
-   * numbers are right; they count different things.
+   * Cards drawn, in BOTH views: one per atom.
+   *
+   * THIS WAS 84, AND THE TOOL CHANGED (iugum-3ad, 2026-09-05). `atomdown
+   * materialize` used to leave a fenced code block's OPENING line outside the
+   * atom it created, so each fence left one uncovered block that both views
+   * drew as an extra card marked implicit - 82 atoms, 84 cards, and both
+   * numbers right because they counted different things. The build of
+   * `atomdown` that regenerated this fixture covers the opening line too, so
+   * there are no uncovered blocks left and the two numbers agree.
+   *
+   * WHAT THAT COSTS: the fixture no longer holds a card with NO Atomdown id.
+   * `measureBoxes` and `sweepEach` both still carry their text-keyed fallback
+   * for one, because a card with no id is still possible - an uncovered block
+   * appears the moment a page holds content `materialize` has not marked - but
+   * nothing in this fixture exercises that path any more. Filed as
+   * `iugum-zaw`.
    */
-  cards: 84,
-  implicitCards: 2,
+  cards: 82,
+  implicitCards: 0,
   /** The 10-row table's group, and the six-item ordered list's group. */
   tableGroupId: "NS67J8K5",
   decisionsGroupId: "KATZ94NM",
@@ -2101,7 +2112,7 @@ export type Signature = {
  * So the fingerprint is the UNION over an overlapping scroll sweep, keyed by
  * each element's own content and sorted. That is deterministic — with 40%
  * overlap every element is inside the viewport at some stop, so the union is
- * every element whatever the margin did — and it covers all 84 cards and all
+ * every element whatever the margin did — and it covers all 82 cards and all
  * 11 groups instead of the five on screen, which is what lets it see a group
  * left folded 60 atoms down the page.
  */

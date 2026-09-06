@@ -36,6 +36,19 @@ so the two views cannot drift. Comfortable is the default.
 a heading at its full rendered size at both densities, because the point is to
 fit more of the document on screen, not to shrink the document.
 
+**Compact compresses the VERTICAL axis only.** `--board-card-padding` and
+`--board-group-padding` each carried both axes, so compact used to move the
+horizontal distance from a card's border to its first glyph, and the distance
+from a group's border to a member card's border with it. Each knob is now two,
+`-x` and `-y`, both derived from the original name, and compact overrides the
+`-y` half. That distance is what a reader's eye uses to find the start of a
+line, so moving it made compact read as a different document rather than as the
+same one closer together. Rule 10b asserts both halves: the horizontal
+distances equal, the vertical ones different.
+
+Setting `--board-card-padding` on `html` still moves both axes, both views and
+both densities. Rule 10b, `10-hanging-indent-and-density.test.ts`.
+
 | | comfortable | compact |
 |---|---|---|
 | Card header row | a strip with the grip, the name and the id | **gone** - no header, no background, no border, and deliberately no dotted line standing in for it. There is no seam. |
@@ -43,14 +56,64 @@ fit more of the document on screen, not to shrink the document.
 | The name and the id | in the header | in the three-dot menu, whose picker leads with a `name  -  id` label that does nothing when chosen |
 | The grip and the menu | in the header strip's padding gutters | a zero-height layer pinned across the card's top edge, `pointer-events: none` except on the two controls, so a click on the top strip falls through and still selects the card |
 | Group bar | caret, grip, GROUP, name, id, count, menu | caret, grip, name, a bare count, menu |
-| Group outline | 2px accent | **identical** - the outline is structure, not chrome |
+| Group outline | 2px accent, solid | 2px accent, **dotted**, and the page background at rest. Same width, same position, never absent - see "The group outline's rule, narrowed" below |
+| Card surface | its own subtle fill | **none** - the theme's `--root-background-color` |
+| Card outline | 1px solid | 1px **dotted**, the page background at rest and its visible colour under the pointer |
 | Collapse caret | full size | **identical** - it is the control that turns a long page into a list of group names |
-| `--board-card-padding` | 14px | 6px |
+| `--board-card-padding-x` | 14px | **identical** |
+| `--board-card-padding-y` | 14px | 6px |
 | `--board-card-radius` | 6px | 4px |
 | `--board-card-gap` | 14px | 6px |
-| `--board-group-padding` | 8px | 4px |
+| `--board-group-padding-x` | 8px | **identical** |
+| `--board-group-padding-y` | 8px | 4px |
 | `--board-group-header-padding` | 5px 8px | 1px 4px |
-| `--board-card-header-padding` | 4px 8px | 0 |
+| `--board-card-border-style` | solid | dotted |
+| `--board-group-border-style` | solid | dotted |
+
+## How quiet works at compact
+
+Steve's rule: *"just make the dotted border same as background theme so no size
+for border, only headers go away."*
+
+The stroke is **always present and always the same width**. At rest its colour
+is the page's own background token, which makes it invisible while it still
+occupies its space; the pointer gives it its visible colour. Nothing about the
+geometry changes between the two states, so nothing below a card can move -
+the same trick that reserves the box for the hover-only controls. Comfortable
+shares the mechanism rather than opting out: its resting colour IS its visible
+colour, so hover changes nothing there.
+
+Rule 10c reads the computed values on both sides of a hover: identical width,
+identical style, a different colour, and the y of a card below it unchanged.
+
+**Room for a stale state.** Every stroke colour arrives through two knobs per
+box - `--board-card-border-rest-color` and `--board-card-border-color`, plus
+`--board-accent-color` for selection - and no rule sets a colour any other way.
+A per-card stale state (amber, when a digest no longer matches its content) is
+therefore one declaration on that card's lines, at either density, with no
+geometry to reconsider: width and style belong to the density, colour belongs
+to the state. The inline view has **no** stale indicator today; that was built
+for the board panel only, and porting it is `iugum-abi`.
+
+## The group outline's rule, narrowed
+
+The rule used to read: *"the group outline does not change - the outline is
+structure, not chrome, and it is identical at both densities."* Compact now
+draws it dotted and quiet at rest, so the rule is narrowed rather than dropped:
+
+> A group's outline keeps its PRESENCE and its GEOMETRY at every density - same
+> width, same position, never absent. Its STROKE STYLE and its RESTING COLOUR
+> may vary with the density.
+
+The reason the original existed is intact: the outline never disappears and
+never moves, so it cannot stop being the thing that says "these cards are one
+group", and no density change can reflow the page. What varies is how loudly it
+says it, which is chrome. Rule 10b asserts the width is identical across
+densities in the same test that asserts the style differs.
+
+The trade and its reason are also written out on the library page
+(`library/Atomdown Inline.md`, "How quiet works at compact"), which is where a
+future change to the density block will be reading.
 
 **How the density reaches the line elements.** A `.cm-line` gets a class only
 from a mark's `lineClasses`, and the seam uses `marks[].class` as the STEM of
@@ -257,10 +320,32 @@ closes the whole box on its own line and has its own rule. A soft-wrapped
 paragraph is ONE line element with several visual rows, and a border on a block
 element encloses the whole box, so a wrapped block is enclosed by construction.
 
+**Both boxes are pseudo-elements, and the real border is the card's inset.**
 The group is the outer of two boxes on the same line elements, and one element
-can only have one `border-left`. So the group takes the real `border` and the
-card is drawn by a `::before` inset by `--board-group-padding` — which is also
-what insets a member card inside its group on all four sides.
+can only have one `border-left` - so neither box can have it. The line's real
+border is the card's horizontal inset: `client/codemirror/list_indent.ts`
+writes `padding-left:Nch; text-indent:-Nch` as an INLINE style on every list
+line, so taking the inset from padding meant clobbering both and losing the
+hanging indent. A border composes with both, because `list_indent.ts` sets
+padding and text-indent and nothing else.
+
+A line has exactly two pseudo-elements and that is what it needs: the card is
+the `::before`, pulled back out of the inset by `--board-card-padding-x`, and
+the group's outline is the `::after`, pulled back out by the whole inset so its
+left edge lands on the content column - where the real border used to draw. The
+line's border BOX is unchanged, so every rect the front-end suite measures
+still means what it meant.
+
+Three measurements carry it, set on the line: `--ad-inset` (the group's
+interior padding), `--ad-frame` (the group's outer edge to the card's border)
+and `--ad-lead` (the line's own transparent border width). Rule 10a measures
+the result row by visual row.
+
+Two of the client's own outdents come with no matching padding - a blockquote's
+`>` and a heading's `#` markers - so the library page gives each the padding it
+is missing. One case still zeroes the indent: once the cursor leaves a
+blockquote the client REPLACES the `>` with nothing and still outdents the
+first row, so there is no marker to hang.
 
 ## The directive comments
 

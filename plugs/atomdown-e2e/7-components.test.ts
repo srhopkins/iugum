@@ -228,7 +228,9 @@ for (const theme of THEMES) {
           await setDensity(view, combo.density);
           const s = sel(view);
 
-          // Exists once per atom, plus the fenced-code implicit cards.
+          // Exists once per atom. `FIXTURE.cards` used to be higher than
+          // `FIXTURE.atoms` because a fenced code block left an uncovered
+          // block; the current atomdown build does not. See the harness.
           const sweep = await sweepBoxes(view, {
             name: "card",
             selector: s.cardHeader,
@@ -918,7 +920,16 @@ for (const theme of THEMES) {
         const cards = page.locator(".atomdown-card-header");
         const source = cards.nth(3);
         const dest = cards.nth(6);
-        await source.hover();
+        // `hoverBox`, NOT `locator.hover()`, and that is the harness's own
+        // rule rather than a preference. Putting the hover class on a card
+        // rebuilds every line element of it, so the element the locator
+        // resolved a moment ago is detached and `hover` waits out its
+        // actionability timeout - the eleven-minute trap the README records,
+        // which the runner reports as a three-minute test timeout and nothing
+        // else. It surfaced here the moment the fixture's cards got taller,
+        // because the hover then has to scroll first.
+        await source.scrollIntoViewIfNeeded();
+        await hoverBox(view, source);
         await settle(page);
         const grip = source.locator(".atomdown-grip").first();
         if (!(await grip.count())) {

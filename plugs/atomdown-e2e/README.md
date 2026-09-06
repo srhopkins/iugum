@@ -15,9 +15,15 @@ scripts/atomdown-fe-check.sh --visual   # rule 9, the visual baselines, only
 scripts/atomdown-fe-check.sh --visual --update-snapshots   # re-take them
 ```
 
-The default runs **two Playwright projects**: `atomdown` (rules 1 to 8) and
-`visual` (rule 9). They are separate because rule 9 needs its own browser
-policy - see "Rule 9" below.
+The default runs **two Playwright projects**: `atomdown` (the behavioural rules
+- 1 to 8 and 10) and `visual` (rule 9). They are separate because rule 9 needs
+its own browser policy - see "Rule 9" below.
+
+The `atomdown` project names its rule numbers explicitly. `[1-8]-` was correct
+while 8 was the highest and it silently stopped matching when rule 10 arrived,
+because `10-` holds no digit-then-dash: the file was collected by no project at
+all and the rule ran nowhere. A regex whose failure mode is "the test does not
+run" has to name its files.
 
 ## Rule 1 has two halves: content and chrome
 
@@ -106,6 +112,58 @@ So this suite measures the rendered document in a real browser.
 | 4 | **State machine round trips.** Collapse, view on/off, raw/rendered, density (through the command AND through the header button) and the four editor widths each return to an identical DOM signature; reload persistence keeps on ON, off OFF and the density where it was left, scoped per page. | A group that would not expand after collapse. The header toggle doing nothing on first press while the command worked. Close-then-reload reopening the board. |
 | 5 | **Rendering fidelity.** No `<!-- <atom`, no `sha256:`, no `](http`, no bare `##` or `**` outside code. Positively: one `<ol>` with six `<li>`, one `<table>` with 10 rows, an `<a href>` in every ticket cell. | Raw markdown reaching the reader. An ordered list rendering as a run-on paragraph. |
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
+| 10 | **The hanging indent, and what a density may move.** Row 0's first glyph starts at `content box + text-indent` and every later row starts at `content box`; horizontal distances are identical across densities and vertical ones are not; at compact the stroke changes colour and nothing else. | A wrapped bullet whose continuation rows aligned UNDER the marker, because the card's inset was `padding-left !important` plus `text-indent: 0 !important`. A density that halved the distance from a card's border to its first glyph. |
+
+## Rule 10: the hanging indent, and what a density is allowed to move
+
+`10-hanging-indent-and-density.test.ts`. Three properties, from Steve's report
+that "bullets don't look good, usually on bullets the indentation stays
+consistent".
+
+**10a measures VISUAL ROWS, not elements.** A soft-wrapped line is one element
+with several rows, so `getBoundingClientRect` returns their union and cannot
+see them. A `Range` over the line's contents returns one client rect per row,
+which is the only reading of "the x of the first glyph on each visual row" the
+DOM offers.
+
+One property covers every construct: row 0's first glyph starts at
+`content box + text-indent`, and every later row's starts at `content box`.
+Where a marker is rendered the client makes `text-indent` the negative of
+`padding-left`, so row 0 starts at the marker and the rest start after it. Where
+no marker is rendered the indent is zero and every row starts on the same x.
+The client's inline pair is asserted separately on the lines that carry it,
+because that pair is the exact thing the old override destroyed - CSS that
+clobbered it again would still satisfy the row arithmetic, on rows that no
+longer hang.
+
+**It cannot pass vacuously.** A line with one visual row has no continuation
+row to align, so 10a counts the WRAPPED lines it measured per kind - bullet,
+nested bullet, ordered, blockquote - and fails when any kind reached zero. It
+also fails when fewer than two bullet indent levels were seen, which is the
+two-level nested list.
+
+**ONE WRAPPED CARD PER KIND, and the limit is measured.** `wrapTail` in
+`fixture/make-fixture.mjs` lengthens exactly three of the `loose` group's
+atoms: its blockquote, its short ordered list and its two-level bullet list.
+Tailing every list and blockquote atom, and then one in three, both made the
+page expensive enough that CodeMirror's incremental Lezer parse had not caught
+up by the time a rule 4 signature sweep reached the far end - those lines came
+back with their `sb-line-h3` and `sb-blockquote-outside` classes missing and
+raw `##`, `>` and `[label](url)` markers in their text, which reads as a
+state-machine defect and is a parse budget. Proven by running rule 4 against
+the previous fixture with the same stylesheet, where it passed.
+
+**10b asserts both halves of the density split.** Equal horizontal distances
+alone would pass on a density that had stopped doing anything, so the vertical
+distances are asserted to DIFFER in the same test. It also asserts the group
+outline's width is unchanged across densities, which is the half of the old
+"the group outline does not change" rule that is kept - the style and the
+resting colour are what vary now.
+
+**10c reads the page background off `#sb-root`,** which is the element the
+client paints `--root-background-color` on. `document.documentElement` carries
+the app chrome's own colour, and comparing against it is how the assertion
+would pass while the card was the wrong shade.
 
 ## Rule 8: the card's controls
 
@@ -279,9 +337,15 @@ be fooled by.
 
 Two things in it look wrong and are not:
 
-- **84 cards, 82 atoms.** `atomdown materialize` leaves a fenced code block's
-  opening line outside the atom it creates, so each fence is an uncovered
-  block that both views draw as one extra card marked implicit.
+- **82 cards, 82 atoms, and it used to be 84 cards.** `atomdown materialize`
+  used to leave a fenced code block's opening line outside the atom it created,
+  so each of the two fences left an uncovered block that both views drew as an
+  extra card marked implicit - 84 cards for 82 atoms, both numbers right
+  because they counted different things. The build that regenerated this
+  fixture covers the opening line, so there are no uncovered blocks and the two
+  numbers agree. The cost is that nothing here exercises a card with NO
+  Atomdown id any more, which is what the text-keyed identity fallbacks in
+  `measureBoxes` and `sweepEach` exist for; see `FIXTURE.cards` in the harness.
 - **One row is raw.** The `FFAI-62019` row's link label contains unescaped
   square brackets, which close the label early, so it is not a link. Plain
   SilverBullet renders it raw too. Rule 5 asserts it STAYS raw, so a change
@@ -340,6 +404,17 @@ Stated rather than hidden.
   test can await from outside. The waits are generous; a slow machine could
   still read early, which would show up as an unexpected byte comparison
   rather than a wrong pass.
+- **A signature sweep against an incremental parse.** `signature` is a scroll
+  sweep over a virtualised editor whose syntax tree is parsed incrementally, so
+  a sweep can reach the far end of the document before Lezer has: those lines
+  report their `sb-line-*` classes missing and raw markdown markers in their
+  text, and a signature keys on exactly class list and text. Rule 4 therefore
+  RE-MEASURES once before it reports a mismatch. That stabilises the
+  measurement and loosens no comparison: the state after the round trip does
+  not change while it is read, so a real "did not restore" failure is still
+  there on the second reading, and the failure record says whether a re-read
+  happened. Same class of artefact as the `scrollHeight` estimate the sweep
+  already re-reads at every stop.
 - **`atomdown lint` and `atomdown verify`** need the `atomdown` binary. Rule 6
   looks for it on `$ATOMDOWN_BIN`, `~/go/bin`, `/usr/local/bin`,
   `/opt/homebrew/bin`, then the sibling checkout, and SKIPS those two checks
@@ -348,11 +423,11 @@ Stated rather than hidden.
 
 ## Status
 
-**Green on the fast matrix, both views, both densities: every rule, every
-component test, rule 8's eight properties and rule 9's twelve baselines.** No
-`test.fixme` is left in the suite. One test still skips with a reason rather
-than failing — the grip drag, when a synthetic pointer drag produces no change;
-see "what is not deterministic" above.
+**Green on the fast matrix, both views, both densities: every rule including
+10, every component test, rule 8's eight properties and rule 9's twelve
+baselines.** No `test.fixme` is left in the suite. One test still skips with a
+reason rather than failing — the grip drag, when a synthetic pointer drag
+produces no change; see "what is not deterministic" above.
 
 **Three things the density work found, worth knowing before changing the
 suite.** A page load resets `html[data-editor-width]`, so any test that
@@ -407,9 +482,15 @@ estimates the rest.
   at every stop.
 - **`locator.hover()` waits out its timeout on a rebuilt element.** Putting
   `hoverClasses` on a group rebuilds every line element in it, so the element a
-  locator resolved a moment ago is detached; at 84 cards that is eleven minutes
-  and it reads as a three-minute test timeout. Hovers in a sweep are real mouse
-  moves — `hoverBox` in the harness.
+  locator resolved a moment ago is detached; at 82 cards that is eleven minutes
+  and it reads as a three-minute test timeout. Hovers are real mouse moves —
+  `hoverBox` in the harness. It is not only sweeps: the grip-drag test hovered
+  its source card with `locator.hover()` and got away with it until the
+  fixture's cards grew tall enough that the hover had to scroll first.
+- **An attribute is not an identity either, across a transaction.** The same
+  rebuild takes any attribute a test stamped with it, so a wait on
+  `[data-...]` after a hover waits forever. Rule 10c addresses its target line
+  by TEXT, which survives both a scroll and a rebuild.
 - **An index is not an identity.** `sweepEach` chooses the next key in the page,
   next to the list it chose from, rather than reading the list in one call and
   acting on `nth(i)` in another.

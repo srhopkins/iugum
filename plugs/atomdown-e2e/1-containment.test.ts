@@ -155,7 +155,7 @@ function kindsFor(view: View): Kind[] {
  * The CHROME half of rule 1: the inline controls that sit outside their box.
  *
  * Swept the same way the content half is, because CodeMirror realises about
- * five of the fixture's 84 cards on a 1440x900 viewport and a chrome check
+ * five of the fixture's 82 cards on a 1440x900 viewport and a chrome check
  * that only saw those five would pass with a clipped control sixty atoms down.
  */
 async function checkChrome(view: View, combo: Combo) {
@@ -207,12 +207,16 @@ async function checkContainment(view: View, combo: Combo) {
     //
     // The sweep's job here is to prove it reached the end of the document, and
     // 82 distinct atom ids proves that completely. Counting every box dragged
-    // a fragile key into the assertion: the two implicit cards a fenced code
-    // block produces have no id, so they are keyed by their own text, and at
-    // narrow width that text wraps differently enough that one of them keyed
-    // twice and the sweep reported 85 of 84. The implicit cards are still
-    // MEASURED — every box goes through the containment check below — they
-    // just no longer decide whether the sweep was complete.
+    // a fragile key into the assertion: a card with no id is keyed by its own
+    // text, and at narrow width that text wrapped differently enough that one
+    // implicit card keyed twice and the sweep reported 85 of 84. Such a card
+    // is still MEASURED — every box goes through the containment check below —
+    // it just no longer decides whether the sweep was complete.
+    //
+    // The fixture no longer HAS one: the atomdown build that regenerated it
+    // covers a fenced code block's opening line, so there are no uncovered
+    // blocks. The id-only count is the right assertion either way. See
+    // `FIXTURE.cards` in the harness and `iugum-zaw`.
     const identified = sweep.ids.filter((id) => /^[0-9A-Z]{8}$/.test(id));
     const wanted =
       kind.expect === EXPECT_CARDS ? FIXTURE.atoms : kind.expect;
