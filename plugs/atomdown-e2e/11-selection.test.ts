@@ -1,5 +1,5 @@
 /**
- * RULE 10 — SELECTION AND CARD HOVER, IN THE INLINE VIEW.
+ * RULE 11 — SELECTION AND CARD HOVER, IN THE INLINE VIEW.
  *
  * THE DEFECT (`iugum-oip`). Steve, on the live page: he could not select a
  * card, could not lasso, and the CARD's border did not change on hover while
@@ -15,31 +15,31 @@
  *
  * WHAT THIS RULE ASSERTS, and the last one is the guard rail:
  *
- *   10a  A plain click on a card selects THAT card and nothing else.
- *   10b  Modifier-click adds to the selection and removes from it.
- *   10c  Shift-click extends a contiguous range, including a card in the
+ *   11a  A plain click on a card selects THAT card and nothing else.
+ *   11b  Modifier-click adds to the selection and removes from it.
+ *   11c  Shift-click extends a contiguous range, including a card in the
  *        middle that was never clicked.
- *   10d  A click on empty background clears the selection.
- *   10e  Alt-drag a band over two cards selects both, and "Group selection"
+ *   11d  A click on empty background clears the selection.
+ *   11e  Alt-drag a band over two cards selects both, and "Group selection"
  *        is then enabled: it asks for a name instead of refusing. A group in
  *        the band is refused WITH ITS REASON, because Atomdown Core 1 permits
  *        no nesting.
- *   10f  Hovering a card changes the CARD's own border colour.
- *   10g  Selection still works after the gutter controls have been hovered,
+ *   11f  Hovering a card changes the CARD's own border colour.
+ *   11g  Selection still works after the gutter controls have been hovered,
  *        after a popover has been opened and closed, and for a card inside a
  *        group.
- *   10h  THE MOUSEDOWN PATH ITSELF. A plain press on a card body is not
+ *   11h  THE MOUSEDOWN PATH ITSELF. A plain press on a card body is not
  *        `defaultPrevented` by the time it leaves the editor's content.
- *   10i  None of it writes a document byte.
- *   10j  Dragging across a card's text selects the TEXT, not the card - and a
+ *   11i  None of it writes a document byte.
+ *   11j  Dragging across a card's text selects the TEXT, not the card - and a
  *        press with no travel still selects the card.
  *
- * 10h IS THE POINT OF THIS FILE. The seam's `widgetPressGuard` calls
+ * 11h IS THE POINT OF THIS FILE. The seam's `widgetPressGuard` calls
  * `preventDefault` on a plain `mousedown` inside a widget, on purpose: a press
  * on widget chrome must not place the text cursor. Selection and the lasso
  * both BEGIN with a mousedown, so a guard that grew to cover the card's own
  * body would kill both — and every end-state assertion above would then fail
- * with no clue as to why. 10h names the mechanism, so the next guard cannot
+ * with no clue as to why. 11h names the mechanism, so the next guard cannot
  * eat the press silently.
  *
  * Both densities and all four editor widths, from the shared matrix: the
@@ -364,7 +364,7 @@ async function recordedEvents(page: Page) {
  * on the same element. The press puts the text cursor in the card, the plug
  * reveals that atom's directive line in response, and a 64-character digest
  * wrapping over three rows pushes the line out from under the pointer while
- * the button is still down. Measured: the shift-click of rule 10c produced no
+ * the button is still down. Measured: the shift-click of rule 11c produced no
  * DOM click event whatever, four cells out of four, while every other click
  * in the same test arrived.
  *
@@ -487,11 +487,11 @@ for (const theme of THEMES) {
     test.use({ colorScheme: theme });
 
     for (const combo of combos().filter((c) => c.theme === theme)) {
-      // ---------------------------------------------------------------- 10a
-      // ---------------------------------------------------------------- 10b
-      // ---------------------------------------------------------------- 10c
-      // ---------------------------------------------------------------- 10d
-      test(`10a-d: click selects one card, modifier adds and removes, shift extends, background clears [${comboName(combo)}]`, async ({
+      // ---------------------------------------------------------------- 11a
+      // ---------------------------------------------------------------- 11b
+      // ---------------------------------------------------------------- 11c
+      // ---------------------------------------------------------------- 11d
+      test(`11a-d: click selects one card, modifier adds and removes, shift extends, background clears [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -506,7 +506,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10a-d - the fixture must show three units",
+            "11a-d - the fixture must show three units",
             combo,
             { targets },
             `need at least three top-level units on screen; found ` +
@@ -515,13 +515,13 @@ for (const theme of THEMES) {
         }
         const first = targets[0];
 
-        // 10a — a plain click selects that unit, and only that unit.
+        // 11a — a plain click selects that unit, and only that unit.
         let runs = await clickUnit(page, 0, [], 1);
         if (runs.length !== 1 || !sameBlock(runs[0], first.text)) {
           await failWithArtifacts(
             page,
             10,
-            "10a - a plain click selects one card",
+            "11a - a plain click selects one card",
             combo,
             {
               clicked: first,
@@ -533,14 +533,14 @@ for (const theme of THEMES) {
           );
         }
 
-        // 10b — modifier-click adds, then removes again.
+        // 11b — modifier-click adds, then removes again.
         const modKey = mod === "Meta" ? "Meta" : "Control";
         runs = await clickUnit(page, 1, [modKey], 2);
         if (runs.length !== 2) {
           await failWithArtifacts(
             page,
             10,
-            "10b - modifier-click adds to the selection",
+            "11b - modifier-click adds to the selection",
             combo,
             { selectedRuns: runs, events: await recordedEvents(page) },
             `${mod}-click must ADD to the selection; ${runs.length} run(s) ` +
@@ -552,7 +552,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10b - modifier-click removes from the selection",
+            "11b - modifier-click removes from the selection",
             combo,
             { selectedRuns: runs, events: await recordedEvents(page) },
             `${mod}-click again must REMOVE it; ${runs.length} run(s) ` +
@@ -560,7 +560,7 @@ for (const theme of THEMES) {
           );
         }
 
-        // 10c — shift-click extends a contiguous range. The MIDDLE unit is
+        // 11c — shift-click extends a contiguous range. The MIDDLE unit is
         // never clicked, which is the whole property.
         await clickUnit(page, 0, [], 1);
         runs = await clickUnit(page, 2, ["Shift"], 3);
@@ -569,7 +569,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10c - shift-click extends a contiguous range",
+            "11c - shift-click extends a contiguous range",
             combo,
             {
               units: seen,
@@ -581,7 +581,7 @@ for (const theme of THEMES) {
           );
         }
 
-        // 10d — a click on empty background clears it. The background is the
+        // 11d — a click on empty background clears it. The background is the
         // page's own left margin: inside the editor's scroller, outside the
         // content column, so it is on no card and on no text. The y comes
         // from the SCROLLER's visible rect, not from the content element's —
@@ -605,7 +605,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10d - a click on empty background clears the selection",
+            "11d - a click on empty background clears the selection",
             combo,
             { margin, selectedRuns: runs, events: await recordedEvents(page) },
             `a click on empty background must clear the selection; ` +
@@ -613,7 +613,7 @@ for (const theme of THEMES) {
           );
         }
 
-        // 10i — none of the above wrote a byte.
+        // 11i — none of the above wrote a byte.
         expect(
           await readPageBytes(server),
           "selecting must not change one document byte",
@@ -621,8 +621,8 @@ for (const theme of THEMES) {
         await view.close();
       });
 
-      // ---------------------------------------------------------------- 10e
-      test(`10e: alt-drag selects the band, Group is enabled, a nested group is refused [${comboName(combo)}]`, async ({
+      // ---------------------------------------------------------------- 11e
+      test(`11e: alt-drag selects the band, Group is enabled, a nested group is refused [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -644,7 +644,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10e - alt-drag selects the band",
+            "11e - alt-drag selects the band",
             combo,
             { band: [targets[0], targets[1]], selectedRuns: runs },
             `an alt-drag over two cards must select both; ` +
@@ -665,7 +665,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10e - Group is enabled once two cards are selected",
+            "11e - Group is enabled once two cards are selected",
             combo,
             { selectedRuns: runs, notifications: said },
             `with two cards selected, Group must be enabled and ask for a ` +
@@ -709,8 +709,8 @@ for (const theme of THEMES) {
         await view.close();
       });
 
-      // ---------------------------------------------------------------- 10f
-      test(`10f: hovering a card changes the CARD's own border [${comboName(combo)}]`, async ({
+      // ---------------------------------------------------------------- 11f
+      test(`11f: hovering a card changes the CARD's own border [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -748,7 +748,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10f - hover changes the CARD's own border",
+            "11f - hover changes the CARD's own border",
             combo,
             { rest, hovered: hot },
             `hovering a card must change the CARD's own border colour. ` +
@@ -764,8 +764,8 @@ for (const theme of THEMES) {
         await view.close();
       });
 
-      // ---------------------------------------------------------------- 10g
-      test(`10g: selection survives the gutter controls, a popover, and a card inside a group [${comboName(combo)}]`, async ({
+      // ---------------------------------------------------------------- 11g
+      test(`11g: selection survives the gutter controls, a popover, and a card inside a group [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -822,8 +822,8 @@ for (const theme of THEMES) {
         await view.close();
       });
 
-      // ---------------------------------------------------------------- 10h
-      test(`10h: a plain mousedown on a card body is not swallowed [${comboName(combo)}]`, async ({
+      // ---------------------------------------------------------------- 11h
+      test(`11h: a plain mousedown on a card body is not swallowed [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -894,7 +894,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10h - the mousedown path itself",
+            "11h - the mousedown path itself",
             combo,
             { activeLineAtPress: onPress, pressed: targets[0] },
             `a plain mousedown on a card BODY must reach the editor and ` +
@@ -915,7 +915,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10h - the press must end in a selection",
+            "11h - the press must end in a selection",
             combo,
             { pressed: targets[0], selectedRuns: runs },
             `the press reached the editor but selected the wrong thing: ` +
@@ -924,8 +924,8 @@ for (const theme of THEMES) {
         }
         await view.close();
       });
-      // ---------------------------------------------------------------- 10j
-      test(`10j: dragging across a card's text selects the TEXT, not the card [${comboName(combo)}]`, async ({
+      // ---------------------------------------------------------------- 11j
+      test(`11j: dragging across a card's text selects the TEXT, not the card [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -997,7 +997,7 @@ for (const theme of THEMES) {
           await failWithArtifacts(
             page,
             10,
-            "10j - a text drag selects text, not the card",
+            "11j - a text drag selects text, not the card",
             combo,
             {
               line,
