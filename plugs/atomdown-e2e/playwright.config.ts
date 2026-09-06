@@ -86,10 +86,18 @@ export default defineConfig({
     "{testDir}/visual-baselines/{arg}-{platform}{ext}",
   projects: [
     {
-      // Rules 1 to 8. NOT 9: `\d-` would match `9-visual.test.ts`, and the
-      // visual rule needs a different browser policy from the rest.
+      /**
+       * The behavioural rules. Every numbered rule EXCEPT 9, which needs a
+       * different browser policy - see the `visual` project below.
+       *
+       * An explicit list of numbers rather than a character class. `[1-8]-`
+       * was correct while 8 was the highest, and it silently stopped matching
+       * when rule 10 arrived: `10-` has no digit-then-dash in it, so the file
+       * was collected by no project at all and the rule ran nowhere. A regex
+       * whose failure mode is "the test does not run" has to name its files.
+       */
       name: "atomdown",
-      testMatch: /[1-8]-.*\.test\.ts$/,
+      testMatch: /\/(1|2|3|4|5|6|7|8|10)-.*\.test\.ts$/,
     },
     {
       /**

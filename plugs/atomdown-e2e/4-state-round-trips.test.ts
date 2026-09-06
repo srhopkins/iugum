@@ -104,18 +104,46 @@ async function assertRoundTrip(
   }
 
   await back();
-  const after = await signature(view);
-  if (
-    after.count !== before.count ||
-    after.entries.join("\n") !== before.entries.join("\n")
-  ) {
+  const same = (a: typeof before, b: typeof before) =>
+    a.count === b.count && a.entries.join("\n") === b.entries.join("\n");
+
+  // RE-MEASURED ONCE BEFORE IT IS REPORTED, and that stabilises the
+  // MEASUREMENT rather than relaxing the assertion.
+  //
+  // A signature is a sweep over a virtualised editor whose syntax tree is
+  // parsed INCREMENTALLY. A sweep can reach the far end of the document
+  // before Lezer has: those lines come back with their `sb-line-h3` and
+  // `sb-blockquote-outside` classes missing and raw `##`, `>` and
+  // `[label](url)` markers in their text, and a signature keys on exactly
+  // class list and text. Measured: 307 entries against 415 for the same
+  // correct state, with every difference of that shape. The same class of
+  // artefact `signature` already re-reads `scrollHeight` for.
+  //
+  // A REAL failure is a property of the state, so it is still there on the
+  // second reading - the state after `back()` does not change while it is
+  // measured. Nothing about the comparison is loosened: it is still
+  // byte-identical entries or a failure.
+  let after = await signature(view);
+  let reread = false;
+  if (!same(before, after)) {
+    reread = true;
+    after = await signature(view);
+  }
+  if (!same(before, after)) {
     await failWithArtifacts(
       view.page,
       4,
       "state round trip — coming back did not restore the state",
       combo,
-      { what, diff: signatureDiff(before, after), before: before.count, after: after.count },
-      `${what}: the DOM after the round trip differs from the DOM before it. ` +
+      {
+        what,
+        reread,
+        diff: signatureDiff(before, after),
+        before: before.count,
+        after: after.count,
+      },
+      `${what}: the DOM after the round trip differs from the DOM before it` +
+        (reread ? ", on two consecutive readings" : "") + ". " +
         signatureDiff(before, after).slice(0, 4).join(" / "),
     );
   }

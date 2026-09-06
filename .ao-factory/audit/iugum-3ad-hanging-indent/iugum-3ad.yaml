@@ -1,0 +1,8 @@
+bead: iugum-3ad
+namespace: iugum-3ad-hanging-indent
+search_query: "Inline cards keep the list hanging indent and a constant horizontal inset"
+candidates: []
+associated_issues: [iugum-abi]
+duplicate_issues: none
+checked_at: 2026-09-05T23:13:30Z
+written_by: ayo-related-set
