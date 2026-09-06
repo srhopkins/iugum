@@ -113,6 +113,7 @@ So this suite measures the rendered document in a real browser.
 | 5 | **Rendering fidelity.** No `<!-- <atom`, no `sha256:`, no `](http`, no bare `##` or `**` outside code. Positively: one `<ol>` with six `<li>`, one `<table>` with 10 rows, an `<a href>` in every ticket cell. | Raw markdown reaching the reader. An ordered list rendering as a run-on paragraph. |
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
 | 10 | **The hanging indent, and what a density may move.** Row 0's first glyph starts at `content box + text-indent` and every later row starts at `content box`; horizontal distances are identical across densities and vertical ones are not; at compact the stroke changes colour and nothing else. | A wrapped bullet whose continuation rows aligned UNDER the marker, because the card's inset was `padding-left !important` plus `text-indent: 0 !important`. A density that halved the distance from a card's border to its first glyph. |
+| 11 | **Selection and card hover, inline.** Click, modifier-click, shift-click, click-the-background, alt-drag, text drag, the card's own hover border - and the MOUSEDOWN PATH that all of them begin with. | The inline view was read-only in practice: no card would select, no lasso would hold, text could not be selected or copied, and only the group's border moved on hover. |
 
 ## Rule 10: the hanging indent, and what a density is allowed to move
 
@@ -255,6 +256,61 @@ page. So the popover is buttons only, and 8g is the guard rail that says why.
 
 **8h and rule 9 cover the same defect from two sides.** 8h is font-free and
 runs on any machine; rule 9 sees the thing a number cannot describe.
+
+## Rule 11: selection, and the press it starts with
+
+`11-selection.test.ts`, for `iugum-oip`. Steve, on the live page: he could not
+select a card, could not lasso (so could not group), and the CARD's border did
+not change on hover while the GROUP's did.
+
+**Why nothing noticed, and the gap that is now closed.** The suite's only
+selection assertion (`7-components.test.ts` 1b) runs on the BOARD alone, and
+said so in a comment: the inline view's "documented selection gesture is
+alt-drag rather than a click, so a click assertion there would be asserting a
+behaviour the plug does not claim". That sentence was the gap. Steve clicks a
+card to select it in both views, so the inline view does claim it - the gate
+was covering the board's half of a behaviour both views have.
+
+| | |
+|---|---|
+| 11a | A plain click selects THAT card and nothing else. This used to select nothing at all: the click handler's only branch for a plain click on a card CLEARED. |
+| 11b | Modifier-click adds to the selection, and the same click again removes. |
+| 11c | Shift-click extends a contiguous range, including a unit in the MIDDLE that was never clicked. Needs `shiftKey` on the seam's click event, which the event did not carry. |
+| 11d | A click on empty background clears. Needs the seam's second listener: the page margin is not in `contentDOM`, so a click there reached nothing at all. |
+| 11e | Alt-drag over two cards selects both and Group becomes enabled - asserted as "it asks for a name" rather than by grouping, so the test writes nothing. A group in the band is refused WITH ITS REASON. |
+| 11f | Hovering a card changes the CARD's own border colour, read off the `::before` that draws the box, at both densities. |
+| 11g | Selection still works after the gutter controls have been hovered, after a popover has been opened and closed, and for a card inside a group. |
+| 11h | THE MOUSEDOWN PATH ITSELF, because that is the regression mechanism. |
+| 11i | None of it writes a document byte. |
+| 11j | Dragging across a card's text selects the TEXT - the browser's own selection, inside that card - and does NOT select the card. A press with no travel still selects it, asserted in the same test, because a fix that killed one to save the other would pass either half alone. |
+
+**11h is the point of the file.** The seam's `widgetPressGuard` calls
+`preventDefault` on a plain `mousedown` inside a widget, on purpose. Selection
+and the lasso both BEGIN with a mousedown, so a guard that grew to cover the
+card's own body would kill both - and every other assertion here would fail
+with no clue as to why.
+
+**It does not assert `defaultPrevented`, and that is measured rather than
+assumed.** `press-probe.test.ts` records the reason: a plain mousedown reaches
+`window` already prevented in every case - on a card body, on an undecorated
+line, and with the inline view switched off - because CodeMirror's own
+`runHandlers` calls `preventDefault` whenever a handler returns true. So 11h
+reads THE CURSOR instead, which is the guard's actual signature: the guard
+exists to stop a press placing the text cursor, so a press it claims leaves the
+cursor where it was.
+
+**Two measurement traps this rule hit, recorded so the next one does not.**
+The page MOVES between the press and the release - the press puts the cursor in
+the card, the plug reveals that atom's directive line, and a wrapped 64-character
+digest pushes the line out from under the pointer - and Chromium then sends no
+`click` at all, because it only fires one when press and release land on the
+same element. So a click whose selection did not change AT ALL is retried
+(`clickUnit`), and a click that changed the selection to the wrong thing is
+never retried, because retrying a modifier-click would toggle it back and hide
+the defect. Second: the fixture's own title puts the first card at y=619 of a
+900px viewport, so two units fit on the first screen and the third is under the
+fold at every width. `unitsOnScreen` aligns the first unit under the top bar
+before it measures anything.
 
 ## Area 7: the components
 
@@ -489,7 +545,7 @@ estimates the rest.
   fixture's cards grew tall enough that the hover had to scroll first.
 - **An attribute is not an identity either, across a transaction.** The same
   rebuild takes any attribute a test stamped with it, so a wait on
-  `[data-...]` after a hover waits forever. Rule 10c addresses its target line
+  `[data-...]` after a hover waits forever. Rule 11c addresses its target line
   by TEXT, which survives both a scroll and a rebuild.
 - **An index is not an identity.** `sweepEach` chooses the next key in the page,
   next to the list it chose from, rather than reading the list in one call and
