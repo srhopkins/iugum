@@ -143,13 +143,38 @@ Event payloads:
 
 | Event | Fields |
 |---|---|
-| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `metaKey`, `ctrlKey`, `altKey` |
+| `editor:decorationClick` | `page`, `pos`, `line`, `lineClasses`, `classes`, `marks`, `widget`, `onText`, `moved`, `metaKey`, `ctrlKey`, `altKey`, `shiftKey` |
 | `editor:decorationSelect` | `page`, `from`, `to`, `marks` |
 | `editor:decorationDrag` | `page`, `from`, `to`, `marks`, `targetFrom`, `targetTo`, `targetMarks`, `targetLine`, `placement`, modifier flags |
 | `editor:decorationLasso` | `page`, `from`, `to`, `fromLine`, `toLine`, `marks`, `ranges`, modifier flags |
 
 `marks` lists are **outermost first**, so a caller that nests ranges reads
 element 0 and gets the outer one.
+
+`onText` says whether the click was on TEXT, and it exists so that "the reader
+clicked the background" is a gesture a caller can act on - which is what "click
+off it to deselect" and "click outside to close" both are. It is false for the
+page margin, for the blank line between two decorated ranges, and for the space
+under the last line; `marks` is empty whenever it is false and no widget was
+hit, so the nearest card is never reported as the thing clicked.
+
+A background click needs a **second DOM listener**, on `view.scrollDOM`, and
+that is a constraint of CodeMirror rather than a choice: it registers every
+handler from `EditorView.domEventHandlers` on `contentDOM`, and the page margin
+is not in `contentDOM`. A click there used to reach nothing at all
+(`iugum-oip`).
+
+`moved` says whether the pointer TRAVELLED between the press and the click. A
+press and a release in about the same place is a click; a press, a move and a
+release is a drag, and inside text a drag is the browser selecting text. So a
+caller that treats a click as "select this block" can leave a text drag alone.
+Travel rather than `getSelection()`, because a plain click inside text also
+collapses a selection there, so asking "is there a selection" answers yes for
+both gestures. Threshold: the seam's own `DRAG_THRESHOLD_PX`, 4px.
+
+All four modifier flags are reported. `shiftKey` was missing from the click
+event until `iugum-oip`, which made shift-click undetectable - a caller could
+implement add-to-selection but not extend-a-range.
 
 `widget` is the name the caller put on the widget, and it is the ONLY safe way
 to tell which unit a control in a widget belongs to. `pos` for a click in a
@@ -201,6 +226,12 @@ The gesture, fold, hover-class and active-line work of 2026-09 added **no new
 file and no new hunk**: it grew `decoration_seam.ts`, which is already ours, and added two more
 event names inside the hunk that was already in `plug-api/types/client.ts`. That
 is the whole point of the seam's shape.
+
+The selection fix of 2026-09 (`iugum-oip`) also added **no new file and no new
+hunk**. It grew `decoration_seam.ts` only: three fields on the click payload
+(`shiftKey`, `onText`, `moved`) and one more listener inside it
+(`backgroundClickHandler`). No upstream file was touched, so the count of hunks
+in upstream files is still two in one file and one in another.
 
 ## Re-derive the patch after a subtree pull
 
