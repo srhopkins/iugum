@@ -86,10 +86,13 @@ export default defineConfig({
     "{testDir}/visual-baselines/{arg}-{platform}{ext}",
   projects: [
     {
-      // Rules 1 to 8. NOT 9: `\d-` would match `9-visual.test.ts`, and the
-      // visual rule needs a different browser policy from the rest.
+      // Rules 1 to 8 and rule 10. NOT 9: the visual rule needs a different
+      // browser policy from the rest, so `\d-` cannot be used here. Rule 10
+      // is spelled out rather than folded into a range, because `[1-9]` would
+      // pull rule 9 back in and `1[0-9]` would silently accept a rule 19
+      // nobody wrote.
       name: "atomdown",
-      testMatch: /[1-8]-.*\.test\.ts$/,
+      testMatch: /(?:[1-8]|10)-.*\.test\.ts$/,
     },
     {
       /**

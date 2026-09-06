@@ -106,6 +106,7 @@ So this suite measures the rendered document in a real browser.
 | 4 | **State machine round trips.** Collapse, view on/off, raw/rendered, density (through the command AND through the header button) and the four editor widths each return to an identical DOM signature; reload persistence keeps on ON, off OFF and the density where it was left, scoped per page. | A group that would not expand after collapse. The header toggle doing nothing on first press while the command worked. Close-then-reload reopening the board. |
 | 5 | **Rendering fidelity.** No `<!-- <atom`, no `sha256:`, no `](http`, no bare `##` or `**` outside code. Positively: one `<ol>` with six `<li>`, one `<table>` with 10 rows, an `<a href>` in every ticket cell. | Raw markdown reaching the reader. An ordered list rendering as a run-on paragraph. |
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
+| 10 | **Selection and card hover, inline.** Click, modifier-click, shift-click, click-the-background, alt-drag, text drag, the card's own hover border - and the MOUSEDOWN PATH that all of them begin with. | The inline view was read-only in practice: no card would select, no lasso would hold, text could not be selected or copied, and only the group's border moved on hover. |
 
 ## Rule 8: the card's controls
 
@@ -148,6 +149,61 @@ page. So the popover is buttons only, and 8g is the guard rail that says why.
 
 **8h and rule 9 cover the same defect from two sides.** 8h is font-free and
 runs on any machine; rule 9 sees the thing a number cannot describe.
+
+## Rule 10: selection, and the press it starts with
+
+`10-selection.test.ts`, for `iugum-oip`. Steve, on the live page: he could not
+select a card, could not lasso (so could not group), and the CARD's border did
+not change on hover while the GROUP's did.
+
+**Why nothing noticed, and the gap that is now closed.** The suite's only
+selection assertion (`7-components.test.ts` 1b) runs on the BOARD alone, and
+said so in a comment: the inline view's "documented selection gesture is
+alt-drag rather than a click, so a click assertion there would be asserting a
+behaviour the plug does not claim". That sentence was the gap. Steve clicks a
+card to select it in both views, so the inline view does claim it - the gate
+was covering the board's half of a behaviour both views have.
+
+| | |
+|---|---|
+| 10a | A plain click selects THAT card and nothing else. This used to select nothing at all: the click handler's only branch for a plain click on a card CLEARED. |
+| 10b | Modifier-click adds to the selection, and the same click again removes. |
+| 10c | Shift-click extends a contiguous range, including a unit in the MIDDLE that was never clicked. Needs `shiftKey` on the seam's click event, which the event did not carry. |
+| 10d | A click on empty background clears. Needs the seam's second listener: the page margin is not in `contentDOM`, so a click there reached nothing at all. |
+| 10e | Alt-drag over two cards selects both and Group becomes enabled - asserted as "it asks for a name" rather than by grouping, so the test writes nothing. A group in the band is refused WITH ITS REASON. |
+| 10f | Hovering a card changes the CARD's own border colour, read off the `::before` that draws the box, at both densities. |
+| 10g | Selection still works after the gutter controls have been hovered, after a popover has been opened and closed, and for a card inside a group. |
+| 10h | THE MOUSEDOWN PATH ITSELF, because that is the regression mechanism. |
+| 10i | None of it writes a document byte. |
+| 10j | Dragging across a card's text selects the TEXT - the browser's own selection, inside that card - and does NOT select the card. A press with no travel still selects it, asserted in the same test, because a fix that killed one to save the other would pass either half alone. |
+
+**10h is the point of the file.** The seam's `widgetPressGuard` calls
+`preventDefault` on a plain `mousedown` inside a widget, on purpose. Selection
+and the lasso both BEGIN with a mousedown, so a guard that grew to cover the
+card's own body would kill both - and every other assertion here would fail
+with no clue as to why.
+
+**It does not assert `defaultPrevented`, and that is measured rather than
+assumed.** `press-probe.test.ts` records the reason: a plain mousedown reaches
+`window` already prevented in every case - on a card body, on an undecorated
+line, and with the inline view switched off - because CodeMirror's own
+`runHandlers` calls `preventDefault` whenever a handler returns true. So 10h
+reads THE CURSOR instead, which is the guard's actual signature: the guard
+exists to stop a press placing the text cursor, so a press it claims leaves the
+cursor where it was.
+
+**Two measurement traps this rule hit, recorded so the next one does not.**
+The page MOVES between the press and the release - the press puts the cursor in
+the card, the plug reveals that atom's directive line, and a wrapped 64-character
+digest pushes the line out from under the pointer - and Chromium then sends no
+`click` at all, because it only fires one when press and release land on the
+same element. So a click whose selection did not change AT ALL is retried
+(`clickUnit`), and a click that changed the selection to the wrong thing is
+never retried, because retrying a modifier-click would toggle it back and hide
+the defect. Second: the fixture's own title puts the first card at y=619 of a
+900px viewport, so two units fit on the first screen and the third is under the
+fold at every width. `unitsOnScreen` aligns the first unit under the top bar
+before it measures anything.
 
 ## Area 7: the components
 
