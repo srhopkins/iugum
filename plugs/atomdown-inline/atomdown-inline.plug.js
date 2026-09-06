@@ -348,6 +348,74 @@ function isContiguousUnitSelection(unitOrder, selectedKeys) {
 }
 
 /**
+ * WHAT A CLICK DOES TO THE SELECTION. The whole rule, as a pure function.
+ *
+ * This is the fix for `iugum-oip`: on the live page a plain click on a card
+ * selected nothing at all, and an alt-drag selected two cards and then lost
+ * them again a millisecond later. Both came out of the same place — the
+ * decision was three inline `if`s inside `onDecorationClick`, and the branch
+ * for a plain click on a card only ever CLEARED. So a click could unselect
+ * and never select, which is precisely "the inline view is read-only".
+ *
+ * It is a pure function now for the second half of that defect: the branch
+ * that was wrong is the branch no test could reach, because reaching it needed
+ * a browser, a page and a pointer. This one takes four values and returns two.
+ *
+ * The rules, and they are the board panel's own so the two views cannot drift:
+ *
+ *  - NO UNIT under the pointer (the page gutter, the margin, the blank seam
+ *    between two cards) CLEARS the selection. It never selects: the gutter is
+ *    where a reader clicks to put the cursor at the start of a line, and
+ *    turning that into "select this card" would take an ordinary editing
+ *    gesture away.
+ *  - PLAIN click: the selection becomes that one unit, and it is the anchor.
+ *  - MOD click (cmd on a Mac, ctrl elsewhere): add it, or remove it if it is
+ *    already in. Either way it becomes the anchor.
+ *  - SHIFT click: extend from the anchor to here, taking every unit BETWEEN
+ *    them in document order — including units nobody clicked. The anchor does
+ *    not move, so a second shift-click re-extends from the same place rather
+ *    than walking. With no anchor yet, shift is a plain click.
+ *
+ * `order` is the unit keys in document order. A key the order does not know
+ * is treated as a plain click, because a stale key cannot anchor a range.
+ */
+function applyClickSelection(order, selected, anchor, unitKey, mods) {
+  const keys = dedupeKeys(selected);
+  const list = order || [];
+  if (!unitKey) return { selected: [], anchor: null };
+  const additive = !!(mods && (mods.metaKey || mods.ctrlKey));
+  const extend = !!(mods && mods.shiftKey);
+  const here = list.indexOf(unitKey);
+  const from = anchor ? list.indexOf(anchor) : -1;
+
+  if (extend && here !== -1 && from !== -1) {
+    const lo = Math.min(from, here);
+    const hi = Math.max(from, here);
+    const range = list.slice(lo, hi + 1);
+    // Additive shift keeps what was already selected, the way a file list
+    // does. Plain shift replaces the selection with the range.
+    return {
+      selected: additive ? dedupeKeys(keys.concat(range)) : range,
+      anchor: anchor,
+    };
+  }
+
+  if (additive) {
+    const at = keys.indexOf(unitKey);
+    return {
+      selected: at === -1
+        ? keys.concat([unitKey])
+        : keys.filter(function (_, i) {
+          return i !== at;
+        }),
+      anchor: unitKey,
+    };
+  }
+
+  return { selected: [unitKey], anchor: unitKey };
+}
+
+/**
  * The smallest single replacement that turns oldText into newText.
  *
  * This is what makes native Cmd-Z work. A reorder, a group and an ungroup all
@@ -1636,6 +1704,15 @@ async function rememberInlineOn(pageName, on) {
 let activePage = null;
 let selectedUnitKeys = [];
 /**
+ * The unit a shift-click extends FROM: the last unit clicked without shift.
+ *
+ * Held next to the selection rather than derived from it, because "the end of
+ * the selection" is not the same thing. A range built from card 5 back to card
+ * 2 anchors at 5, so the next shift-click extends from 5 again instead of
+ * walking the anchor down the page with every press.
+ */
+let selectionAnchorKey = null;
+/**
  * The group ids collapsed on the page being shown.
  *
  * Persisted per page, like the view's own on/off flag, so a collapsed group is
@@ -1728,6 +1805,7 @@ async function writeDecorations(text, rebuild) {
 
 async function clearDecorations(rebuild) {
   selectedUnitKeys = [];
+  selectionAnchorKey = null;
   collapsedGroupIds = [];
   openMenu = null;
   activeDensity = "comfortable";
@@ -1787,6 +1865,7 @@ async function toggleInline() {
   await rememberInlineOn(page, true);
   activePage = page;
   selectedUnitKeys = [];
+  selectionAnchorKey = null;
   openMenu = null;
   collapsedGroupIds = await loadCollapsed(page);
   activeDensity = await loadDensity(page);
@@ -2056,6 +2135,7 @@ async function restoreInline(pageName) {
     }
     activePage = page;
     selectedUnitKeys = [];
+    selectionAnchorKey = null;
     openMenu = null;
     collapsedGroupIds = await loadCollapsed(page);
     activeDensity = await loadDensity(page);
@@ -2172,31 +2252,70 @@ async function onDecorationClick(event) {
   // changing the selection.
   if (await closeMenu()) return { ok: true, closed: true };
 
-  const unitKey = firstUnitKey(event.marks);
-  // NOTHING AT ALL WHEN THE CLICK CARRIED NO MARK, and this is the answer to
-  // "is a control outside the card still inside the card's click target?"
+  // A CLICK CARRYING ALT IS THE TAIL OF A LASSO RELEASE, NOT A GESTURE OF ITS
+  // OWN — and ignoring it is half the fix for `iugum-oip`.
   //
-  // NO, EXPLICITLY. The card's click target is its own line run — the region
-  // the seam covers with the card's mark. Both controls now sit in the page
-  // gutter, which no mark covers, so a click there reports no unit and this
-  // returns. Two reasons that is the right answer rather than an omission.
-  // The gutter is where a reader clicks to put the cursor at the start of a
-  // line, and turning that into "select this card" would take an ordinary
-  // editing gesture away; and a control's own click is already handled above,
-  // so widening the target would only change what a MISS does.
-  if (!unitKey) return { ok: true };
-  if (event.metaKey || event.ctrlKey) {
-    // Add to, or remove from, the selection.
-    const at = selectedUnitKeys.indexOf(unitKey);
-    if (at === -1) selectedUnitKeys = selectedUnitKeys.concat([unitKey]);
-    else selectedUnitKeys = selectedUnitKeys.filter(function (_, i) {
-      return i !== at;
-    });
-  } else if (selectedUnitKeys.length > 0) {
-    selectedUnitKeys = [];
-  } else {
-    return { ok: true };
+  // The browser fires `click` after the `mouseup` that ended the alt-drag, so
+  // the band's own release arrived here as an ordinary click a millisecond
+  // after `onDecorationLasso` had set the selection. The old rule below then
+  // read "a click with no modifier and something selected" and cleared it.
+  // Measured on the fixture: the lasso reported two units correctly and the
+  // page came back with nothing selected, which is exactly Steve's "cannot
+  // lasso, so cannot group". The band already decided; this leaves it alone.
+  if (event.altKey) return { ok: true };
+
+  // A CLICK THE POINTER TRAVELLED THROUGH IS A TEXT SELECTION, NOT A CARD
+  // SELECTION — and this is the other half of `iugum-oip`.
+  //
+  // Steve: "if I try to highlight text nothing happens to text but underneath
+  // I can see something happening". Dragging across a card's text produced a
+  // `click` at the end of the drag, this handler selected the CARD, and the
+  // redraw that followed rebuilt every line element and threw the reader's
+  // text selection away with them. So the text could not be selected or
+  // copied, which made the inline view worse than a plain page.
+  //
+  // The seam reports the pointer's TRAVEL rather than `getSelection()`,
+  // because a plain click inside text also collapses a selection there, so
+  // "is there a selection" answers yes for both gestures. This is the board
+  // panel's own rule (`wasTextDrag`), so the two views cannot drift.
+  //
+  // A widget is exempt: chrome is `user-select: none`, a drag from the grip
+  // produces no click at all, and a few pixels of slip on a menu button must
+  // still press the button.
+  if (event.moved === true && event.widget === undefined) {
+    return { ok: true, textDrag: true };
   }
+
+  const unitKey = firstUnitKey(event.marks);
+  // NO UNIT UNDER THE POINTER CLEARS THE SELECTION, and never selects.
+  //
+  // That is the answer to "is a control outside the card still inside the
+  // card's click target?" — no, explicitly. The card's click target is its own
+  // line run, the region the seam covers with the card's mark. Both controls
+  // now sit in the page gutter, which no mark covers, so a click there reports
+  // no unit. The gutter is also where a reader clicks to put the cursor at the
+  // start of a line, and turning that into "select this card" would take an
+  // ordinary editing gesture away. Clearing is the other half: a click on
+  // empty background means "never mind", the same as it does on the board.
+  // The document order is only needed to resolve a RANGE, so a click that
+  // cannot start one does not pay for a re-read of the page.
+  const order = unitKey ? (await currentUnitOrder()).order : [];
+  const next = applyClickSelection(
+    order,
+    selectedUnitKeys,
+    selectionAnchorKey,
+    unitKey,
+    event,
+  );
+  const unchanged = next.selected.length === selectedUnitKeys.length &&
+    next.selected.every(function (key, i) {
+      return key === selectedUnitKeys[i];
+    });
+  selectedUnitKeys = next.selected;
+  selectionAnchorKey = next.anchor;
+  // A redraw the reader cannot see is still a transaction, and a transaction
+  // on every click in the page is what makes an editor feel slow.
+  if (unchanged) return { ok: true, selected: selectedUnitKeys.slice() };
   const text = await syscall("editor.getText");
   await writeDecorations(text, false);
   return { ok: true, selected: selectedUnitKeys.slice() };
@@ -2212,6 +2331,11 @@ async function onDecorationLasso(event) {
   if (!event) return { ok: true };
   if (!(await isInlineOn(event.page))) return { ok: true };
   selectedUnitKeys = lassoToUnitKeys(event);
+  // The band's LAST unit anchors the next shift-click, so a lasso and a
+  // shift-click compose the way they do in a file list.
+  selectionAnchorKey = selectedUnitKeys.length > 0
+    ? selectedUnitKeys[selectedUnitKeys.length - 1]
+    : null;
   const text = await syscall("editor.getText");
   await writeDecorations(text, false);
   return { ok: true, selected: selectedUnitKeys.slice() };
@@ -2636,6 +2760,7 @@ async function groupSelection() {
     return result;
   }
   selectedUnitKeys = ["group:" + groupId];
+  selectionAnchorKey = "group:" + groupId;
   await applyEdit(current.text, result.text);
   await warnUser(result.warning);
   return { ok: true, groupId, slug: result.slug };
@@ -2779,6 +2904,7 @@ const internals = {
   slugOrId,
   dedupeKeys,
   isContiguousUnitSelection,
+  applyClickSelection,
   lineStarts,
   gripLine,
   contentFirstLine,

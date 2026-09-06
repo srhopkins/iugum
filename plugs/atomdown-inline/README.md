@@ -22,8 +22,9 @@ and the plug only decorates what is already there.
 | **Density** | Comfortable (the default) and compact, the panel's own two. `Atomdown: Toggle Inline Density`, or the `align-justify` button. |
 | **Editing** | Ordinary typing. There is nothing to open and nothing to save. |
 | **Drag to reorder** | Drag the grip that appears in the gutter left of a hovered block. |
+| **Select** | Click a block. Cmd or Ctrl click adds and removes; shift click extends a contiguous range, taking the blocks between; a click on the page margin or in the gap between two cards clears. |
 | **Lasso** | Alt-drag a band over several blocks to select them. |
-| **Group / Ungroup** | `Atomdown: Group Selection` on a lassoed run, `Atomdown: Ungroup` with the cursor in a group, or the group header's menu. |
+| **Group / Ungroup** | `Atomdown: Group Selection` on a selected run, `Atomdown: Ungroup` with the cursor in a group, or the group header's menu. |
 | **Collapse** | The header caret, through the editor's own folding. |
 
 ## The two densities
@@ -249,6 +250,17 @@ the group the pointer is in; the header bar reaches the same state through
 first line. The quiet state is a `color-mix` on border and background - never
 `opacity`, which would fade every member card inside the group.
 
+**The CARD's own border does the same thing, and it did not until
+`iugum-oip`.** The seam was already putting `atomdown-card-hover` on every line
+of the hovered card and the stylesheet was already using it - to un-mute the
+header's name and to reveal the two gutter controls. Nothing read it for the
+box's own edge, so the one thing a reader looks at to answer "which card am I
+on" was the one thing that never moved. It is now the accent, the same colour
+the group's border uses, and it is a colour change only: no width, no shadow,
+no inset, because reading the page may not move it (rule 3). The top edge needs
+its own rule at each density - it lives on the header widget at comfortable and
+on the card's own first line at compact.
+
 **How a box is drawn out of lines.** `lineClasses` gives `-first`, `-mid` and
 `-last`. `-mid` takes the sides, `-last` takes the bottom edge and the bottom
 corners, and the card's top edge and top corners are on the header widget
@@ -406,11 +418,58 @@ The probe that recorded this is `plugs/atomdown-e2e/clip-probe.test.ts`.
 **A control in the gutter is NOT part of the card's click target.** Decided
 explicitly. The card's click target is its own line run - the region the seam
 covers with the card's mark - and the gutter is covered by no mark, so a click
-there reports no unit and changes no selection. Two reasons that is right
-rather than an omission: the gutter is where a reader clicks to put the cursor
-at the start of a line, and turning that into "select this card" would take an
-ordinary editing gesture away; and each control's own click is handled before
-the selection rules, so widening the target would only change what a MISS does.
+there names no unit. Two reasons that is right rather than an omission: the
+gutter is where a reader clicks to put the cursor at the start of a line, and
+turning that into "select this card" would take an ordinary editing gesture
+away; and each control's own click is handled before the selection rules, so
+widening the target would only change what a MISS does. A miss CLEARS the
+selection, because a click off the cards is how a reader says "never mind"
+(`iugum-oip`).
+
+## Selecting a block
+
+The rules are the board panel's, so the two views cannot drift, and they live
+in one pure function (`applyClickSelection`) rather than in branches inside the
+click handler:
+
+| Gesture | What it does |
+|---|---|
+| Click | The selection becomes that one unit, and it is the anchor. |
+| Cmd or Ctrl click | Adds it, or removes it if it is already in. Either way it becomes the anchor. |
+| Shift click | Extends from the anchor to here, taking every unit BETWEEN them - including units nobody clicked. The anchor does not move, so a second shift-click re-extends from the same place. |
+| Click the background | Clears. The page margin, the gap between two cards, the space under the last line. |
+| Alt-drag | The band's units become the selection; its last unit is the next anchor. |
+| Drag across a card's text | Selects the TEXT. The card selection is left alone. |
+
+A **unit** is a top-level card or a whole GROUP. A card inside a group is not
+selectable on its own, because the thing that moves and the thing that groups
+is the unit.
+
+**Three defects this shape exists for** (`iugum-oip`, P0 - the view was
+read-only in practice):
+
+- A plain click SELECTED NOTHING. The only branch for a plain click on a card
+  cleared the selection, so a click could unselect and never select.
+- The lasso worked and then lost its selection a millisecond later. The browser
+  fires `click` after the `mouseup` that ends an alt-drag, and that click read
+  as "a plain click with something selected" and cleared it. A click carrying
+  ALT is now the tail of a lasso release and is ignored.
+- Shift-click was undetectable: the seam's click event carried three modifier
+  flags and not `shiftKey`. It carries all four now.
+- Text could not be selected or copied. Steve: "if I try to highlight text
+  nothing happens to text but underneath I can see something happening". The
+  `click` at the end of a text drag selected the CARD, and the redraw that
+  followed rebuilt every line element and threw the reader's text selection
+  away with them. The seam now reports the pointer's TRAVEL, and a click that
+  travelled is a text selection, not a card selection - the board panel's own
+  rule (`wasTextDrag`), so the two views cannot drift. Travel rather than
+  `getSelection()`, because a plain click inside text also collapses a
+  selection there, so "is there a selection" answers yes for both gestures.
+  Chrome is exempt: it is `user-select: none`, a drag from the grip produces no
+  click at all, and a few pixels of slip on a menu button must still press it.
+
+None of it reaches the document. A selection is one extra mark per selected
+unit, and it is deliberately not persisted.
 
 Rule 1 of the front-end suite enforces all of it. It distinguishes CONTENT,
 which must stay inside the card, from CHROME, which may sit outside and must
