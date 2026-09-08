@@ -112,8 +112,12 @@ echo "==> cargo build --release -p silverbullet"
 ART="$SRC/target/release/silverbullet"
 [ -x "$ART" ] || die "the build made no $ART"
 
+# install, NOT cp, and into wikiblob/ (iugum-ef0). main.go embeds the wikiblob
+# DIRECTORY rather than this file, so a checkout that has never built a server
+# still compiles. install sets the mode explicitly: cp onto an existing file
+# keeps the DESTINATION's mode, which once shipped a non-executable server.
 echo "==> install as the //go:embed target"
-cp "$ART" "$ROOT/silverbullet/silverbullet"
+install -m 0755 "$ART" "$ROOT/wikiblob/silverbullet"
 
 # THE SECOND PASS, done here rather than left to the reader. The blob above is
 # what `//go:embed` picks up, so iugum has to be rebuilt for the new blob to be
@@ -123,5 +127,5 @@ echo "==> rebuilding iugum so the new blob is embedded"
 "$ROOT/scripts/build.sh" "${IUGUM_BUILD_MODE:---cgo}"
 
 echo
-echo "done. silverbullet/silverbullet carries the space assets, and ./iugum"
+echo "done. wikiblob/silverbullet carries the space assets, and ./iugum"
 echo "embeds that blob. No second scripts/build.sh is needed."

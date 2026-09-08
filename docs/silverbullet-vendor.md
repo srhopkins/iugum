@@ -114,8 +114,16 @@ One command, not two: the script's last step is `scripts/build.sh`, because
 build looks exactly like a plug change that did not work. Pass
 `IUGUM_BUILD_MODE=--static` to build the static program instead.
 
-`silverbullet/silverbullet` is the `//go:embed` target in `main.go` and is
+`wikiblob/silverbullet` is the `//go:embed` target in `main.go` and is
 ignored by git, so that copy changes the built program, not the repository.
+
+`main.go` embeds the `wikiblob` DIRECTORY, not that file. `//go:embed` is a
+compile-time pattern and a pattern matching nothing is a hard error, so
+embedding the gitignored file directly made a fresh clone or worktree
+unbuildable. A directory pattern needs only one match, and the tracked
+`wikiblob/PLACEHOLDER` supplies it. A build with no server then fails at run
+time with a message naming this script, rather than at compile time with a
+pattern error. See `iugum-ef0`.
 
 Use `scripts/build-wiki-blob.sh` rather than a bare `make build-rs` plus a
 `cp`. The script stages iugum's space assets into `client_bundle/base_fs`

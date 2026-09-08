@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/srhopkins/iugum/embedbin"
 	"testing"
 
 	"github.com/srhopkins/iugum/spaceassets"
@@ -158,5 +160,41 @@ func TestWarnIfDuplicatePlugsStaysSilent(t *testing.T) {
 	warnIfDuplicatePlugs(&quiet, space)
 	if quiet.Len() != 0 {
 		t.Errorf("warned about an override and an unrelated plug:\n%s", quiet.String())
+	}
+}
+
+// A binary built with no embedded server says so, and names the fix.
+//
+// iugum-ef0. main.go embeds the wikiblob DIRECTORY so a checkout that has
+// never built a server still compiles, which means this code can be handed
+// nothing. Before this guard it wrote an empty file and ran it, and the kernel
+// answered "exec format error" - measured on a fresh worktree. That tells a
+// reader nothing about what to do.
+func TestWriteEmbeddedNamesTheFixWhenThereIsNoBlob(t *testing.T) {
+	saved := embedbin.Silverbullet
+	embedbin.Silverbullet = nil
+	t.Cleanup(func() { embedbin.Silverbullet = saved })
+
+	path, cleanup, err := writeEmbedded()
+	if cleanup != nil {
+		cleanup()
+	}
+	if err == nil {
+		t.Fatalf("expected an error with no blob, got path %q", path)
+	}
+	if path != "" {
+		t.Errorf("no temp file should be left behind, got %q", path)
+	}
+	for _, want := range []string{
+		"carries no SilverBullet server",
+		"scripts/build-wiki-blob.sh",
+		envBin,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must mention %q, got: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "exec format") {
+		t.Errorf("the kernel's message must not reach the reader, got: %v", err)
 	}
 }
