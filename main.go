@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"fmt"
 	"io"
 	"os"
@@ -20,8 +20,41 @@ import (
 	"github.com/srhopkins/iugum/spaceassets"
 )
 
-//go:embed silverbullet/silverbullet
-var silverbulletBin []byte
+// THE BLOB DIRECTORY IS EMBEDDED, NOT THE BLOB FILE, AND THAT IS THE POINT.
+//
+// The server binary is 36MB of build output, so it is gitignored. But
+// //go:embed is a COMPILE-TIME pattern and a pattern that matches nothing is a
+// hard error, so a fresh clone or `git worktree add` could not build at all:
+// "pattern silverbullet/silverbullet: no matching files found". Three agents
+// and one session hit that in a single evening (iugum-ef0).
+//
+// The first workaround was worse than the problem: build-wiki-blob.sh wrote an
+// empty 0644 placeholder so the compile would succeed, and `cp` onto an
+// existing file keeps the DESTINATION's mode, so the copied server came out
+// non-executable and the wiki refused to start.
+//
+// A DIRECTORY pattern only needs one match. wikiblob/PLACEHOLDER is tracked
+// and supplies it, so the tree always compiles; the binary lands beside it and
+// stays ignored. A build with no binary is then a clear runtime error naming
+// the build script, instead of a compile failure or a silent empty file.
+//
+//go:embed wikiblob
+var wikiblobFS embed.FS
+
+// wikiblobName is the file the wiki server is installed as, inside wikiblobFS.
+const wikiblobName = "wikiblob/silverbullet"
+
+// silverbulletBinary returns the embedded server, or nil when this binary was
+// built without one. nil is a legitimate state, not a fault to panic on: it is
+// exactly what a fresh checkout produces, and the adapter turns it into a
+// sentence a person can act on.
+func silverbulletBinary() []byte {
+	data, err := wikiblobFS.ReadFile(wikiblobName)
+	if err != nil {
+		return nil
+	}
+	return data
+}
 
 // The atomdown space assets that have another home in this repository. A
 // space needs all three files: the two plug bundles, and the library page that
@@ -42,7 +75,7 @@ var (
 )
 
 func init() {
-	embedbin.Set(silverbulletBin)
+	embedbin.Set(silverbulletBinary())
 	spaceassets.Set([]spaceassets.Asset{
 		{Rel: "Plugs/atomdown-board.plug.js", Data: atomdownBoardPlug, Src: "plugs/atomdown-board/atomdown-board.plug.js"},
 		{Rel: "Plugs/atomdown-inline.plug.js", Data: atomdownInlinePlug, Src: "plugs/atomdown-inline/atomdown-inline.plug.js"},

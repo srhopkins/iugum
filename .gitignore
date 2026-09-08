@@ -35,3 +35,7 @@ go-build/
 
 # Agent scratch harnesses, never source
 scratchpad/
+
+# The embedded SilverBullet server binary. Built by scripts/build-wiki-blob.sh.
+# wikiblob/PLACEHOLDER is TRACKED so //go:embed always matches - see main.go.
+/wikiblob/silverbullet
