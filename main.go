@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -43,9 +44,9 @@ var (
 func init() {
 	embedbin.Set(silverbulletBin)
 	spaceassets.Set([]spaceassets.Asset{
-		{Rel: "Plugs/atomdown-board.plug.js", Data: atomdownBoardPlug},
-		{Rel: "Plugs/atomdown-inline.plug.js", Data: atomdownInlinePlug},
-		{Rel: "Inline.md", Data: atomdownInlineLibrary},
+		{Rel: "Plugs/atomdown-board.plug.js", Data: atomdownBoardPlug, Src: "plugs/atomdown-board/atomdown-board.plug.js"},
+		{Rel: "Plugs/atomdown-inline.plug.js", Data: atomdownInlinePlug, Src: "plugs/atomdown-inline/atomdown-inline.plug.js"},
+		{Rel: "Inline.md", Data: atomdownInlineLibrary, Src: "plugs/atomdown-inline/library/Atomdown Inline.md"},
 	})
 }
 
@@ -69,6 +70,11 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
                client_bundle/base_fs, so the next cargo build compiles them
                into the SilverBullet binary. Use scripts/build-wiki-blob.sh.
 
+  check-wiki-assets [repo-dir]
+               compare the plug bytes this binary serves against the plug
+               sources in the tree. Exit 1 when one is behind. Silent about a
+               tree it cannot find.
+
   iugum up [--wiki-port N] [--observe-port N] [--code-server-port N] [--browser-port N] [--ttyd-port N]
   iugum up [--no-code-server] [--no-browser] [--no-ttyd]
   iugum up --container [--image IMG] [--engine docker|podman|auto] [--name N] [--detach] [--dry-run]
@@ -83,6 +89,7 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum beads [bd args...]
   iugum beadview [--port N] [--hostname ADDR] [--dir DIR]
   iugum wiki [--port N] [--hostname ADDR] [space-dir]
+  iugum check-wiki-assets [repo-dir]
   iugum observe [--port N] [--hostname ADDR]
   iugum net plan | apply [--dry-run] | show
   iugum job ls | add <name> [--every 1h|--spec SPEC] [--kind exec|http|session] [--prompt T] -- [cmd...]
@@ -176,6 +183,8 @@ func run(args []string) int {
 		return 0
 	case "stage-wiki-assets":
 		return runStageWikiAssets(ctx, a, args[1:])
+	case "check-wiki-assets":
+		return runCheckWikiAssets(ctx, a, args[1:])
 	case "observe":
 		port, host, code, ok := parseObserveArgs(args[1:])
 		if !ok {
@@ -219,6 +228,75 @@ func runStageWikiAssets(ctx context.Context, a *app.App, args []string) int {
 		fmt.Printf("staged %s\n", rel)
 	}
 	return 0
+}
+
+// runCheckWikiAssets answers one question: is what this binary serves the same
+// as what the repository holds. It does the arithmetic, so a person does not
+// have to compare two byte counts by eye.
+//
+// It reads and prints only. Exit 0 says every asset it could read is current,
+// exit 1 says at least one is behind and names the fix. A tree it cannot find
+// is exit 0 with one line saying so, because a binary with no sources beside it
+// is not a fault.
+func runCheckWikiAssets(ctx context.Context, a *app.App, args []string) int {
+	return runCheckWikiAssetsIO(ctx, a, args, os.Stdout, os.Stderr)
+}
+
+func runCheckWikiAssetsIO(ctx context.Context, a *app.App, args []string, stdout, stderr io.Writer) int {
+	if err := a.Check(ctx, "wiki", "check"); err != nil {
+		fmt.Fprintln(stderr, app.DenyMessage(err))
+		return 1
+	}
+	root := ""
+	switch len(args) {
+	case 0:
+		root = spaceassets.SourceRoot()
+	case 1:
+		if strings.HasPrefix(args[0], "-") {
+			fmt.Fprintln(stderr, "Usage: iugum check-wiki-assets [repo-dir]")
+			return 2
+		}
+		root = args[0]
+	default:
+		fmt.Fprintln(stderr, "Usage: iugum check-wiki-assets [repo-dir]")
+		return 2
+	}
+	if root == "" {
+		fmt.Fprintf(stdout, "no iugum source tree above %s, so there is nothing to compare.\n", mustGetwd())
+		fmt.Fprintf(stdout, "run this from a checkout, or set %s to one.\n", spaceassets.EnvSourceRoot)
+		return 0
+	}
+
+	sts := spaceassets.Compare(root)
+	fmt.Fprintf(stdout, "comparing the assets in this binary against %s\n\n", root)
+	for _, st := range sts {
+		switch {
+		case !st.Found:
+			fmt.Fprintf(stdout, "  %-34s %8d bytes  no source to compare\n", st.Rel, st.Carried)
+		case st.Current:
+			fmt.Fprintf(stdout, "  %-34s %8d bytes  current\n", st.Rel, st.Carried)
+		case st.SizeOnly:
+			fmt.Fprintf(stdout, "  %-34s %8d bytes  BEHIND: source is %d bytes too, and the contents differ\n", st.Rel, st.Carried, st.OnDisk)
+		default:
+			fmt.Fprintf(stdout, "  %-34s %8d bytes  BEHIND: source is %d bytes (%+d)\n", st.Rel, st.Carried, st.OnDisk, st.OnDisk-st.Carried)
+		}
+	}
+	stale := spaceassets.Stale(sts)
+	fmt.Fprintln(stdout)
+	if len(stale) == 0 {
+		fmt.Fprintln(stdout, "every asset this binary serves is the one in the tree.")
+		return 0
+	}
+	fmt.Fprintf(stdout, "%d asset(s) are behind the tree. Rebuild: scripts/build-wiki-blob.sh\n", len(stale))
+	return 1
+}
+
+func mustGetwd() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "the working directory"
+	}
+	return dir
 }
 
 func runRuntime(ctx context.Context, a *app.App, cfg config.File) int {

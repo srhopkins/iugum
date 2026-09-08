@@ -61,10 +61,14 @@ const baseFsDir = "client_bundle/base_fs"
 const Marker = Namespace + "/Inline.md"
 
 // Asset is one file to stage. Rel is the path inside Namespace, with forward
-// slashes.
+// slashes. Src is where the file comes from in this repository, relative to the
+// repository root and with forward slashes. Src exists so a running program can
+// compare the bytes it carries against the bytes on disk; an asset with no Src
+// is never compared.
 type Asset struct {
 	Rel  string
 	Data []byte
+	Src  string
 }
 
 var (
@@ -87,6 +91,116 @@ func All() ([]Asset, error) {
 	mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Rel < out[j].Rel })
 	return out, nil
+}
+
+// EnvSourceRoot names the repository root to compare the carried assets
+// against. It overrides the search below, for a checkout that is not above the
+// working directory.
+const EnvSourceRoot = "IUGUM_PLUG_SRC"
+
+// SourceRoot returns the repository root whose plug sources this program can
+// compare itself against, or "" when there is none.
+//
+// HOW THE ROOT IS FOUND, and why this way. The assets are //go:embed-ed, so the
+// bytes are frozen at compile time and a forgotten rebuild is invisible at run
+// time. To see that, the program has to find the sources again. Three ways were
+// possible:
+//
+//   - A path recorded at build time with -ldflags -X. Rejected: the plain
+//     `go build ./...` that a person actually runs records nothing, so the one
+//     build most likely to be stale would carry no check at all.
+//   - An environment variable only. Rejected as the sole mechanism: a check
+//     that needs setup does not fire on the day it is needed. It is kept as an
+//     override.
+//   - A walk up from the working directory, looking for go.mod beside plugs/.
+//     Chosen: it needs no build flag and no setup, it fires for every build
+//     path, and it costs a few Stat calls.
+//
+// Absence is silent on purpose. A shipped binary runs on machines with no
+// repository, and a wrong warning there is worse than no warning.
+func SourceRoot() string {
+	if p := os.Getenv(EnvSourceRoot); p != "" {
+		if isSourceRoot(p) {
+			return p
+		}
+		return ""
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if isSourceRoot(dir) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// isSourceRoot reports whether dir looks like this repository: a Go module with
+// a plugs directory. Both are required, so an unrelated module above the
+// working directory is not mistaken for one.
+func isSourceRoot(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, "plugs"))
+	return err == nil && info.IsDir()
+}
+
+// Status is one carried asset measured against its source file.
+type Status struct {
+	Rel      string // path inside Namespace
+	Src      string // repository-relative source path
+	Carried  int    // bytes this program carries and will serve
+	OnDisk   int    // bytes of the source file
+	Found    bool   // the source file was read
+	Current  bool   // the carried bytes are the source bytes
+	SizeOnly bool   // the two files differ in content at the same size
+}
+
+// Compare measures every asset that names a source against the file at
+// root/Src. Assets with no Src, and sources that cannot be read, come back
+// Found=false and are not drift: the check is best effort.
+func Compare(root string) []Status {
+	assets, err := All()
+	if err != nil {
+		return nil
+	}
+	out := make([]Status, 0, len(assets))
+	for _, a := range assets {
+		st := Status{Rel: a.Rel, Src: a.Src, Carried: len(a.Data)}
+		if a.Src == "" {
+			out = append(out, st)
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(a.Src)))
+		if err != nil {
+			out = append(out, st)
+			continue
+		}
+		st.Found = true
+		st.OnDisk = len(data)
+		st.Current = bytes.Equal(a.Data, data)
+		st.SizeOnly = !st.Current && st.Carried == st.OnDisk
+		out = append(out, st)
+	}
+	return out
+}
+
+// Stale returns the statuses that are read and out of date.
+func Stale(sts []Status) []Status {
+	out := make([]Status, 0, len(sts))
+	for _, st := range sts {
+		if st.Found && !st.Current {
+			out = append(out, st)
+		}
+	}
+	return out
 }
 
 // Stage writes every asset into the base_fs of the SilverBullet source tree at

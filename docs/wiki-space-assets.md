@@ -129,6 +129,40 @@ wiki: rebuild the embedded binary with scripts/build-wiki-blob.sh, then rebuild
 It is a warning, not an error. SilverBullet itself is fine, and a space that
 does not use atomdown does not care.
 
+## When the plug bytes are behind the sources
+
+The plugs are `//go:embed`-ed into `iugum`, so the bytes are frozen at compile
+time and a forgotten rebuild is invisible at run time. A wiki served an inline
+plug of 101,481 bytes while the source held 132,357, about 31KB and two feature
+branches behind, and the gap read as a rendering bug for an evening.
+
+`iugum wiki` therefore measures the assets it carries against the plug sources
+in the repository, and names both numbers:
+
+```
+wiki: this iugum binary carries 1 atomdown asset(s) that are behind the sources
+      in /Users/you/iugum, so the wiki serves the older ones.
+wiki:   Plugs/atomdown-inline.plug.js: serving 101481 bytes, source
+        plugs/atomdown-inline/atomdown-inline.plug.js is 132357 bytes (+30876)
+wiki: rebuild with scripts/build-wiki-blob.sh. Run `iugum check-wiki-assets` to
+      see this without starting the wiki.
+```
+
+`iugum check-wiki-assets [repo-dir]` answers the same question on demand and
+exits 1 when anything is behind, so a script can gate on it.
+
+**Finding the sources.** The program walks up from the working directory for a
+`go.mod` beside a `plugs` directory. That needs no build flag and no setup, so
+it fires for a plain `go build` as well as for `scripts/build-wiki-blob.sh`. A
+path recorded at build time was rejected for the opposite reason: the plain
+build that a person actually runs records nothing, so the build most likely to
+be stale would carry no check. `IUGUM_PLUG_SRC=<dir>` names a checkout that is
+not above the working directory.
+
+**Absence is silent.** The shipped binary runs on machines with no repository,
+where a warning would be wrong, so no tree and an unreadable source file both
+print nothing. The check is best effort, not a gate.
+
 ## Why there is no runtime seeder
 
 An earlier version of this work wrote the same files into each space folder on

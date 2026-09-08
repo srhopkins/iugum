@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/srhopkins/iugum/spaceassets"
 )
 
 // A hand-copied plug bundle in _plug is not an override. SilverBullet's own
@@ -41,6 +43,83 @@ func TestWarnIfDuplicatePlugsNamesEveryCopy(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("warning does not mention %q:\n%s", want, got)
 		}
+	}
+}
+
+// writePlugSource writes one plug source of n bytes under root and registers a
+// carried asset of carried bytes for it, so a test can set the size of the gap.
+func writePlugSource(t *testing.T, root, src string, carried, onDisk int) spaceassets.Asset {
+	t.Helper()
+	full := filepath.Join(root, filepath.FromSlash(src))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, bytes.Repeat([]byte("n"), onDisk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return spaceassets.Asset{
+		Rel:  "Plugs/atomdown-inline.plug.js",
+		Data: bytes.Repeat([]byte("o"), carried),
+		Src:  src,
+	}
+}
+
+// The plugs are compiled in, so a forgotten rebuild is invisible at run time.
+// The warning has to name both byte counts and the one command that closes the
+// gap: a wiki served 101,481 bytes while the source held 132,357, and that read
+// as a rendering bug for an evening.
+func TestWarnIfStalePlugsNamesBothByteCountsAndTheFix(t *testing.T) {
+	t.Cleanup(func() { spaceassets.Set(nil) })
+	root := t.TempDir()
+	asset := writePlugSource(t, root, "plugs/atomdown-inline/atomdown-inline.plug.js", 101481, 132357)
+	spaceassets.Set([]spaceassets.Asset{asset})
+
+	var out bytes.Buffer
+	warnIfStalePlugs(&out, root)
+	got := out.String()
+
+	for _, want := range []string{
+		"101481",
+		"132357",
+		"plugs/atomdown-inline/atomdown-inline.plug.js",
+		"scripts/build-wiki-blob.sh",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning does not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// A tree that matches is the normal case and stays silent, and so does a binary
+// with no tree beside it. The shipped binary runs on machines with no sources,
+// where a warning would be wrong, and a warning on a fresh build would train the
+// reader to ignore this one.
+func TestWarnIfStalePlugsStaysSilent(t *testing.T) {
+	t.Cleanup(func() { spaceassets.Set(nil) })
+
+	var noTree bytes.Buffer
+	spaceassets.Set([]spaceassets.Asset{{Rel: "Plugs/p.plug.js", Data: []byte("x"), Src: "plugs/p.plug.js"}})
+	warnIfStalePlugs(&noTree, "")
+	if noTree.Len() != 0 {
+		t.Errorf("warned with no source tree to compare against:\n%s", noTree.String())
+	}
+
+	// A tree that is present but holds no such file is also silence.
+	var noSource bytes.Buffer
+	warnIfStalePlugs(&noSource, t.TempDir())
+	if noSource.Len() != 0 {
+		t.Errorf("warned about a source file that is absent:\n%s", noSource.String())
+	}
+
+	root := t.TempDir()
+	same := writePlugSource(t, root, "plugs/atomdown-inline/atomdown-inline.plug.js", 0, 4096)
+	same.Data = bytes.Repeat([]byte("n"), 4096)
+	spaceassets.Set([]spaceassets.Asset{same})
+
+	var current bytes.Buffer
+	warnIfStalePlugs(&current, root)
+	if current.Len() != 0 {
+		t.Errorf("warned about a plug that matches its source:\n%s", current.String())
 	}
 }
 
