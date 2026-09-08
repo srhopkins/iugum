@@ -67,6 +67,7 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	}
 	warnIfNoSpaceAssets(os.Stderr, path)
 	warnIfDuplicatePlugs(os.Stderr, opts.Space)
+	warnIfStalePlugs(os.Stderr, spaceassets.SourceRoot())
 	args := []string{"-p", strconv.Itoa(opts.Port), "-L", opts.Host, opts.Space}
 	// SilverBullet 2.10.0 and later need --single for one-space mode. Version
 	// 2.9.0 and earlier reject the flag, so ask the binary what it accepts.
@@ -123,6 +124,39 @@ func warnIfDuplicatePlugs(w io.Writer, space string) {
 	for _, name := range names {
 		fmt.Fprintf(w, "wiki:   %s\n", name)
 	}
+}
+
+// warnIfStalePlugs says what to do when the plug bytes this program is about to
+// serve are behind the plug sources in the repository.
+//
+// The plugs are //go:embed-ed, so the bytes are frozen at compile time and a
+// forgotten rebuild is invisible at run time. Measured: a wiki served an inline
+// plug of 101,481 bytes while the source held 132,357, about 31KB and two
+// feature branches behind, and the gap read as a rendering bug in the plug. Name
+// both numbers, so the gap needs no arithmetic, and name the one command that
+// closes it.
+//
+// root is "" when no repository sits above the working directory, and then this
+// is silent: the shipped binary runs on machines with no sources, where a
+// warning would be wrong. A source file that cannot be read is silent for the
+// same reason.
+func warnIfStalePlugs(w io.Writer, root string) {
+	if root == "" {
+		return
+	}
+	stale := spaceassets.Stale(spaceassets.Compare(root))
+	if len(stale) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "wiki: this iugum binary carries %d atomdown asset(s) that are behind the sources in %s, so the wiki serves the older ones.\n", len(stale), root)
+	for _, st := range stale {
+		if st.SizeOnly {
+			fmt.Fprintf(w, "wiki:   %s: serving %d bytes, source %s is %d bytes, and the contents differ\n", st.Rel, st.Carried, st.Src, st.OnDisk)
+			continue
+		}
+		fmt.Fprintf(w, "wiki:   %s: serving %d bytes, source %s is %d bytes (%+d)\n", st.Rel, st.Carried, st.Src, st.OnDisk, st.OnDisk-st.Carried)
+	}
+	fmt.Fprintf(w, "wiki: rebuild with scripts/build-wiki-blob.sh. Run `iugum check-wiki-assets` to see this without starting the wiki.\n")
 }
 
 // resolveBinary finds a SilverBullet binary to run. The second result removes
