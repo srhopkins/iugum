@@ -131,6 +131,83 @@ function parseAttrs(attrText) {
 }
 
 /**
+ * WHY A GROUP'S IDENTITY IS NOT ITS ID (iugum-39j).
+ *
+ * The view resolves which atoms belong to which group by comparing unit keys,
+ * and a unit key used to be `group:<the id attribute>`. A group marker with no
+ * `id` therefore produced the key `group:null`, so EVERY id-less group on a
+ * page resolved to one key and every card was attributed to every one of them.
+ * Measured on a real page: seven id-less groups drew every card's chrome seven
+ * times, the group bar printed the literal word `null` where the id belongs,
+ * and the bar's count read 44 against 50 real atoms. Two groups sharing one id
+ * collide the same way, and there the collision is worse in the board, where
+ * the two merge into one container.
+ *
+ * So identity is line-anchored whenever the id cannot serve as identity. A
+ * start line is unique in a document by construction, so no two groups can
+ * ever share a key again, and the fault travels with the unit so the view can
+ * name it.
+ *
+ * The fault is REPORTED, never repaired: repairing it means writing a document
+ * byte, and Atomdown rule 6 makes the view read-only. `atomdown materialize`
+ * mints the missing id, and the view says so.
+ */
+function groupIdentity(groupId, startLine, claimedIds) {
+  const raw = groupId == null ? "" : String(groupId).trim();
+  if (raw === "") {
+    return { groupKey: "@" + startLine, fault: "no-id" };
+  }
+  if ((claimedIds || []).indexOf(groupId) !== -1) {
+    return { groupKey: "@" + startLine, fault: "duplicate-id" };
+  }
+  return { groupKey: groupId, fault: null };
+}
+
+/** The command that repairs either fault. Never run by the view. */
+function materializeHint(pageName) {
+  const name = pageName == null ? "" : String(pageName).trim();
+  return "atomdown materialize -w " + (name !== "" ? name : "<file>");
+}
+
+/**
+ * What the group bar shows where the id belongs.
+ *
+ * NEVER the string "null". A reader cannot tell the word `null` from an id
+ * that happens to read as a word, and that is exactly how the defect stayed
+ * hidden: the bar looked populated. A missing id reads as missing.
+ */
+function groupIdText(unit) {
+  if (unit.groupFault === "no-id") return "no id";
+  return String(unit.groupId == null ? "" : unit.groupId);
+}
+
+/**
+ * A name for a group in a message, even when it has neither slug nor id.
+ *
+ * A faulted group with no slug has nothing to be called, so it is named by the
+ * one thing it always has: the line its marker is on. One-based, because that
+ * is the number the editor's own gutter shows.
+ */
+function groupLabel(unit) {
+  const named = slugOrId(unit.groupSlug, unit.groupId);
+  if (named !== "") return named;
+  return "the group at line " + (unit.startLine + 1);
+}
+
+/** The in-place sentence a faulted group's bar carries, or "" when it is valid. */
+function groupFaultText(unit, pageName) {
+  if (!unit.groupFault) return "";
+  const fix = " Fix it with: " + materializeHint(pageName);
+  if (unit.groupFault === "no-id") {
+    return "INVALID GROUP: " + groupLabel(unit) +
+      " has no id, so the view cannot tell it apart from another group with no id." +
+      fix;
+  }
+  return "INVALID GROUP: the id " + String(unit.groupId) +
+    " is used by more than one group on this page." + fix;
+}
+
+/**
  * Scans sourceText into the ordered list of top-level reorderable units, plus
  * the line range of the fixed preamble (the `<atomdown version="1"/>` marker)
  * that always stays first.
@@ -144,6 +221,10 @@ function computeUnits(sourceText) {
   const lines = String(sourceText == null ? "" : sourceText).split("\n");
   const n = lines.length;
   const units = [];
+  // Every group id already claimed in this document, so the SECOND group to
+  // claim one is recognisable as the invalid one rather than merging into the
+  // first. See groupIdentity() for why identity cannot be the raw id.
+  const claimedGroupIds = [];
 
   function isBoundary(line) {
     return line.trim() === "" ||
@@ -178,6 +259,8 @@ function computeUnits(sourceText) {
       const groupSlugAttr = groupAttrs.find((a) => a.name === "slug");
       const groupId = groupIdAttr ? groupIdAttr.value : null;
       const groupSlug = groupSlugAttr ? groupSlugAttr.value : null;
+      const identity = groupIdentity(groupId, startLine, claimedGroupIds);
+      if (identity.fault === null) claimedGroupIds.push(groupId);
       i++;
       const atomIds = [];
       while (i < n && !GROUP_CLOSE_RE.test(lines[i])) {
@@ -191,12 +274,14 @@ function computeUnits(sourceText) {
       }
       const endLine = i < n ? i : n - 1;
       units.push({
-        unitKey: `group:${groupId}`,
+        unitKey: `group:${identity.groupKey}`,
         kind: "group",
         startLine,
         endLine,
         atomIds,
         groupId,
+        groupKey: identity.groupKey,
+        groupFault: identity.fault,
         groupSlug,
       });
       if (i < n) i++;
@@ -943,7 +1028,7 @@ function computeCards(sourceText) {
         // A member card is not a movable unit — its group is. So its key is
         // namespaced away from the unit keys, and the drag code ignores it.
         cardKey: member.implicit === true
-          ? "card:" + unit.groupId + ":" + index
+          ? "card:" + unit.groupKey + ":" + index
           : "atom:" + member.atomIds[0],
         unitKey: unit.unitKey,
         groupUnitKey: unit.unitKey,
@@ -1240,9 +1325,18 @@ function densityClass(value) {
  * an arbitrary member card, where two grips in one gutter say nothing about
  * which one moves the group.
  */
-function groupHeaderHtml(unit, memberCount, directiveText, collapsed, popover) {
-  const name = slugOrId(unit.groupSlug, unit.groupId);
+function groupHeaderHtml(
+  unit,
+  memberCount,
+  directiveText,
+  collapsed,
+  popover,
+  pageName,
+) {
+  const name = groupLabel(unit);
   const word = memberCount === 1 ? "card" : "cards";
+  const fault = groupFaultText(unit, pageName);
+  const idText = groupIdText(unit);
   return [
     gripHtml("Drag to move the whole group " + name, "atomdown-group-grip"),
     '<span class="atomdown-group-collapse" title="' +
@@ -1251,11 +1345,13 @@ function groupHeaderHtml(unit, memberCount, directiveText, collapsed, popover) {
     '<span class="atomdown-group-kind">group</span>',
     '<span class="atomdown-group-name" title="' +
     escapeHtml(
-      'Name (slug) "' + name + '" - the group\'s id is ' + unit.groupId,
+      unit.groupFault
+        ? fault
+        : 'Name (slug) "' + name + '" - the group\'s id is ' + unit.groupId,
     ) + '">' + escapeHtml(name) + "</span>",
     '<span class="atomdown-group-id" title="' +
-    escapeHtml("Atomdown id " + unit.groupId) + '">' +
-    escapeHtml(String(unit.groupId)) + "</span>",
+    escapeHtml(unit.groupFault ? fault : "Atomdown id " + unit.groupId) +
+    '">' + escapeHtml(idText) + "</span>",
     // THE COUNT IS SPLIT INTO THE NUMBER AND THE WORD, and the split is the
     // only reason compact can keep a bare count: the word is what `display:
     // none` removes there. Same two class names the panel uses.
@@ -1267,6 +1363,16 @@ function groupHeaderHtml(unit, memberCount, directiveText, collapsed, popover) {
     ' aria-haspopup="true" aria-expanded="' + (popover ? "true" : "false") +
     '" title="' +
     escapeHtml("Actions for group " + name) + '">' + MENU_GLYPH + "</span>",
+    // THE FAULT IS IN THE BAR, not in a notification. A notification is gone
+    // by the time the reader looks at the group it is about, and the whole
+    // defect was a reader who could not tell a document error from a
+    // rendering error. LAST, so it takes a row of its own under the bar's
+    // normal row rather than pushing the count off it. Emitted only for a
+    // faulted group, so a valid document gains no chrome at all.
+    fault !== ""
+      ? '<span class="atomdown-group-fault" title="' + escapeHtml(fault) +
+        '">' + escapeHtml(fault) + "</span>"
+      : "",
     popover || "",
     directivePeekHtml(directiveText),
   ].join("");
@@ -1331,6 +1437,7 @@ function buildDecorations(
   collapsedGroupIds,
   density,
   open,
+  pageName,
 ) {
   const scan = computeCards(sourceText);
   const lines = scan.lines;
@@ -1466,7 +1573,7 @@ function buildDecorations(
         // cannot express that.
         hoverClasses: true,
       });
-      const isCollapsed = collapsed.indexOf(unit.groupId) !== -1;
+      const isCollapsed = collapsed.indexOf(unit.groupKey) !== -1;
       widgets.push({
         id: "unit:" + unit.unitKey,
         at: unitSpan.from,
@@ -1483,12 +1590,10 @@ function buildDecorations(
           menuOpenForGroup(open, unit.unitKey)
             ? menuPopoverHtml(
               "group",
-              groupMenuItems(
-                slugOrId(unit.groupSlug, unit.groupId),
-                unit.groupId,
-              ),
+              groupMenuItems(groupLabel(unit), groupIdText(unit)),
             )
             : "",
+          pageName,
         ),
       });
       const openLineEnd = starts[unit.startLine] + lines[unit.startLine].length;
@@ -1960,6 +2065,7 @@ async function writeDecorations(text, rebuild) {
       collapsedGroupIds,
       activeDensity,
       openMenu,
+      activePage,
     ),
   );
   if (rebuild) {
@@ -2007,6 +2113,7 @@ async function applyEdit(oldText, newText) {
       collapsedGroupIds,
       activeDensity,
       openMenu,
+      activePage,
     ),
   );
   await syscall("editor.replaceRange", edit.from, edit.to, edit.insert);
@@ -3262,11 +3369,28 @@ async function revealDirective(atomId) {
   return { ok: false, error: "Could not find that atom's directive" };
 }
 
+/**
+ * Refuses a group-level write on an invalid marker, and says why.
+ *
+ * A faulted group has no usable identity, so a rewrite keyed on its id would
+ * either miss or hit the wrong marker. Rule 6 says the view writes no document
+ * byte on its own, and that includes a repair it only thinks it understands.
+ */
+async function refuseFaultedGroup(unit) {
+  if (!unit || !unit.groupFault) return false;
+  const page = await syscall("editor.getCurrentPage").catch(() => undefined);
+  await warnUser(groupFaultText(unit, page));
+  return true;
+}
+
 async function renameGroupHere(groupId) {
   const current = await syscall("editor.getText");
   const unit = computeUnits(current).units.find(function (u) {
     return u.unitKey === "group:" + groupId;
   });
+  if (await refuseFaultedGroup(unit)) {
+    return { ok: false, error: groupFaultText(unit, null) };
+  }
   const typed = await syscall(
     "editor.prompt",
     "Group name",
@@ -3286,6 +3410,12 @@ async function renameGroupHere(groupId) {
 
 async function ungroupHere(groupId) {
   const current = await syscall("editor.getText");
+  const target = computeUnits(current).units.find(function (u) {
+    return u.unitKey === "group:" + groupId;
+  });
+  if (await refuseFaultedGroup(target)) {
+    return { ok: false, error: groupFaultText(target, null) };
+  }
   const result = removeGroupMarkers(current, groupId);
   if (!result.ok) {
     await warnUser(result.error);
@@ -3363,7 +3493,7 @@ async function ungroupSelection() {
     await warnUser(message);
     return { ok: false, error: message };
   }
-  return await ungroupHere(unit.groupId);
+  return await ungroupHere(unit.groupKey);
 }
 
 const functionMapping = {
@@ -3490,6 +3620,11 @@ const internals = {
   slugConflict,
   deriveGroupSlug,
   slugOrId,
+  groupIdentity,
+  groupIdText,
+  groupLabel,
+  groupFaultText,
+  materializeHint,
   dedupeKeys,
   isContiguousUnitSelection,
   applyClickSelection,

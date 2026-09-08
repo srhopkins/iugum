@@ -75,6 +75,11 @@ const {
   menuState,
   inlineOnKey,
   groupHeaderHtml,
+  groupIdentity,
+  groupIdText,
+  groupLabel,
+  groupFaultText,
+  materializeHint,
 } = plug.internals;
 
 // A page with the shapes that matter: the document marker, a standalone atom,
@@ -1901,4 +1906,209 @@ test("the manifest wires one command per user action and one function per event"
       `${name} is in the manifest but not in the function mapping`,
     );
   });
+});
+
+
+// --- iugum-39j: an invalid group marker ------------------------------------
+//
+// Measured on a real page: seven atom-group markers with no `id` attribute.
+// The group's identity was its id, so all seven resolved to the key
+// `group:null`, every card was attributed to every group, and the view emitted
+// the card chrome once per atom-group pair - seven copies of every card. The
+// bar printed the literal word `null` where the id belongs and a count of 44
+// against 50 real atoms. Only the chrome duplicated, which is the tell that
+// the fault is in group membership rather than in rendering.
+
+const TWO_IDLESS_GROUPS = [
+  '<!-- <atomdown version="1"/> -->',
+  "",
+  '<!-- <atom-group slug="spf"> -->',
+  '<!-- <atom id="AAAAAAAA"/> -->',
+  "- first",
+  "",
+  '<!-- <atom id="BBBBBBBB"/> -->',
+  "- second",
+  "<!-- </atom-group> -->",
+  "",
+  '<!-- <atom-group slug="dkim"> -->',
+  '<!-- <atom id="CCCCCCCC"/> -->',
+  "- third",
+  "",
+  '<!-- <atom id="DDDDDDDD"/> -->',
+  "- fourth",
+  "<!-- </atom-group> -->",
+  "",
+].join("\n");
+
+const DUPLICATE_GROUP_IDS = [
+  '<!-- <atomdown version="1"/> -->',
+  "",
+  '<!-- <atom-group id="7K3M9X2D" slug="spf"> -->',
+  '<!-- <atom id="AAAAAAAA"/> -->',
+  "- first",
+  "<!-- </atom-group> -->",
+  "",
+  '<!-- <atom-group id="7K3M9X2D" slug="dkim"> -->',
+  '<!-- <atom id="BBBBBBBB"/> -->',
+  "- second",
+  "<!-- </atom-group> -->",
+  "",
+].join("\n");
+
+test("groupIdentity: a missing id is a fault and a line-anchored key", () => {
+  assert.deepEqual(groupIdentity(null, 4, []), {
+    groupKey: "@4",
+    fault: "no-id",
+  });
+  assert.deepEqual(groupIdentity("", 7, []), {
+    groupKey: "@7",
+    fault: "no-id",
+  });
+  assert.deepEqual(groupIdentity("7K3M9X2D", 2, []), {
+    groupKey: "7K3M9X2D",
+    fault: null,
+  });
+  assert.deepEqual(groupIdentity("7K3M9X2D", 9, ["7K3M9X2D"]), {
+    groupKey: "@9",
+    fault: "duplicate-id",
+  });
+});
+
+test("two id-less groups are two units with two distinct keys", () => {
+  const { units } = computeUnits(TWO_IDLESS_GROUPS);
+  const groups = units.filter((u) => u.kind === "group");
+  assert.equal(groups.length, 2);
+  assert.notEqual(groups[0].unitKey, groups[1].unitKey);
+  assert.deepEqual(groups.map((g) => g.groupFault), ["no-id", "no-id"]);
+});
+
+test("every card belongs to exactly one group", () => {
+  const { cards } = computeCards(TWO_IDLESS_GROUPS);
+  const ids = cards.map((c) => c.cardKey);
+  assert.deepEqual(ids, [
+    "atom:AAAAAAAA",
+    "atom:BBBBBBBB",
+    "atom:CCCCCCCC",
+    "atom:DDDDDDDD",
+  ]);
+  const perGroup = {};
+  cards.forEach((c) => {
+    perGroup[c.groupUnitKey] = (perGroup[c.groupUnitKey] || 0) + 1;
+  });
+  assert.deepEqual(Object.values(perGroup), [2, 2]);
+});
+
+test("a card's chrome is emitted once, not once per group", () => {
+  const payload = buildDecorations(TWO_IDLESS_GROUPS, []);
+  const cardBoxes = payload.marks.filter((m) => m.class === "atomdown-card");
+  assert.equal(cardBoxes.length, 4);
+  const headerNames = payload.widgets
+    .filter((w) => w.class.includes("atomdown-card-header"))
+    .map((w) => w.id);
+  assert.equal(headerNames.length, 4);
+  assert.equal(new Set(headerNames).size, 4);
+  // And every mark name is unique, which is what a colliding key destroyed.
+  const names = payload.marks.map((m) => m.id);
+  assert.equal(new Set(names).size, names.length);
+});
+
+test("two groups sharing one id stay two groups", () => {
+  const { units, cards } = computeCards(DUPLICATE_GROUP_IDS);
+  const groups = units.filter((u) => u.kind === "group");
+  assert.equal(groups.length, 2);
+  assert.notEqual(groups[0].unitKey, groups[1].unitKey);
+  assert.deepEqual(groups.map((g) => g.groupFault), [null, "duplicate-id"]);
+  assert.equal(cards.length, 2);
+  const payload = buildDecorations(DUPLICATE_GROUP_IDS, []);
+  assert.equal(
+    payload.marks.filter((m) => m.class === "atomdown-card").length,
+    2,
+  );
+});
+
+test("the group bar counts the cards it actually shows", () => {
+  const payload = buildDecorations(TWO_IDLESS_GROUPS, []);
+  const bars = payload.widgets.filter((w) =>
+    w.class.includes("atomdown-group-header")
+  );
+  assert.equal(bars.length, 2);
+  for (const bar of bars) {
+    assert.ok(bar.html.includes('class="atomdown-group-count-n">2<'));
+  }
+});
+
+test("the group bar never prints the word null", () => {
+  for (const density of ["comfortable", "compact"]) {
+    const payload = buildDecorations(TWO_IDLESS_GROUPS, [], [], density);
+    const bars = payload.widgets.filter((w) =>
+      w.class.includes("atomdown-group-header")
+    );
+    assert.equal(bars.length, 2);
+    for (const bar of bars) {
+      assert.ok(!bar.html.includes("null"));
+      assert.ok(bar.html.includes('class="atomdown-group-id"'));
+      assert.ok(bar.html.includes(">no id<"));
+    }
+  }
+});
+
+test("the bar names the fault and the command that repairs it", () => {
+  const payload = buildDecorations(
+    TWO_IDLESS_GROUPS,
+    [],
+    [],
+    "comfortable",
+    null,
+    "Reference/email-sending-domain-status",
+  );
+  const bars = payload.widgets.filter((w) =>
+    w.class.includes("atomdown-group-header")
+  );
+  for (const bar of bars) {
+    assert.ok(bar.html.includes('class="atomdown-group-fault"'));
+    assert.ok(bar.html.includes("INVALID GROUP"));
+    assert.ok(bar.html.includes("has no id"));
+    assert.ok(
+      bar.html.includes(
+        "atomdown materialize -w Reference/email-sending-domain-status",
+      ),
+    );
+  }
+});
+
+test("a valid document gains no fault chrome at all", () => {
+  for (const density of ["comfortable", "compact"]) {
+    const payload = buildDecorations(PAGE, [], [], density);
+    for (const widget of payload.widgets) {
+      assert.ok(!widget.html.includes("atomdown-group-fault"));
+      assert.ok(!widget.html.includes("INVALID GROUP"));
+    }
+  }
+});
+
+test("groupLabel names a group with neither slug nor id", () => {
+  assert.equal(
+    groupLabel({ groupId: null, groupSlug: null, startLine: 4 }),
+    "the group at line 5",
+  );
+  assert.equal(groupLabel({ groupId: "7K3M9X2D", groupSlug: null }), "7K3M9X2D");
+  assert.equal(groupLabel({ groupId: "7K3M9X2D", groupSlug: "spf" }), "spf");
+});
+
+test("groupIdText and materializeHint say missing rather than null", () => {
+  assert.equal(groupIdText({ groupId: null, groupFault: "no-id" }), "no id");
+  assert.equal(groupIdText({ groupId: "7K3M9X2D", groupFault: null }), "7K3M9X2D");
+  assert.equal(groupFaultText({ groupFault: null }, "Page"), "");
+  assert.equal(materializeHint(null), "atomdown materialize -w <file>");
+  assert.equal(
+    materializeHint("Todo/running"),
+    "atomdown materialize -w Todo/running",
+  );
+});
+
+test("removeGroupMarkers cannot be aimed at a faulted group by its slug", () => {
+  // The key of a faulted group is line-anchored, so nothing that spells an id
+  // reaches it, and the group-level commands refuse it outright.
+  assert.equal(removeGroupMarkers(TWO_IDLESS_GROUPS, "spf").ok, false);
+  assert.equal(setGroupSlugInSource(TWO_IDLESS_GROUPS, "@2", "x").ok, false);
 });

@@ -73,6 +73,11 @@ const {
   findAtomBlockLines,
   replaceAtomBlockInSource,
   setAtomDigestsInSource,
+  groupIdentity,
+  groupIdText,
+  groupLabel,
+  groupFaultText,
+  materializeHint,
 } = plug.internals;
 
 // --- Fixtures --------------------------------------------------------------
@@ -130,6 +135,9 @@ function cardsFrom(sourceText) {
     id: a.id,
     implicit: a.implicit,
     groupId: a.groupId || null,
+    // The IDENTITY, which is not the id when the marker is invalid. The panel
+    // ships this to its own script, so the test's stand-in carries it too.
+    groupKey: a.groupKey || null,
   }));
 }
 
@@ -218,16 +226,22 @@ test("pickDropTarget: a group's members share one unit key", () => {
 // --- unit keys and order ---------------------------------------------------
 
 test("unitKeyForCard: a grouped card resolves to its group", () => {
-  assert.equal(unitKeyForCard({ id: "A", groupId: null }), "atom:A");
-  assert.equal(unitKeyForCard({ id: "A", groupId: "G" }), "group:G");
+  assert.equal(unitKeyForCard({ id: "A", groupKey: null }), "atom:A");
+  assert.equal(unitKeyForCard({ id: "A", groupKey: "G" }), "group:G");
+  // iugum-39j: the key is the group's IDENTITY, not its id attribute. Two
+  // id-less groups both carry groupId null and must still be two units.
+  assert.notEqual(
+    unitKeyForCard({ id: "A", groupId: null, groupKey: "@4" }),
+    unitKeyForCard({ id: "B", groupId: null, groupKey: "@9" }),
+  );
 });
 
 test("unitOrderFromCards collapses a group's members into one unit", () => {
   const order = unitOrderFromCards([
-    { id: "A", groupId: null },
-    { id: "B", groupId: "G" },
-    { id: "C", groupId: "G" },
-    { id: "D", groupId: null },
+    { id: "A", groupKey: null },
+    { id: "B", groupKey: "G" },
+    { id: "C", groupKey: "G" },
+    { id: "D", groupKey: null },
   ]);
   assert.deepEqual(order, ["atom:A", "group:G", "atom:D"]);
 });
@@ -2609,7 +2623,7 @@ test("the group menu carries what the thin bar folded into it", () => {
   assert.ok(html.includes('data-group-menu-toggle="3G7K9R5V"'));
   assert.ok(html.includes('data-group-menu-popover="3G7K9R5V"'));
   // Identity, then the two actions, then the density readout.
-  assert.ok(script.includes('identityLabel("group", slug, groupId)'));
+  assert.ok(script.includes('identityLabel("group", slug, labelId)'));
   assert.ok(script.includes('renameItem.textContent = "Rename"'));
   assert.ok(script.includes('ungroupItem.textContent = "Ungroup"'));
   assert.ok(script.includes('"Density: " + DENSITY'));
@@ -4163,4 +4177,174 @@ test("a redraw after an edit never re-writes the open flag", async () => {
   );
   assert.deepEqual(sets, []);
   assert.equal(boardOpenKey(GROUP_PAGE) in state.store, false);
+});
+
+
+// --- iugum-39j: an invalid group marker ------------------------------------
+//
+// Two groups with no id, in one document. The `id` attribute used to be the
+// group's identity, so both resolved to one key: `buildStripHtml` read the
+// null id as "not grouped" and lost the containers, and the inline view drew
+// every card once per group.
+
+const TWO_IDLESS_GROUPS = [
+  '<!-- <atomdown version="1"/> -->',
+  '<!-- <atom-group slug="spf"> -->',
+  '<!-- <atom id="AAAAAAAA"/> -->',
+  "First.",
+  '<!-- <atom id="BBBBBBBB"/> -->',
+  "Second.",
+  "<!-- </atom-group> -->",
+  "",
+  '<!-- <atom-group slug="dkim"> -->',
+  '<!-- <atom id="CCCCCCCC"/> -->',
+  "Third.",
+  '<!-- <atom id="DDDDDDDD"/> -->',
+  "Fourth.",
+  "<!-- </atom-group> -->",
+  "",
+].join("\n");
+
+const DUPLICATE_GROUP_IDS = [
+  '<!-- <atomdown version="1"/> -->',
+  '<!-- <atom-group id="KF53ASNE"> -->',
+  '<!-- <atom id="AAAAAAAA"/> -->',
+  "First.",
+  "<!-- </atom-group> -->",
+  "",
+  '<!-- <atom-group id="KF53ASNE"> -->',
+  '<!-- <atom id="BBBBBBBB"/> -->',
+  "Second.",
+  "<!-- </atom-group> -->",
+  "",
+].join("\n");
+
+test("groupIdentity: a missing id is a fault and a line-anchored key", () => {
+  assert.deepEqual(groupIdentity(null, 4, []), {
+    groupKey: "@4",
+    fault: "no-id",
+  });
+  assert.deepEqual(groupIdentity("", 7, []), {
+    groupKey: "@7",
+    fault: "no-id",
+  });
+  assert.deepEqual(groupIdentity("KF53ASNE", 2, []), {
+    groupKey: "KF53ASNE",
+    fault: null,
+  });
+  assert.deepEqual(groupIdentity("KF53ASNE", 9, ["KF53ASNE"]), {
+    groupKey: "@9",
+    fault: "duplicate-id",
+  });
+});
+
+test("two id-less groups are two units, not one", () => {
+  const keys = computeUnits(TWO_IDLESS_GROUPS).units.map((u) => u.unitKey);
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(new Set(keys).size, 2);
+});
+
+test("two id-less groups render every card exactly once", () => {
+  const html = densityHtml(TWO_IDLESS_GROUPS, "comfortable");
+  for (const id of ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD"]) {
+    assert.equal(
+      html.split('data-atom-id="' + id + '"').length - 1,
+      1,
+      id + " should be drawn once",
+    );
+  }
+  // Two containers, each with two cards, and the count says two.
+  assert.equal(html.split('class="board-group"').length - 1, 2);
+  assert.equal(
+    html.split('<span class="board-group-count-n">2</span>').length - 1,
+    2,
+  );
+});
+
+test("two groups sharing one id stay two groups", () => {
+  const html = densityHtml(DUPLICATE_GROUP_IDS, "comfortable");
+  assert.equal(html.split('class="board-group"').length - 1, 2);
+  assert.equal(html.split('data-atom-id="AAAAAAAA"').length - 1, 1);
+  assert.equal(html.split('data-atom-id="BBBBBBBB"').length - 1, 1);
+  assert.ok(html.includes("used by more than one group"));
+});
+
+test("the group header never prints the word null", () => {
+  for (const density of ["comfortable", "compact"]) {
+    const html = densityHtml(TWO_IDLESS_GROUPS, density);
+    const bars = html.split('class="board-group-id"').slice(1);
+    assert.equal(bars.length, 2);
+    for (const bar of bars) {
+      const shown = bar.slice(bar.indexOf(">") + 1, bar.indexOf("</span>"));
+      assert.notEqual(shown.trim(), "null");
+      assert.equal(shown.trim(), "no id");
+    }
+  }
+  assert.ok(!densityHtml(TWO_IDLESS_GROUPS, "compact").includes(">null<"));
+});
+
+test("the header names the fault and the command that repairs it", () => {
+  const html = buildBoardHtml(
+    parseAtoms(TWO_IDLESS_GROUPS),
+    "Reference/email-sending-domain-status",
+    [],
+    null,
+    "comfortable",
+  ).html;
+  // One element per group, and its own CSS rule and the compact override
+  // mention the class too.
+  assert.equal(html.split('class="board-group-fault"').length - 1, 2);
+  assert.ok(html.includes("INVALID GROUP"));
+  assert.ok(html.includes("has no id"));
+  assert.ok(
+    html.includes(
+      "atomdown materialize -w Reference/email-sending-domain-status",
+    ),
+  );
+});
+
+test("a valid document gains no fault chrome at all", () => {
+  for (const source of [THREE_ATOMS, TIGHT_GROUP, LOOSE_GROUP]) {
+    for (const density of ["comfortable", "compact"]) {
+      const html = densityHtml(source, density);
+      // The class is always in the stylesheet; the ELEMENT is what a valid
+      // document must not gain.
+      assert.ok(!html.includes('class="board-group-fault"'));
+      assert.ok(!html.includes("INVALID GROUP"));
+    }
+  }
+});
+
+test("groupLabel names a group that has neither slug nor id", () => {
+  assert.equal(
+    groupLabel({ groupId: null, groupSlug: null, startLine: 4 }),
+    "the group at line 5",
+  );
+  assert.equal(groupLabel({ groupId: "KF53ASNE", groupSlug: null }), "KF53ASNE");
+  assert.equal(groupLabel({ groupId: "KF53ASNE", groupSlug: "claims" }), "claims");
+});
+
+test("groupIdText and groupFaultText say missing rather than null", () => {
+  assert.equal(groupIdText({ groupId: null, groupFault: "no-id" }), "no id");
+  assert.equal(groupIdText({ groupId: "KF53ASNE", groupFault: null }), "KF53ASNE");
+  assert.equal(groupFaultText({ groupFault: null }, "Page"), "");
+  assert.equal(materializeHint(null), "atomdown materialize -w <file>");
+  assert.equal(materializeHint("Todo/running"), "atomdown materialize -w Todo/running");
+});
+
+test("the view writes no byte when it refuses an invalid group", async () => {
+  const { calls } = await closedStart(TWO_IDLESS_GROUPS);
+  const before = calls.length;
+  const rename = await plug.functionMapping.setGroupSlug("@1", "renamed");
+  assert.equal(rename.ok, false);
+  assert.ok(rename.error.includes("INVALID GROUP"));
+  const ungroup = await plug.functionMapping.ungroupAtoms("@1");
+  assert.equal(ungroup.ok, false);
+  assert.ok(ungroup.error.includes("INVALID GROUP"));
+  const writes = calls.slice(before).filter((c) =>
+    c.name === "editor.replaceRange" || c.name === "editor.setText" ||
+    c.name === "space.writePage"
+  );
+  assert.deepEqual(writes, []);
 });
