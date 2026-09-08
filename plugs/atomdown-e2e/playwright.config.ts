@@ -97,7 +97,7 @@ export default defineConfig({
        * whose failure mode is "the test does not run" has to name its files.
        */
       name: "atomdown",
-      testMatch: /\/(1|2|3|4|5|6|7|8|10|11)-.*\.test\.ts$/,
+      testMatch: /\/(1|2|3|4|5|6|7|8|10|11|12)-.*\.test\.ts$/,
     },
     {
       /**

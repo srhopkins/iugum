@@ -856,6 +856,37 @@ html {
   opacity: 0.8;
 }
 
+/* THE INVALID-MARKER NOTICE (iugum-39j).
+
+   A group whose marker carries no id, or an id another group already used,
+   cannot be told apart from that other group. The view refuses to guess and
+   says so here, in the bar of the group it is about, with the command that
+   repairs the document. Nothing repairs it automatically: rule 6 keeps the
+   view read-only.
+
+   It is emitted ONLY for a faulted group, so a valid page gains no chrome,
+   and it is never folded away by compact - the group id and the GROUP label
+   are, but a fault the reader cannot see is the whole defect this exists for.
+   `flex-basis: 100%` puts it on its own row of the bar rather than squeezing
+   the name and the count out of theirs. */
+.atomdown-group-fault {
+  flex-basis: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 2px 0 0 0;
+  color: var(--editor-error-color, #b3261e);
+}
+
+.sb-decoration-widget.atomdown-group-header:hover .atomdown-group-fault,
+.sb-decoration-widget.atomdown-group-header:has(
+    + .cm-line.atomdown-group-hover
+  ) .atomdown-group-fault {
+  /* On the saturated accent fill the error red goes muddy, so the notice
+     takes the bar's own contrast colour there and keeps its weight. */
+  color: var(--ui-accent-contrast-color, #fff);
+}
+
 /* ONE MENU, NOT TWO BUTTONS, AT BOTH DENSITIES. The panel shows Rename and
    Ungroup as buttons at comfortable density and folds them into a menu at
    compact. The inline view uses the menu at both, because its narrowest
@@ -1520,6 +1551,14 @@ html {
    group whose resting outline is invisible still has to be findable. */
 .sb-decoration-widget.atomdown-group-header.atomdown-compact {
   flex-wrap: nowrap;
+}
+
+/* Compact keeps one row, EXCEPT when the group is invalid: the notice needs a
+   row of its own, and a notice squeezed to nothing is the defect back. */
+.sb-decoration-widget.atomdown-group-header.atomdown-compact:has(
+    .atomdown-group-fault
+  ) {
+  flex-wrap: wrap;
 }
 
 .atomdown-compact .atomdown-group-kind,
