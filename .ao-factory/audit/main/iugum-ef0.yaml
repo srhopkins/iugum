@@ -1,0 +1,8 @@
+bead: iugum-ef0
+namespace: main
+search_query: "bug go embed of a gitignored binary makes a fresh checkout unbuildable"
+candidates: []
+associated_issues: none
+duplicate_issues: none
+checked_at: 2026-09-08T05:40:05Z
+written_by: ayo-related-set

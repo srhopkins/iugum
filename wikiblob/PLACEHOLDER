@@ -1,0 +1,21 @@
+This file exists so `//go:embed wikiblob/*` in main.go always matches something.
+
+WHY IT IS TRACKED AND THE BINARY IS NOT. The SilverBullet server binary is
+36MB of build output, so it stays gitignored. But //go:embed is a compile-time
+pattern and a pattern that matches nothing is a hard error, so a fresh clone or
+a fresh `git worktree add` could not build at all:
+
+    pattern silverbullet/silverbullet: no matching files found
+
+Three agents and one session hit that in one evening. The first workaround was
+worse than the problem: a build script wrote an empty 0644 placeholder so the
+compile would succeed, and then `cp` onto that existing file kept the
+DESTINATION's mode, so the copied server came out non-executable and the wiki
+refused to start.
+
+A directory pattern only needs ONE match. This file is that match. A fresh
+checkout compiles immediately, embedding only these bytes, and
+`iugum wiki` then fails with a message naming the build script rather than
+with a compile error or a silent empty file.
+
+Do not delete this file. Do not put anything but the server binary beside it.
