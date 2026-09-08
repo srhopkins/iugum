@@ -290,7 +290,18 @@ html {
      group, the card's edge says which card inside it. It is a colour change
      only - no width, no shadow, no inset - because rule 3 says reading the
      page may not move it. */
-  --board-card-border-hover-color: var(--board-accent-color);
+  /* HOVER IS A MUTED ACCENT, SELECTED IS THE FULL ONE. Both used to be
+     `--board-accent-color`, and at compact that left only TWO border colours
+     for three states: rest is the page background there, so hovered and
+     selected were the same colour and only a 1px inset ring told them apart.
+     A hover you can distinguish only by a hairline is not a hover a reader
+     sees. Three states, three colours; the ring stays as the second signal on
+     selected, not the only one. */
+  --board-card-border-hover-color: color-mix(
+    in srgb,
+    var(--board-accent-color) 55%,
+    var(--board-card-border-color)
+  );
 }
 
 /* ------------------------------------------------------------------ */
