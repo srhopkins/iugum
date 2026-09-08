@@ -178,6 +178,22 @@ func resolveBinary() (string, func(), error) {
 
 // writeEmbedded copies the embedded release binary to a temporary file.
 func writeEmbedded() (string, func(), error) {
+	// NO BLOB IS A LEGITIMATE STATE, AND IT HAS TO SAY SO HERE (iugum-ef0).
+	//
+	// main.go embeds the wikiblob DIRECTORY rather than the server file, so a
+	// checkout that has never built one still compiles - which is the whole
+	// point, because //go:embed on the missing file used to break the build
+	// outright. The cost is that this function can now be handed nothing.
+	//
+	// Writing nothing and running it produces "exec format error" from the
+	// kernel, which tells a reader nothing about what to do. Measured on a
+	// fresh worktree before this guard existed. So the empty case is named
+	// here, once, with the command that fixes it.
+	if len(embedbin.Silverbullet) == 0 {
+		return "", nil, fmt.Errorf("wiki: this iugum binary carries no SilverBullet server, so there is nothing to run.\n" +
+			"Build one and re-embed it:  scripts/build-wiki-blob.sh\n" +
+			"Or point at a server this repository did not build:  " + envBin + "=/path/to/silverbullet")
+	}
 	f, err := os.CreateTemp("", "iugum-silverbullet-*")
 	if err != nil {
 		return "", nil, err
