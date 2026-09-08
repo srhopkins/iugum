@@ -16,7 +16,7 @@ scripts/atomdown-fe-check.sh --visual --update-snapshots   # re-take them
 ```
 
 The default runs **two Playwright projects**: `atomdown` (the behavioural rules
-- 1 to 8 and 10) and `visual` (rule 9). They are separate because rule 9 needs
+- 1 to 8, 10, 11 and 12) and `visual` (rule 9). They are separate because rule 9 needs
 its own browser policy - see "Rule 9" below.
 
 The `atomdown` project names its rule numbers explicitly. `[1-8]-` was correct
@@ -114,6 +114,7 @@ So this suite measures the rendered document in a real browser.
 | 6 | **Document immutability.** After every interaction the page's bytes are unchanged and `atomdown lint` and `atomdown verify` both pass. An edit then one undo returns the same bytes. | A silent id, slug or digest rewrite: the file still lints, still renders, and the diff is churn nobody can evaluate. |
 | 10 | **The hanging indent, and what a density may move.** Row 0's first glyph starts at `content box + text-indent` and every later row starts at `content box`; horizontal distances are identical across densities and vertical ones are not; at compact the stroke changes colour and nothing else. | A wrapped bullet whose continuation rows aligned UNDER the marker, because the card's inset was `padding-left !important` plus `text-indent: 0 !important`. A density that halved the distance from a card's border to its first glyph. |
 | 11 | **Selection and card hover, inline.** Click, modifier-click, shift-click, click-the-background, alt-drag, text drag, the card's own hover border - and the MOUSEDOWN PATH that all of them begin with. | The inline view was read-only in practice: no card would select, no lasso would hold, text could not be selected or copied, and only the group's border moved on hover. |
+| 12 | **An invalid group marker degrades visibly.** A group with no id, or two groups sharing one id, draws each card EXACTLY ONCE; the view names the fault in the bar of the group it is about, with the command that repairs it; the word `null` never appears in a group bar; the bar's count equals the cards drawn; no document byte is written. | Seven id-less group markers on a real page drew every card seven times, printed a literal `null` where the id belongs and a count of 44 against 50 atoms. The document was invalid and the view showed duplicates rather than a fault. |
 
 ## Rule 10: the hanging indent, and what a density is allowed to move
 
@@ -311,6 +312,60 @@ the defect. Second: the fixture's own title puts the first card at y=619 of a
 900px viewport, so two units fit on the first screen and the third is under the
 fold at every width. `unitsOnScreen` aligns the first unit under the top bar
 before it measures anything.
+
+## Rule 12: an invalid group marker, and why the VIEW owns it
+
+`12-malformed-markers.test.ts`, for `iugum-39j`. Steve, on a real page: "it
+feels like something is wrong with rendering, when I look at the raw atomdown I
+don't see the repeats."
+
+`_silverbullet/Reference/email-sending-domain-status.md` carried seven
+atom-group markers with no `id`. Both views resolved group membership BY GROUP
+ID, so every id-less group collided on one empty key: every atom was attributed
+to every group, and the inline view emitted the card chrome once per
+atom-group pair. Seven groups gave seven copies of every card; ten gave ten.
+The bar printed the literal word `null` and a count of 44 against 50 real
+atoms.
+
+**The table bodies rendered once. Only the chrome duplicated.** That is the
+tell, and it is why the defect read as a rendering bug: content that appears
+once cannot be a render loop, so the multiplication has to be in the layer that
+decides which cards belong to which group.
+
+**`atomdown lint` reported it correctly. The view never asked.** A reader of a
+rendered page cannot tell a document defect from a rendering defect, so the
+view has to name it. Drawing seven copies is the worst available answer - it
+looks like OUR defect, and it hid a real document error for days.
+
+**The fix is that a group's identity is not its id.** `groupIdentity()` in each
+plug returns a line-anchored key (`@<startLine>`) whenever the id cannot serve
+as identity, and carries the fault with the group. A start line is unique in a
+document by construction, so no two groups can share a key again. The two plugs
+hold identical copies of that function on purpose: they share no module, and
+the standing rule is that the two views behave the same.
+
+**The panel's own collision was different and no better.** `buildStripHtml`
+walks a run of atoms while their group key stays equal, and a null id read as
+"not in a group", so both containers vanished and every card became top-level.
+Two groups sharing one id merged into one container instead. The negative
+control shows both halves: with `groupIdentity` reverted, the inline view drew
+each card's chrome twice and the board reported zero group bars.
+
+**Nothing is repaired automatically.** A repair is a document byte, and rule 6
+keeps both views read-only. The bar names `atomdown materialize -w <file>`,
+which mints ids for id-less groups, and the group-level commands (Rename,
+Ungroup) refuse a faulted group and say why rather than rewriting a marker they
+cannot identify.
+
+**Its own page, not the shared fixture.** `fixture/running.md` is generated by
+the real `atomdown materialize`, so it cannot hold an invalid marker - that is
+the point of it, and rule 6 runs `atomdown lint` against it. Each test here
+writes its own page into its own space.
+
+**The markers carry a slug and no id**, which is the shape the real page had.
+A slug-only marker still parses as a group, so the group is drawn and identity
+is the thing that is missing. A marker with no attributes at all is not
+recognised as a group by either scanner and is a different defect.
 
 ## Area 7: the components
 

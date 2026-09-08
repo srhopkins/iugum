@@ -4,13 +4,14 @@
 #
 #   scripts/atomdown-fe-check.sh            # fast subset, the pre-push gate
 #   scripts/atomdown-fe-check.sh --full     # the whole 16-cell matrix
-#   scripts/atomdown-fe-check.sh --rule 1   # one rule only (1 to 11)
+#   scripts/atomdown-fe-check.sh --rule 1   # one rule only (1 to 12)
 #   scripts/atomdown-fe-check.sh --probe    # print what the views render
 #   scripts/atomdown-fe-check.sh --visual   # rule 9 only, the visual baselines
 #   scripts/atomdown-fe-check.sh --visual --update-snapshots
 #                                           # re-take the baselines, one command
 #
-# THE DEFAULT RUNS EVERY RULE: 1 to 8, 10 and 11 behaviourally, plus 9, which
+# THE DEFAULT RUNS EVERY RULE: 1 to 8, 10, 11 and 12 behaviourally, plus 9,
+# which
 # compares images in its own Playwright project with its own browser policy
 # (Playwright's bundled Chromium only,
 # headless only) — see plugs/atomdown-e2e/9-visual.test.ts. It is in the
@@ -48,7 +49,7 @@ while [ $# -gt 0 ]; do
     --defects) PROJECTS=("defects"); shift ;;
     --visual) PROJECTS=("visual"); shift ;;
     # A rule number picks the file, so it also picks the project: rule 9 is
-    # the visual one; 1 to 8, 10 and 11 are behavioural.
+    # the visual one; 1 to 8, 10, 11 and 12 are behavioural.
     --rule) GREP="$2"
             if [ "$2" = "9" ]; then PROJECTS=("visual"); else PROJECTS=("atomdown"); fi
             shift 2 ;;
