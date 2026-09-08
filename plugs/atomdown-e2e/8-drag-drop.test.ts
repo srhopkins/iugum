@@ -253,6 +253,68 @@ async function scrollToEnd(page: Page) {
   await settle(page, 4);
 }
 
+/**
+ * Scroll so the END of the document is on screen AND the unit before the last
+ * one has its HEADER on screen, because the grip lives in the header.
+ *
+ * WHY THE TWO TAIL CASES NEED THIS, measured (`iugum-hkk`, probe payloads).
+ * `scrollToEnd` scrolls to the maximum `scrollTop`, and the editor keeps about
+ * 390px of empty scroll space after the last line. So the end of the document
+ * settles at about y=510 in an 844px scroller and everything above it is
+ * pushed up. The fixture's second-to-last unit wraps to between 430px and
+ * 680px, which put its header — and its grip — ABOVE the top of the viewport
+ * in seven of the eight cells. The press then landed at a negative y on no
+ * element, the seam started no drag, and the document did not change: the
+ * gesture the case describes never happened, so the case was measuring
+ * nothing rather than measuring a misplaced drop.
+ *
+ * The scroll is therefore stated as the constraint the gesture has, not as
+ * "the bottom": pull the source's header just below the top of the scroller,
+ * and refuse the run if the release point below the last unit does not then
+ * fit inside the viewport, because a press or a release outside it hits
+ * nothing and would read as "the drop did not move the unit".
+ */
+async function scrollToTail(page: Page) {
+  await scrollToEnd(page);
+  /** The scroller's own rect, and where it is scrolled to. */
+  const scroller = () =>
+    page.evaluate(() => {
+      const el = document.querySelector(".cm-scroller")! as HTMLElement;
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, scrollTop: el.scrollTop };
+    });
+  // A few passes, because scrolling re-renders: the band that was
+  // second-to-last can be measured again once the rows above it exist.
+  for (let i = 0; i < 6; i++) {
+    const list = await bands(page);
+    if (list.length < 2) break;
+    const box = await scroller();
+    const wanted = box.top + 12 - list[list.length - 2].headerTop;
+    if (wanted <= 0) break;
+    await page.evaluate((dy) => {
+      const el = document.querySelector(".cm-scroller")! as HTMLElement;
+      el.scrollTop -= dy;
+    }, wanted);
+    await settle(page, 4);
+  }
+  const list = await bands(page);
+  const box = await scroller();
+  expect(
+    list.length,
+    "the end of the fixture must render at least two top-level units",
+  ).toBeGreaterThanOrEqual(2);
+  expect(
+    list[list.length - 2].headerTop,
+    "the source unit's grip is above the viewport, so the press would land " +
+      "on nothing and the seam would start no drag",
+  ).toBeGreaterThan(box.top);
+  expect(
+    list[list.length - 1].contentBottom + 8,
+    "the release point below the last unit is outside the viewport, so the " +
+      "release would land on nothing",
+  ).toBeLessThan(box.bottom);
+}
+
 /** Move one entry of a list to a new index, the expected-order oracle. */
 function moved(order: string[], from: number, to: number): string[] {
   const out = order.slice();
@@ -515,7 +577,7 @@ for (const width of WIDTHS) {
         // --- The other end of the document ------------------------------
 
         // 6. BELOW THE LAST UNIT is still the end of the page.
-        await scrollToEnd(page);
+        await scrollToTail(page);
         await expectDrop(page, server, "below the last unit", combo, (b) => {
           expect(
             b.length,
@@ -532,7 +594,7 @@ for (const width of WIDTHS) {
         });
 
         // 7. THE LAST UNIT, dragged up by one position.
-        await scrollToEnd(page);
+        await scrollToTail(page);
         await expectDrop(
           page,
           server,
