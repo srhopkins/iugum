@@ -87,6 +87,12 @@ html {
 
   --editor-caret-color: black;
   --editor-selection-background-color: #d7e1f6;
+  /* The selection layer paints IN FRONT of the content, so it has to blend
+     rather than cover - see .cm-selectionLayer in colors.scss. `multiply` is
+     the highlighter-pen operator: white paper times pale blue is that same
+     pale blue, and black text times anything stays black, so a light theme
+     keeps this opaque colour and loses no letter. */
+  --editor-selection-blend-mode: multiply;
   --editor-panels-bottom-color: inherit;
   --editor-panels-bottom-background-color: #e1e1e1;
   --editor-panels-bottom-border-color: #cacaca;
@@ -270,7 +276,16 @@ html[data-theme="dark"] {
   --action-button-active-color: #37a1ed;
 
   --editor-caret-color: #fff;
-  --editor-selection-background-color: #d7e1f630;
+  /* OPAQUE AND DARK, ON PURPOSE. `screen` is the dark-page mirror of
+     `multiply`: a near-black page screened with this becomes this, and light
+     text screened with a dark colour stays light. A translucent value would
+     work too, but an opaque one makes the result independent of what any
+     theme, including a space's own stylesheet, puts here - and a space
+     theme overriding this with an opaque colour is exactly what broke the
+     first version of this fix. */
+  --editor-selection-background-color: #2a3a4a;
+  /* `multiply` would turn this band black on a dark page. */
+  --editor-selection-blend-mode: screen;
   --editor-panels-bottom-color: #fff;
   --editor-panels-bottom-background-color: #262626;
   --editor-panels-bottom-border-color: rgb(62, 62, 62);

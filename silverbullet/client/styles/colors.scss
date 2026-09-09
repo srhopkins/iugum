@@ -155,6 +155,33 @@
     font-family: var(--editor-font);
   }
 
+  /* IN FRONT OF THE CONTENT, NOT BEHIND IT. CodeMirror's own stylesheet puts
+     this layer at z-index -2, behind the text, which works only while nothing
+     in the text paints a background of its own. Anything that does - an
+     inline code span, a table cell, a blockquote, an atomdown card surface -
+     hid the highlight completely: the text still selected and the clipboard
+     still got the right bytes, but the user saw a selection with holes in it,
+     or none at all.
+
+     A layer in front covers the text instead, so it has to blend. The blend
+     mode is a theme token because the right operator differs by theme; see
+     --editor-selection-blend-mode in theme.scss.
+
+     `!important` IS REQUIRED HERE and is not a specificity shortcut:
+     CodeMirror writes `z-index: -2` into the layer element's own `style`
+     attribute (see its `layer.ts`), and an inline declaration beats every
+     selector. There is no extension option for it. */
+  .cm-selectionLayer {
+    z-index: 1 !important;
+    mix-blend-mode: var(--editor-selection-blend-mode, normal);
+    /* AND IT MUST NOT EAT THE POINTER. CodeMirror sets no `pointer-events`
+       on this layer because a layer behind the text never receives any. In
+       front, it covers the whole content and swallowed every click: the
+       atomdown suite caught it as shift-click no longer extending a card
+       selection. */
+    pointer-events: none;
+  }
+
   .cm-selectionBackground {
     background-color: var(--editor-selection-background-color);
   }
