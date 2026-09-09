@@ -1038,7 +1038,7 @@ for (const theme of THEMES) {
         await view.close();
       });
       // ---------------------------------------------------------------- 11k
-      test(`11k: the selection highlight paints in front of the card surface [${comboName(combo)}]`, async ({
+      test(`11k: the selection highlight paints in front of every content background [${comboName(combo)}]`, async ({
         page,
       }) => {
         await gotoFixture(page, server);
@@ -1046,61 +1046,147 @@ for (const theme of THEMES) {
         const view = await openInline(page);
         await setDensity(view, combo.density);
 
-        // Z-ORDER, NOT A PIXEL COMPARE. The card surface, the group surface
-        // and CodeMirror's selection layer all sit at negative z-index in one
-        // shared stacking context, so their order alone decides whether a
-        // highlight is visible - and reading the three numbers says WHICH one
-        // covered the selection when this fails. A screenshot diff would only
-        // say that something changed colour.
-        const z = await page.evaluate(() => {
-          const num = (v: string) => v === "auto" ? 0 : Number(v);
-          const cardEl = document.querySelector(
-            ".cm-line.atomdown-card-line",
-          );
-          const groupEl = document.querySelector(
-            ".cm-line.atomdown-group-line",
-          );
-          const layerEl = document.querySelector(".cm-selectionLayer");
+        // WHY THIS RULE IS ABOUT A LAYER AND NOT ABOUT CARDS. CodeMirror ships
+        // its selection layer at z-index -2, BEHIND the text, which works only
+        // while nothing in the text paints a background of its own. An inline
+        // code span, a table cell, a blockquote and the card surface all do.
+        // A first fix pushed the card surface further back, and the code spans
+        // still covered the highlight - the text selected, the clipboard was
+        // right, and the user saw a band with holes in it. So the invariant
+        // belongs to the layer, not to any one background: it paints IN FRONT
+        // of all of them, and therefore has to blend rather than cover.
+
+        // A REAL SELECTION FIRST, so every measurement below reads the actual
+        // painted rectangle rather than a theme token. Prefer a line with an
+        // inline code span, which is the background that survived that first
+        // fix; any long line will do for the layer assertions.
+        const target = await page.evaluate(() => {
+          const scroller = document.querySelector(".cm-scroller")!
+            .getBoundingClientRect();
+          const lines = (Array.from(
+            document.querySelectorAll(".cm-line.atomdown-card-line"),
+          ) as HTMLElement[]).filter((line) => {
+            const lr = line.getBoundingClientRect();
+            return (line.textContent ?? "").trim().length > 30 &&
+              lr.top > scroller.top + 4 && lr.bottom < scroller.bottom - 4;
+          });
+          const pick = (withCode: boolean) =>
+            lines.find((line) =>
+              withCode
+                ? Array.from(line.querySelectorAll(".sb-code")).some((c) =>
+                  c.getBoundingClientRect().width > 20
+                )
+                : true
+            );
+          const line = pick(true) ?? pick(false);
+          if (!line) return null;
+          const lr = line.getBoundingClientRect();
+          const code = Array.from(line.querySelectorAll(".sb-code"))
+            .find((c) => c.getBoundingClientRect().width > 20) as
+            | HTMLElement
+            | undefined;
           return {
-            card: cardEl
-              ? num(getComputedStyle(cardEl, "::before").zIndex)
-              : null,
-            group: groupEl
-              ? num(getComputedStyle(groupEl, "::after").zIndex)
-              : null,
-            layer: layerEl ? num(getComputedStyle(layerEl).zIndex) : null,
+            codeText: code ? (code.textContent ?? "").trim() : null,
+            y: +(lr.top + lr.height / 2).toFixed(1),
+            from: +(lr.left + 6).toFixed(1),
+            to: +(code
+              ? code.getBoundingClientRect().right + 6
+              : lr.left + Math.min(240, lr.width - 8)).toFixed(1),
+          };
+        });
+        expect(target, "no card line long enough to select across")
+          .not.toBeNull();
+
+        await parkPointer(page);
+        await page.mouse.move(target!.from, target!.y);
+        await page.mouse.down();
+        for (let i = 1; i <= 8; i++) {
+          await page.mouse.move(
+            target!.from + ((target!.to - target!.from) * i) / 8,
+            target!.y,
+            { steps: 2 },
+          );
+        }
+        await page.mouse.up();
+        await settle(page, 4);
+        await page.waitForTimeout(300);
+
+        const paint = await page.evaluate(() => {
+          const layerEl = document.querySelector(".cm-selectionLayer");
+          const rectEl = document.querySelector(".cm-selectionBackground");
+          if (!layerEl || !rectEl) return null;
+          const cs = getComputedStyle(layerEl);
+          return {
+            z: cs.zIndex === "auto" ? 0 : Number(cs.zIndex),
+            blend: cs.mixBlendMode,
+            // Always an rgb()/rgba() string, whatever form the theme used.
+            colour: getComputedStyle(rectEl).backgroundColor,
+            selected: (globalThis.getSelection()?.toString() ?? ""),
           };
         });
 
-        expect(z.card, "no card line on screen to measure").not.toBeNull();
         expect(
-          z.layer,
-          "CodeMirror draws no selection layer, so this rule cannot be " +
-            "measured - the client's selection drawing changed",
+          paint,
+          "the drag painted no selection rectangle, so there is nothing to " +
+            "measure - rule 11j covers whether the drag selects at all",
         ).not.toBeNull();
 
         expect(
-          z.card! < z.layer!,
-          `the card surface must paint behind the selection layer, or a text ` +
-            `selection is invisible on the card's own text. ` +
-            `card ::before z-index ${z.card}, ` +
-            `.cm-selectionLayer z-index ${z.layer}.`,
+          paint!.z > 0,
+          `the selection layer must paint in front of the content, or any ` +
+            `element with its own background hides the highlight. ` +
+            `.cm-selectionLayer z-index ${paint!.z}.`,
         ).toBe(true);
 
-        if (z.group !== null) {
-          expect(
-            z.group! < z.layer!,
-            `the group surface must paint behind the selection layer too. ` +
-              `group ::after z-index ${z.group}, ` +
-              `.cm-selectionLayer z-index ${z.layer}.`,
-          ).toBe(true);
+        // IN FRONT MEANS IT MUST BLEND, WITH THE RIGHT OPERATOR. A layer over
+        // the text that neither blends nor lets light through paints the
+        // letters out, which is the opposite failure and just as unusable.
+        // `multiply` is the light-page operator and needs a light colour;
+        // `screen` is the dark-page mirror and needs a dark one. Reversing
+        // that polarity paints a solid bar over the text, which is how the
+        // first version of this fix broke every dark theme.
+        const alpha = ((m) => m ? Number(m[1]) : 1)(
+          paint!.colour.match(/rgba?\([^)]*[,/]\s*([\d.]+)\s*\)/),
+        );
+        const nums = (paint!.colour.match(/[\d.]+/g) ?? []).map(Number);
+        const brightness = nums.length >= 3
+          ? (0.2126 * nums[0] + 0.7152 * nums[1] + 0.0722 * nums[2]) / 255
+          : null;
 
-          // AND STILL BEHIND THE CARD, so a selected member card's own
-          // surface is not painted over by the group's.
+        expect(
+          paint!.blend !== "normal" || alpha < 1,
+          `a selection layer in front of the text must blend or be ` +
+            `translucent, or it paints the letters out. ` +
+            `mix-blend-mode ${paint!.blend}, colour ${paint!.colour}.`,
+        ).toBe(true);
+
+        if (brightness !== null && paint!.blend === "multiply") {
           expect(
-            z.group! < z.card!,
-            `the group surface must stay behind the card surface. ` +
-              `group ${z.group}, card ${z.card}.`,
+            brightness > 0.5,
+            `mix-blend-mode multiply needs a LIGHT selection colour - it ` +
+              `darkens what it covers, so a dark colour paints a near-black ` +
+              `bar over the text. colour ${paint!.colour}, ` +
+              `luminance ${brightness.toFixed(2)}.`,
+          ).toBe(true);
+        }
+        if (brightness !== null && paint!.blend === "screen") {
+          expect(
+            brightness < 0.5,
+            `mix-blend-mode screen needs a DARK selection colour - it ` +
+              `lightens what it covers, so a light colour washes the text ` +
+              `out. colour ${paint!.colour}, ` +
+              `luminance ${brightness.toFixed(2)}.`,
+          ).toBe(true);
+        }
+
+        // AND THE HIGHLIGHT REALLY REACHED THE CODE SPAN, or the assertions
+        // above prove nothing about the background that survived fix one.
+        if (target!.codeText) {
+          expect(
+            paint!.selected.includes(target!.codeText),
+            `the drag must cover the inline code span. Wanted ` +
+              `${JSON.stringify(target!.codeText)} inside ` +
+              `${JSON.stringify(paint!.selected.slice(0, 80))}.`,
           ).toBe(true);
         }
         await view.close();
