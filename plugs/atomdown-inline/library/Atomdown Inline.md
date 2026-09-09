@@ -491,12 +491,7 @@ html {
 .cm-line.atomdown-card-line::before {
   content: "";
   position: absolute;
-  /* BEHIND CODEMIRROR'S SELECTION LAYER, which is at -2. This box and that
-     layer share one stacking context, so at -1 this surface painted over
-     every selection rectangle: the text still selected and the clipboard
-     still got the right bytes, but the highlight was invisible on the text
-     and showed only in the margins the surface does not reach. iugum-ack. */
-  z-index: -3;
+  z-index: -1;
   /* NEGATIVE, and by exactly the card's own horizontal padding. An absolutely
      positioned box is placed against its containing block's PADDING box,
      which is inside the transparent inset, so this puts the card's border
@@ -726,10 +721,8 @@ html {
 /* --ad-frame then puts the card's border 2px + the group's padding     */
 /* inside it, the same two numbers as before.                           */
 /*                                                                     */
-/* z-index -4, ONE BEHIND the card's ::before, so a selected member     */
-/* card's own surface is not painted over by the group's. Both sit       */
-/* behind CodeMirror's selection layer at -2, so neither hides a text    */
-/* selection - see the card's own ::before. iugum-ack.                  */
+/* z-index -2, ONE BEHIND the card's ::before, so a selected member     */
+/* card's own surface is not painted over by the group's.               */
 /*                                                                     */
 /* SUBDUED AT REST at --board-group-quiet-border of the accent, full    */
 /* strength when the pointer is anywhere inside the group; at compact   */
@@ -742,7 +735,7 @@ html {
 .cm-line.atomdown-group-line::after {
   content: "";
   position: absolute;
-  z-index: -4;
+  z-index: -2;
   left: calc(-1 * var(--ad-lead));
   right: calc(-1 * var(--ad-lead));
   top: 0;
