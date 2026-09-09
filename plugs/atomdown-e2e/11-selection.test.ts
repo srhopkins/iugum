@@ -33,6 +33,11 @@
  *   11i  None of it writes a document byte.
  *   11j  Dragging across a card's text selects the TEXT, not the card - and a
  *        press with no travel still selects the card.
+ *   11k  THE SELECTION IS ALSO VISIBLE. 11j passed for a whole day while the
+ *        card surface painted over every selection rectangle, so the text was
+ *        selected, the clipboard was right, and the user saw no highlight at
+ *        all - only a band in the margins the surface does not reach. Both
+ *        surfaces must therefore paint BEHIND CodeMirror's selection layer.
  *
  * 11h IS THE POINT OF THIS FILE. The seam's `widgetPressGuard` calls
  * `preventDefault` on a plain `mousedown` inside a widget, on purpose: a press
@@ -1030,6 +1035,74 @@ for (const theme of THEMES) {
           await readPageBytes(server),
           "selecting text must not change one document byte",
         ).toBe(before);
+        await view.close();
+      });
+      // ---------------------------------------------------------------- 11k
+      test(`11k: the selection highlight paints in front of the card surface [${comboName(combo)}]`, async ({
+        page,
+      }) => {
+        await gotoFixture(page, server);
+        await setWidth(page, combo.width);
+        const view = await openInline(page);
+        await setDensity(view, combo.density);
+
+        // Z-ORDER, NOT A PIXEL COMPARE. The card surface, the group surface
+        // and CodeMirror's selection layer all sit at negative z-index in one
+        // shared stacking context, so their order alone decides whether a
+        // highlight is visible - and reading the three numbers says WHICH one
+        // covered the selection when this fails. A screenshot diff would only
+        // say that something changed colour.
+        const z = await page.evaluate(() => {
+          const num = (v: string) => v === "auto" ? 0 : Number(v);
+          const cardEl = document.querySelector(
+            ".cm-line.atomdown-card-line",
+          );
+          const groupEl = document.querySelector(
+            ".cm-line.atomdown-group-line",
+          );
+          const layerEl = document.querySelector(".cm-selectionLayer");
+          return {
+            card: cardEl
+              ? num(getComputedStyle(cardEl, "::before").zIndex)
+              : null,
+            group: groupEl
+              ? num(getComputedStyle(groupEl, "::after").zIndex)
+              : null,
+            layer: layerEl ? num(getComputedStyle(layerEl).zIndex) : null,
+          };
+        });
+
+        expect(z.card, "no card line on screen to measure").not.toBeNull();
+        expect(
+          z.layer,
+          "CodeMirror draws no selection layer, so this rule cannot be " +
+            "measured - the client's selection drawing changed",
+        ).not.toBeNull();
+
+        expect(
+          z.card! < z.layer!,
+          `the card surface must paint behind the selection layer, or a text ` +
+            `selection is invisible on the card's own text. ` +
+            `card ::before z-index ${z.card}, ` +
+            `.cm-selectionLayer z-index ${z.layer}.`,
+        ).toBe(true);
+
+        if (z.group !== null) {
+          expect(
+            z.group! < z.layer!,
+            `the group surface must paint behind the selection layer too. ` +
+              `group ::after z-index ${z.group}, ` +
+              `.cm-selectionLayer z-index ${z.layer}.`,
+          ).toBe(true);
+
+          // AND STILL BEHIND THE CARD, so a selected member card's own
+          // surface is not painted over by the group's.
+          expect(
+            z.group! < z.card!,
+            `the group surface must stay behind the card surface. ` +
+              `group ${z.group}, card ${z.card}.`,
+          ).toBe(true);
+        }
         await view.close();
       });
     }
