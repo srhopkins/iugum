@@ -114,6 +114,7 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum container build [--with LIST] [--code-server 1|0] [--browser 1|0] [--tag T] [--engine E] [--dry-run]
   iugum container stop [--name N] [--engine E] [--dry-run]
   iugum agent init <name>
+  iugum agent run --config FILE [--listen 127.0.0.1:3850]
   iugum agent up|down <name> [--engine E] [--dry-run]
   iugum agent status <name>
   iugum agent ls
@@ -121,7 +122,7 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum agent checkpoint <name>
   iugum beads [bd args...]
   iugum beadview [--port N] [--hostname ADDR] [--dir DIR]
-  iugum wiki [--port N] [--hostname ADDR] [space-dir]
+  iugum wiki [--port N] [--hostname ADDR] [--addons FILE] [space-dir]
   iugum check-wiki-assets [repo-dir]
   iugum observe [--port N] [--hostname ADDR]
   iugum net plan | apply [--dry-run] | show
@@ -150,6 +151,14 @@ func run(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
+	}
+	if len(args) > 1 && args[0] == "agent" && args[1] == "run" {
+		if data, e := nativeAgentDataDir(args[2:]); e != nil {
+			fmt.Fprintf(os.Stderr, "agent config: %v\n", e)
+			return 1
+		} else if data != "" {
+			cfg.DataDir = data
+		}
 	}
 	a, err := app.New(cfg)
 	if err != nil {
@@ -202,9 +211,17 @@ func run(args []string) int {
 		}
 		return runPreparePR(ctx, a, args[3:])
 	case "wiki":
-		port, host, space, code, ok := parseWikiArgs(args[1:])
+		wikiArgs, addons, err := extractWikiAddons(args[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		port, host, space, code, ok := parseWikiArgs(wikiArgs)
 		if !ok {
 			return code
+		}
+		if addons != "" {
+			return runWikiAddons(ctx, a, contract.WikiOpts{Port: port, Host: host, Space: space}, addons, os.Stderr)
 		}
 		if err := a.ServeWiki(ctx, contract.WikiOpts{Port: port, Host: host, Space: space}); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))

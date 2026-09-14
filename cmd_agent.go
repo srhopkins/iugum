@@ -10,11 +10,29 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/srhopkins/iugum/agenthome"
 	"github.com/srhopkins/iugum/app"
 	"gopkg.in/yaml.v3"
 )
 
-const agentUsage = `Usage: iugum agent <init|up|down|status|ls|tui|acp|checkpoint>
+const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls|tui|acp|checkpoint>
+
+  supervisor --home DIRECTORY
+                 print launchd configuration (does not install or start it)
+  policy-apply --home DIRECTORY --file POLICY.csv [--yes]
+                 review and explicitly approve replacing instance policy
+
+  start|stop|attach|status --home DIRECTORY
+                 manage or attach to a native background agent
+
+  home-init NAME DIRECTORY
+                 create a private native agent home with no permission grants
+
+  run --config FILE
+                 run a native agent and its local chat workspace
+
+  clone --config FILE --name NAME --output DIR
+                 create a named candidate with separate writable state
 
   init <name>    create agent.yaml, home/, data/, probes, and starter policy
   up <name>      create the agent network and start its container
@@ -62,11 +80,39 @@ func runAgentIO(ctx context.Context, a *app.App, args []string, stdout, stderr i
 		return 0
 	}
 	switch args[0] {
+	case "supervisor", "policy-apply":
+		return runAgentAdmin(ctx, a, args[0], args[1:], stdout, stderr)
+	case "start", "stop", "attach":
+		return runAgentProcess(ctx, a, args[0], args[1:], stdout, stderr)
+	case "home-init":
+		if len(args) != 3 {
+			fmt.Fprintln(stderr, "Usage: iugum agent home-init NAME DIRECTORY")
+			return 2
+		}
+		if err := a.Check(ctx, "agent", "init"); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := agenthome.Init(args[2], args[1]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Created agent home:", args[2])
+		return 0
+	case "session":
+		return runAgentSession(ctx, a, args[1:], stdout, stderr)
+	case "clone":
+		return runAgentClone(ctx, a, args[1:], stdout, stderr)
+	case "run":
+		return runNativeAgent(ctx, a, args[1:], stdout, stderr)
 	case "init":
 		return runAgentInit(ctx, a, args[1:], stdout, stderr)
 	case "up", "down":
 		return runAgentLifecycle(ctx, a, args[0], args[1:], stdout, stderr)
 	case "status":
+		if len(args) > 1 && strings.HasPrefix(args[1], "--home") {
+			return runAgentProcess(ctx, a, "status", args[1:], stdout, stderr)
+		}
 		return runAgentStatus(ctx, a, args[1:], stdout, stderr)
 	case "ls":
 		return runAgentList(ctx, a, args[1:], stdout, stderr)

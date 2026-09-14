@@ -21,11 +21,14 @@ r = sub, obj, act
 [policy_definition]
 p = sub, obj, act, eft
 
+[role_definition]
+g = _, _
+
 [policy_effect]
 e = some(where (p.eft == allow)) && !some(where (p.eft == deny))
 
 [matchers]
-m = (p.sub == "*" || p.sub == r.sub) && (p.obj == "*" || p.obj == r.obj || keyMatch(r.obj, p.obj)) && (p.act == "*" || p.act == r.act)
+m = (p.sub == "*" || p.sub == r.sub || g(r.sub, p.sub)) && (p.obj == "*" || p.obj == r.obj || keyMatch(r.obj, p.obj)) && (p.act == "*" || p.act == r.act)
 `
 
 const defaultPolicy = `p, *, *, *, allow

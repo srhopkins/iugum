@@ -1,0 +1,9 @@
+# Cached work records
+
+`agentwork.New(selfExecutable, repositories, policyCheck)` creates a read-only cache for configured Beads repositories. Repository configuration maps short human names to paths. The existing beadview fetcher runs the same iugum executable's `beads list --json --all --limit 0`; no separate bd installation or task mutations are used.
+
+Call `Refresh(ctx)` at startup and periodically with a bounded context. Each repository is checked against `project:<canonical-path>` / `read` and `tracker` / `read` before fetching. Failures retain the last successful records and timestamp. `Status(ctx)` reports the latest attempt, last successful check, count and error without fetching.
+
+`Search(ctx, text, scope, exclusions)` immediately returns up to ten cached records. It rechecks current policy per repository, requires all search words, and applies case-insensitive source scope and exclusions. Empty text returns unfinished work, ordering in-progress work first and then priority. Explicit search can find closed work. Dependencies are returned as individual relationships rather than a graph. Search records retain `checked_at`; inspect source status to identify failed refreshes.
+
+`Save(ctx,path)` and `Load(ctx,path)` persist last-known work across restarts. Restoring requires the configured canonical repository path to match and current policy to allow access. Native agents use `data/work-cache.json`, loading it before refreshing so status is immediately available. Each repository fetch has a 30-second timeout. Scheduling and exposing these methods as model tools or UI routes belong to the host. The host must not present a cached state as a new verification. Policy failure hides source records and status. The command's underlying Beads store may perform its own normal housekeeping even though no issue-write command is issued.

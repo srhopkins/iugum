@@ -45,7 +45,7 @@ type Wiki struct{}
 
 func (Wiki) Name() string { return "silverbullet" }
 
-func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
+func (Wiki) Serve(ctx context.Context, opts contract.WikiOpts) error {
 	if opts.Port == 0 {
 		opts.Port = 3000
 	}
@@ -74,7 +74,7 @@ func (Wiki) Serve(_ context.Context, opts contract.WikiOpts) error {
 	if supportsSingle(path) {
 		args = append([]string{"--single"}, args...)
 	}
-	cmd := exec.Command(path, args...)
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("wiki: %w", err)
