@@ -13,3 +13,5 @@ Static presentation belongs here, not in element.style. Runtime panel width and 
 The required frontend gate includes `shared-ui.e2e.mjs` for menu focus, arrows, dismissal and token inheritance, alongside existing feature tests. This stage does not claim the full future visual/accessibility gate or server conversation persistence is implemented.
 
 Reading above the bottom exposes Jump to latest without moving the reading position. Agent drawer outside-click/Escape dismissal restores focus and retains drafts.
+
+Current conversation metadata is served at `/api/conversation` through the same policy and origin checks as chat. The stable `main` ID is scoped by agent namespace. Titles save on the server; browser drafts use agent plus conversation ID and survive refresh. External connections without metadata support cannot save a new title. Legacy browser titles remain a fallback until edited. This does not enable isolated runtime sessions: New remains unavailable until the runtime accepts a conversation identifier.

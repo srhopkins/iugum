@@ -138,6 +138,9 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     let activeName = "Agent";
     let refreshSequence = 0;
     const drafts = new Map();
+    let conversationID="main",savedTitle="",metadataAvailable=false,draftLoaded="";
+    const draftKey=()=>"iugum.chat.draft."+selectedAgent+"."+conversationID;
+    const persistDraft=()=>{drafts.set(selectedAgent,text.value);try{localStorage.setItem(draftKey(),text.value);}catch{error.textContent="Could not save the draft in this browser.";}};
     const route = path => selectedAgent === "default" ? path : "/agents/" + encodeURIComponent(selectedAgent) + path;
     const agentAPI = path => api(route(path));
     const agentPost = (path, value) => post(route(path), value);
@@ -212,6 +215,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 	const modelPicker=node("select");modelPicker.setAttribute("aria-label","Model");modelPicker.disabled=true;modelPicker.title="Configured model; runtime model switching is not available yet";
     actions.append(modelPicker, send);
 	form.append(text, actions);
+    text.oninput=persistDraft;
     const historyArea=node("div",undefined,"chief-history");
     const rail=node("nav",undefined,"chief-rail");rail.setAttribute("aria-label","Conversation navigator");
     const preview=node("div",undefined,"chief-turn-preview");preview.hidden=true;
@@ -397,12 +401,17 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 	async function refresh() {
         const sequence = ++refreshSequence;
 		try {
-			const [st, history, a] = await Promise.all([
+			const [st, history, a, conversation] = await Promise.all([
 				agentAPI("/status"),
 				agentAPI("/messages"),
 				agentAPI("/approvals"),
+                agentAPI("/conversation").catch(()=>null),
 			]);
 			if (sequence !== refreshSequence) return;
+            metadataAvailable=!!conversation?.id;
+            conversationID=conversation?.id || "main";savedTitle=conversation?.title || "";
+            if(draftLoaded!==draftKey()){draftLoaded=draftKey();if(!text.value){try{text.value=localStorage.getItem(draftKey()) || "";}catch{}}}
+            updateChatTitle();
             activeName = st.name || "Agent";
             policyNotice.textContent = st.metadata?.open_mode === "true" ? "Open mode: agent policy bypass is active for this run." : "";
 			showMessages(history);
@@ -424,13 +433,13 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         showMessages([...priorHistory,{role:"user",text:value,at:new Date().toISOString()}]);
         messages.scrollTop=messages.scrollHeight;
         if(text.value===value)text.value="";
-        drafts.set(selectedAgent,text.value);
+        persistDraft();
         try {
 			await agentPost("/chat", { text: value });
 			await refresh();
         } catch (e) {
             error.textContent = e.message;
-            if(!text.value){text.value=value;drafts.set(selectedAgent,value);showMessages(priorHistory);}
+            if(!text.value){text.value=value;persistDraft();showMessages(priorHistory);}
         } finally {
 			s.busy = false;
             name.disabled = false;
@@ -521,7 +530,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     const titleKey=()=>"iugum.chat.title."+selectedAgent;
     const updateChatTitle=(fallback=automaticTitle)=>{
         automaticTitle=fallback;
-        let saved="";try{saved=localStorage.getItem(titleKey()) || "";}catch{}
+        let saved=savedTitle;try{if(!saved)saved=localStorage.getItem(titleKey()) || "";}catch{}
         chatTitleText.textContent=saved || automaticTitle;chatTitle.title=chatTitleText.textContent;
     };
     chatTitle.tabIndex=0;chatTitle.setAttribute("aria-label","Conversation title; double-click or press Enter to rename");
@@ -531,9 +540,9 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         input.classList.add("chief-title-input");
         chatTitleText.hidden=true;chatTitle.append(input);input.focus();input.select();
         let finished=false;
-        const finish=save=>{
+        const finish=async save=>{
             if(finished)return;finished=true;
-            if(save){try{const value=input.value.trim();if(value)localStorage.setItem(titleKey(),value);else localStorage.removeItem(titleKey());}catch{error.textContent="Could not save the chat title in this browser.";}}
+            if(save){try{if(!metadataAvailable)throw new Error("This agent does not support saved titles yet.");const value=input.value.trim();const result=await agentPost("/conversation",{title:value});savedTitle=result.title;localStorage.removeItem(titleKey());}catch(e){error.textContent=e.message;finished=false;input.focus();return;}}
             input.remove();chatTitleText.hidden=false;updateChatTitle();chatTitle.focus();
         };
         input.onkeydown=e=>{e.stopPropagation();if(e.key==="Enter"||e.key==="Escape"){e.preventDefault();finish(e.key==="Enter");}};
@@ -745,7 +754,7 @@ try {
     } catch (err) { error.textContent = "Could not load agents: " + err.message; }
     name.onchange = async () => {
         if (s.busy) return;
-        drafts.set(selectedAgent, text.value);
+        persistDraft();
         selectedAgent = name.value;updateControls();updateModel();
         text.value = drafts.get(selectedAgent) || "";
         renderedHistory = "";

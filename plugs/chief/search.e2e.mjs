@@ -63,12 +63,14 @@ try{
  await page.locator('.chief-chat-title').dblclick();
  await page.getByRole('textbox',{name:'Chat title',exact:true}).fill('My renamed conversation');
  await page.getByRole('textbox',{name:'Chat title',exact:true}).press('Enter');
+ await page.getByRole('textbox',{name:'Chat title',exact:true}).waitFor({state:'hidden'});
  assert.equal(await page.locator('.chief-chat-title').innerText(),'My renamed conversation');
  await page.locator('.chief-chat-title').dblclick();
  await page.getByRole('textbox',{name:'Chat title',exact:true}).fill('Discard this');
  await page.getByRole('textbox',{name:'Chat title',exact:true}).press('Escape');
+ await page.getByRole('textbox',{name:'Chat title',exact:true}).waitFor({state:'hidden'});
  assert.equal(await page.locator('.chief-chat-title').innerText(),'My renamed conversation');
- assert(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.startsWith('iugum.chat.title.') && localStorage[k]==='My renamed conversation')));
+ assert.equal(await page.evaluate(async()=> (await (await fetch('/.proxy/iugum/api/conversation')).json()).title),'My renamed conversation');
  const titleBox=await page.locator('.chief-chat-title').boundingBox();
  const newBox=await page.getByRole('button',{name:'New chat',exact:true}).boundingBox();
  const drawerBox=await page.getByRole('button',{name:'Agents',exact:true}).boundingBox();
