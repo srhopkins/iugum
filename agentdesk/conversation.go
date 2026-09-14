@@ -40,5 +40,9 @@ func (s *Server) conversation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	respond(w, map[string]any{"id": "main", "title": s.data.ConversationTitle, "can_create": false})
+	id := s.cfg.ConversationID
+	if id == "" {
+		id = "main"
+	}
+	respond(w, map[string]any{"id": id, "title": s.data.ConversationTitle, "can_create": s.cfg.SeparateConversations})
 }

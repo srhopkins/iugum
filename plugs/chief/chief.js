@@ -141,7 +141,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     let conversationID="main",savedTitle="",metadataAvailable=false,draftLoaded="";
     const draftKey=()=>"iugum.chat.draft."+selectedAgent+"."+conversationID;
     const persistDraft=()=>{drafts.set(selectedAgent,text.value);try{localStorage.setItem(draftKey(),text.value);}catch{error.textContent="Could not save the draft in this browser.";}};
-    const route = path => selectedAgent === "default" ? path : "/agents/" + encodeURIComponent(selectedAgent) + path;
+    const route = path => {const base=selectedAgent === "default" ? path : "/agents/" + encodeURIComponent(selectedAgent) + path;return conversationID!=="main" && path!=="/conversations" ? base+"?conversation="+encodeURIComponent(conversationID):base;};
     const agentAPI = path => api(route(path));
     const agentPost = (path, value) => post(route(path), value);
     const startAgent=node("button","Start agent"), stopAgent=node("button","Stop agent");
@@ -408,7 +408,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
                 agentAPI("/conversation").catch(()=>null),
 			]);
 			if (sequence !== refreshSequence) return;
-            metadataAvailable=!!conversation?.id;
+            metadataAvailable=!!conversation?.id;newChat.disabled=!conversation?.can_create;newChat.title=newChat.disabled?"This runtime does not support separate conversations":"New chat";
             conversationID=conversation?.id || "main";savedTitle=conversation?.title || "";
             if(draftLoaded!==draftKey()){draftLoaded=draftKey();if(!text.value){try{text.value=localStorage.getItem(draftKey()) || "";}catch{}}}
             updateChatTitle();
@@ -527,7 +527,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     menuTools.append(open);
     const chatTitle=node("div",undefined,"chief-chat-title"),chatTitleText=node("span","New conversation"),chatGlyph=node("span");
     let automaticTitle="New conversation";
-    const titleKey=()=>"iugum.chat.title."+selectedAgent;
+    const titleKey=()=>"iugum.chat.title."+selectedAgent+(conversationID==="main"?"":"."+conversationID);
     const updateChatTitle=(fallback=automaticTitle)=>{
         automaticTitle=fallback;
         let saved=savedTitle;try{if(!saved)saved=localStorage.getItem(titleKey()) || "";}catch{}
@@ -561,11 +561,22 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         if(s.open){await s.showPanel(panel);setTimeout(()=>{if(s.open)text.focus();},100);}else await s.hidePanel();
     };
     const menus=actionMenu(menuPopup,[historyButton,moreButton]);
-    historyButton.onclick=()=>menus.toggle(historyButton,()=>{
-        menuPopup.replaceChildren(node("strong","Conversation history"));
-        if(!turnLinks.length)menuPopup.append(node("p","No conversation history yet."));
-        turnLinks.forEach(item=>{const entry=node("button",item.button.getAttribute("aria-label"));entry.type="button";entry.onclick=async()=>{menus.close();s.open=true;await s.showPanel(panel);item.button.onclick();};menuPopup.append(entry);});
-    });
+    const switchConversation=async id=>{
+        if(s.busy)return;
+        persistDraft();try{localStorage.setItem("iugum.chat.active."+selectedAgent,id);}catch{}conversationID=id;draftLoaded="";text.value="";savedTitle="";renderedHistory="";expandedPrompts.clear();messages.replaceChildren();
+        await refresh();
+    };
+    newChat.onclick=async()=>{if(s.busy)return;newChat.disabled=true;try{const created=await agentPost("/conversations",{});await switchConversation(created.id);text.focus();}catch(e){error.textContent=e.message;}finally{newChat.disabled=false;}};
+    historyButton.onclick=async()=>{
+        if(historyButton.getAttribute("aria-expanded")==="true"){menus.close();return;}
+        try{
+            const conversations=await agentAPI("/conversations");
+            menus.toggle(historyButton,()=>{
+                menuPopup.replaceChildren(node("strong","Conversation history"));
+                for(const item of conversations){const entry=node("button",item.title || "New conversation");entry.type="button";entry.onclick=()=>{menus.close();switchConversation(item.id);};menuPopup.append(entry);}
+            });
+        }catch(e){error.textContent=e.message;}
+    };
     moreButton.onclick=()=>menus.toggle(moreButton,()=>{
         menuPopup.replaceChildren();
         for(const [label,run] of [["Export transcript",()=>{
@@ -750,13 +761,13 @@ try {
             option.value = agent.id; name.append(option);
         }
         if (!options.some(a => a.id === selectedAgent) && options.length) selectedAgent = options[0].id;
-        name.value = selectedAgent;updateControls();updateModel();
+        name.value = selectedAgent;try{conversationID=localStorage.getItem("iugum.chat.active."+selectedAgent)||"main";}catch{}updateControls();updateModel();
     } catch (err) { error.textContent = "Could not load agents: " + err.message; }
     name.onchange = async () => {
         if (s.busy) return;
         persistDraft();
-        selectedAgent = name.value;updateControls();updateModel();
-        text.value = drafts.get(selectedAgent) || "";
+        selectedAgent = name.value;conversationID="main";try{conversationID=localStorage.getItem("iugum.chat.active."+selectedAgent)||"main";}catch{}draftLoaded="";savedTitle="";updateControls();updateModel();
+        text.value = "";
         renderedHistory = "";
         expandedPrompts.clear();
         messages.replaceChildren(); rail.replaceChildren();turnLinks=[];preview.hidden=true; reviews.replaceChildren(); error.textContent = "";

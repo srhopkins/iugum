@@ -59,7 +59,7 @@ try{
  assert.equal(await page.locator('#iugum-chief-tools').getByRole('button',{name:'Chat',exact:true}).count(),0);
  assert.equal(await page.locator('#iugum-chief-tools').evaluate(e=>getComputedStyle(e).borderTopLeftRadius),'9px');
  assert.equal(await search.evaluate(e=>getComputedStyle(e).borderTopWidth),'0px');
- assert(await page.getByRole('button',{name:'New chat',exact:true}).isDisabled());
+ assert(await page.getByRole('button',{name:'New chat',exact:true}).isEnabled());
  await page.locator('.chief-chat-title').dblclick();
  await page.getByRole('textbox',{name:'Chat title',exact:true}).fill('My renamed conversation');
  await page.getByRole('textbox',{name:'Chat title',exact:true}).press('Enter');
@@ -75,7 +75,7 @@ try{
  const newBox=await page.getByRole('button',{name:'New chat',exact:true}).boundingBox();
  const drawerBox=await page.getByRole('button',{name:'Agents',exact:true}).boundingBox();
  assert(titleBox.x+titleBox.width<=newBox.x+1 && newBox.x<drawerBox.x);
- await page.getByRole('button',{name:'Chat history',exact:true}).click();assert(await page.getByText('Conversation history',{exact:true}).isVisible());
+ await page.getByRole('button',{name:'Chat history',exact:true}).click();await page.getByText('Conversation history',{exact:true}).waitFor();
  await page.getByRole('button',{name:'More chat options',exact:true}).click();assert(await page.locator('#iugum-chat-menu-popup').getByRole('menuitem',{name:'Export transcript',exact:true}).isVisible());
  assert(await page.getByRole('menuitem',{name:'Agent settings',exact:true}).isVisible());
  const downloadEvent=page.waitForEvent('download');
@@ -83,7 +83,7 @@ try{
  assert.equal((await downloadEvent).suggestedFilename(),'chat-transcript.md');
  await page.getByRole('button',{name:'More chat options',exact:true}).click();
  await page.getByRole('button',{name:'More chat options',exact:true}).click();assert(await page.locator('#iugum-chat-menu-popup').isHidden());
- await page.getByRole('button',{name:'Chat history',exact:true}).click();assert(await page.locator('#iugum-chat-menu-popup').isVisible());
+ await page.getByRole('button',{name:'Chat history',exact:true}).click();await page.locator('#iugum-chat-menu-popup').waitFor();
  await page.getByRole('button',{name:'Chat history',exact:true}).click();assert(await page.locator('#iugum-chat-menu-popup').isHidden());
  await search.click();await results.getByRole('button',{name:'SearchTarget.md',exact:true}).click();
  await page.waitForURL('**/SearchTarget');assert(await results.isHidden());

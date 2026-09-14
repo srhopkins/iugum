@@ -19,18 +19,20 @@ import (
 )
 
 type Config struct {
-	ConnectionControl func(context.Context, string, string) error
-	Connections       map[string]func(context.Context) (string, error)
-	ControlToken      string
-	Stop              func()
-	DisableChat       bool
-	DisableSearch     bool
-	HideDefaultAgent  bool
-	Agents            map[string]*Server
-	PassthroughChat   bool
-	WikiIntegrated    bool
-	CommitmentsPath   string
-	ApprovalExecute   func(context.Context, Approval) (string, error)
+	SeparateConversations bool
+	ConversationID        string
+	ConnectionControl     func(context.Context, string, string) error
+	Connections           map[string]func(context.Context) (string, error)
+	ControlToken          string
+	Stop                  func()
+	DisableChat           bool
+	DisableSearch         bool
+	HideDefaultAgent      bool
+	Agents                map[string]*Server
+	PassthroughChat       bool
+	WikiIntegrated        bool
+	CommitmentsPath       string
+	ApprovalExecute       func(context.Context, Approval) (string, error)
 	// Status returns a concise cached summary for an optional scope.
 	Status func(context.Context, string) string
 	// Metadata contains only nonsecret, user-facing configuration labels.
@@ -54,12 +56,14 @@ type state struct {
 	NextID            int          `json:"next_id"`
 }
 type Server struct {
-	wiki      *httputil.ReverseProxy
-	cfg       Config
-	mu        sync.Mutex
-	chatMu    sync.Mutex
-	data      state
-	documents *agentdocuments.Store
+	conversationMu sync.Mutex
+	conversations  map[string]*Server
+	wiki           *httputil.ReverseProxy
+	cfg            Config
+	mu             sync.Mutex
+	chatMu         sync.Mutex
+	data           state
+	documents      *agentdocuments.Store
 }
 
 func New(c Config) (*Server, error) {
@@ -89,7 +93,7 @@ func New(c Config) (*Server, error) {
 	if err = os.MkdirAll(c.DataDir, 0700); err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: c, data: state{Messages: []Message{}, Commitments: []Commitment{}}}
+	s := &Server{conversations: map[string]*Server{}, cfg: c, data: state{Messages: []Message{}, Commitments: []Commitment{}}}
 	if c.WikiIntegrated && c.WikiURL != "" {
 		s.wiki, err = wikiProxy(c.WikiURL)
 		if err != nil {
@@ -232,11 +236,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if s.cfg.HideDefaultAgent && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || r.URL.Path == "/api/conversation" || strings.HasPrefix(r.URL.Path, "/api/approvals")) {
+	if s.cfg.HideDefaultAgent && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals")) {
 		http.NotFound(w, r)
 		return
 	}
-	if (s.cfg.DisableSearch && r.URL.Path == "/api/search") || (s.cfg.DisableChat && (strings.HasPrefix(r.URL.Path, "/api/agents") || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || r.URL.Path == "/api/conversation" || strings.HasPrefix(r.URL.Path, "/api/approvals"))) {
+	if (s.cfg.DisableSearch && r.URL.Path == "/api/search") || (s.cfg.DisableChat && (strings.HasPrefix(r.URL.Path, "/api/agents") || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals"))) {
 		http.NotFound(w, r)
 		return
 	}
@@ -246,7 +250,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if s.serveWikiExtension(w, r) {
 		return
 	}
+	if id := r.URL.Query().Get("conversation"); id != "" && id != "main" && s.cfg.ConversationID == "" {
+		switch r.URL.Path {
+		case "/api/chat", "/api/messages", "/api/conversation", "/api/approvals", "/api/status":
+			child, err := s.conversationServer(id)
+			if err != nil {
+				fail(w, err, 404)
+				return
+			}
+			child.serve(w, r)
+			return
+		}
+	}
 	switch {
+	case r.URL.Path == "/api/conversations":
+		s.conversationsHTTP(w, r)
 	case r.URL.Path == "/api/conversation":
 		s.conversation(w, r)
 	case r.URL.Path == "/api/approvals" || strings.HasPrefix(r.URL.Path, "/api/approvals/"):
@@ -315,6 +333,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Unlock()
+	id := s.cfg.ConversationID
+	if id == "" {
+		id = "main"
+	}
+	r = r.WithContext(context.WithValue(context.WithValue(r.Context(), conversationKey{}, id), snapshotKey{}, s.Context()))
 	reply := ""
 	var err error
 	switch {
