@@ -14,7 +14,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 `;
 
 // Shared styling for the native host and shadow panel. Runtime geometry stays in components.
-export const panelCSS = controlCSS + `.chief-chat-title {
+export const panelCSS = controlCSS + `
+.chief-latest { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); z-index:6; }
+.chief-panel .chief-latest { background:var(--root-background-color,Canvas); box-shadow:0 2px 8px #0003; }
+.chief-latest[hidden] { display:none; }
+.chief-chat-title {
   display:flex;
   align-items:center;
   gap:var(--iugum-space-8,8px);

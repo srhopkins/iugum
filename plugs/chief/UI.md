@@ -11,3 +11,5 @@ Static presentation belongs here, not in element.style. Runtime panel width and 
 `mount()` retains one instance on ordinary navigation. Its `dispose()` removes its menu handlers, search dismissal listener, observers and mounted host elements. Closing chat is only a detach and does not dispose drafts.
 
 The required frontend gate includes `shared-ui.e2e.mjs` for menu focus, arrows, dismissal and token inheritance, alongside existing feature tests. This stage does not claim the full future visual/accessibility gate or server conversation persistence is implemented.
+
+Reading above the bottom exposes Jump to latest without moving the reading position. Agent drawer outside-click/Escape dismissal restores focus and retains drafts.

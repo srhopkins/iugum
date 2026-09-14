@@ -162,7 +162,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         }
         if(!matches.length)agentList.append(node("p","No matching agents."));
     };
-    const toggleDrawer=()=>{agentSearch.hidden=false;drawer.hidden=!drawer.hidden;manage.setAttribute("aria-expanded",String(!drawer.hidden));if(!drawer.hidden){renderAgentList();agentSearch.focus();}};
+    const toggleDrawer=()=>{if(!drawer.hidden){closeDrawer();return;}menus.close(false);agentSearch.hidden=false;drawer.hidden=false;manage.setAttribute("aria-expanded",String(!drawer.hidden));if(!drawer.hidden){renderAgentList();agentSearch.focus();}};
     manage.onclick=toggleDrawer;agentSearch.oninput=renderAgentList;
     drawer.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();closeDrawer();}};
     let agentCatalog=[];
@@ -215,7 +215,10 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     const historyArea=node("div",undefined,"chief-history");
     const rail=node("nav",undefined,"chief-rail");rail.setAttribute("aria-label","Conversation navigator");
     const preview=node("div",undefined,"chief-turn-preview");preview.hidden=true;
-    historyArea.append(messages,rail,preview);
+    const latest=node("button","Jump to latest","chief-latest");latest.type="button";latest.hidden=true;
+    const updateLatest=()=>{latest.hidden=messages.scrollHeight-messages.scrollTop-messages.clientHeight<100;};
+    latest.onclick=()=>{messages.scrollTop=messages.scrollHeight;updateLatest();text.focus();};
+    historyArea.append(messages,rail,preview,latest);
     panel.append(head, reviews, historyArea, error, pending, form);
     let turnLinks=[];
     const updateTurn=()=>{
@@ -224,7 +227,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         turnLinks.forEach((item,i)=>{if(item.turn.getBoundingClientRect().top<=top+2)active=i;});
         turnLinks.forEach((item,i)=>item.button.setAttribute("aria-current",String(i===active)));
     };
-    messages.onscroll=()=>{updateTurn();preview.hidden=true;};
+    messages.onscroll=()=>{updateTurn();updateLatest();preview.hidden=true;};
     const clearTickHover=()=>{preview.hidden=true;turnLinks.forEach(item=>{item.button.style.removeProperty("--tick-width");item.button.classList.remove("tick-hover");});};
     rail.onmouseleave=clearTickHover;
     rail.onmousemove=event=>{
@@ -321,6 +324,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 		Array.from(messages.querySelectorAll?.("details") || []).forEach((d, i) => { d.open = expanded[i] || false; });
         if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(()=>{updatePromptOverflow();updateTurn();});
         messages.scrollTop = bottom ? messages.scrollHeight : scroll;
+        updateLatest();
 	}
 	function renderReviews(items) {
 		reviews.replaceChildren();
@@ -598,6 +602,9 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         if (!event.composedPath().includes(top)) {top.classList.remove("search-expanded");results.hidden = true;options.hidden=true;plus.setAttribute("aria-expanded","false");}
     };
     document.addEventListener?.("pointerdown", dismissSearch);
+    const dismissDrawer=event=>{if(!drawer.hidden&&!event.composedPath().includes(drawer)&&!event.composedPath().includes(manage)){event.preventDefault();closeDrawer();}};
+    document.addEventListener?.("pointerdown",dismissDrawer);
+
 	top.onsubmit = async (e) => {
 		e.preventDefault();
 		if (!query.value.trim()) { query.focus(); return; }
@@ -749,7 +756,7 @@ try {
     };
     await refresh();
     };
-    s.dispose=async()=>{document.removeEventListener("pointerdown",dismissSearch);menus.dispose();promptObserver?.disconnect();s.observer.disconnect();top.remove();menuTools.remove();document.getElementById("iugum-chief-host-style")?.remove();await s.hidePanel();if(current===s)current=null;};
+    s.dispose=async()=>{document.removeEventListener("pointerdown",dismissSearch);document.removeEventListener("pointerdown",dismissDrawer);menus.dispose();promptObserver?.disconnect();s.observer.disconnect();top.remove();menuTools.remove();document.getElementById("iugum-chief-host-style")?.remove();await s.hidePanel();if(current===s)current=null;};
     await s.enable(feature);
 	return s;
 }
