@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0"
+  },
+  "name": "iugum-wiki-ui-tests",
+  "private": true,
+  "type": "module"
+}
