@@ -70,7 +70,7 @@ Every control works without a mouse and shows visible focus. Tab follows visual 
 <!-- <atom id="C0000012" slug="persistence" iugum-kind="decision"/> -->
 Theme, density, text size, and panel width persist for that browser. Chat titles belong to the conversation and persist on the server. Unsent drafts survive refresh and remain separate for each conversation. Switching agents, closing drawers, or navigating the wiki never discards a draft.
 
-The current per-agent browser title and in-memory drafts do not satisfy this target. Do not treat an agent identifier as a permanent substitute for a conversation identifier.
+Per-agent browser titles and in-memory drafts alone do not satisfy this target. Do not treat an agent identifier as a permanent substitute for a conversation identifier.
 
 ## Reusable implementation
 
@@ -99,3 +99,5 @@ Install the existing SilverBullet browser test dependencies and Chromium, then r
 The suite checks owned chat and search UI with axe, including the open options menu and agent drawer. It also checks keyboard behavior, focus, conversation persistence, resizing, scrolling, and theme overrides. Static checks reject inline style strings in feature modules and repeated properties within a shared CSS rule. Calculated geometry remains permitted. This is a focused guard, not a complete CSS duplication detector.
 
 Visual checks cover both theme families in Day and Night at 900- and 1440-pixel viewport widths. Baselines use Playwright Chromium on macOS. Review changes on that environment; font rasterization can differ on other systems. To propose new baselines, run `IUGUM_UI_UPDATE_BASELINES=1 scripts/chief-fe-check.sh`, inspect every changed image, then rerun without that variable. Never accept a baseline merely because a comparison failed. Browser failure artifacts are written to `plugs/chief/visual-results/` and are not committed.
+
+The model/settings regression checks cover profile selection, reload, rejected-save draft recovery, and accessibility of the settings drawer. Runtime tests check policy revocation, configured-document write boundaries, ACP discovery without prompting, and saved-session resume. Startup tests require automatic opening without a manual-click fallback; the proxy waits for the underlying wiki page to become ready.
