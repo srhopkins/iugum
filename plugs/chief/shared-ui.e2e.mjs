@@ -27,6 +27,9 @@ try {
  assert(await page.getByRole('complementary',{name:'Agents drawer'}).isHidden());
  assert.equal(await draft.inputValue(),'Keep my draft');
  assert(await agents.evaluate(e=>e.getRootNode().activeElement===e));
+ await page.reload();await draft.waitFor({timeout:60000});
+ await page.waitForFunction(()=>[...document.querySelectorAll('.sb-panel')].some(h=>h.shadowRoot?.querySelector('textarea')?.value==='Keep my draft'));
+ assert.equal(await draft.inputValue(),'Keep my draft');
  // Shared tokens cross the native/shadow boundary without feature-specific rules.
  await page.addStyleTag({content:':root { --iugum-reading-size: 19px; --iugum-reading-font: Georgia, serif; --iugum-icon-size: 23px; }'});
  assert.equal(await page.locator('#sb-main .cm-editor').evaluate(e=>getComputedStyle(e).fontSize),'19px');
