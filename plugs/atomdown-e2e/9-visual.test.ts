@@ -391,10 +391,22 @@ for (const combo of combos()) {
       // this baseline is itself the regression.
       await page.mouse.move(2, 2);
       await settle(page, 3);
+      await expect.poll(() => bar.evaluate(el => ({
+        hovered: el.matches(":hover"),
+        memberActive: !!el.nextElementSibling?.matches(".atomdown-group-hover, .atomdown-selected-line"),
+      }))).toEqual({hovered:false,memberActive:false});
       await expect(page).toHaveScreenshot(
         `group-bar-rest-${comboName(combo).replace(/\//g, "-")}.png`,
         { ...SNAPSHOT_OPTS, clip },
       );
+      // Prove that the capture actually contains the resting stroke.
+      // A matching baseline alone cannot detect a clip that misses its subject.
+      const restingPixels = await page.screenshot({clip, animations:"disabled", caret:"hide"});
+      const previousStyle = await bar.getAttribute("style");
+      await bar.evaluate(el => (el as HTMLElement).style.setProperty("border-top-color","rgb(255, 0, 0)","important"));
+      const alteredPixels = await page.screenshot({clip, animations:"disabled", caret:"hide"});
+      expect(restingPixels.equals(alteredPixels), "rest capture must detect a changed border colour").toBe(false);
+      await bar.evaluate((el, style) => {if(style===null)el.removeAttribute("style");else el.setAttribute("style",style);},previousStyle);
 
       // HOVERED ANYWHERE INSIDE THE GROUP: the bar goes to full accent. The
       // pointer is on a MEMBER CARD, which is the scope the group's chrome

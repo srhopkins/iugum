@@ -605,3 +605,9 @@ estimates the rest.
 - **An index is not an identity.** `sweepEach` chooses the next key in the page,
   next to the list it chose from, rather than reading the list in one call and
   acting on `nth(i)` in another.
+
+### Resting-stroke review (September 14)
+
+The older compact-stroke report could not be reproduced with the current fixture and bundled browser. All 16 visual matrix cells matched the existing candidates. The proposed hover/selection explanation is now checked directly: a resting capture must have neither the bar hovered nor its adjacent member selected or hovered.
+
+A second assertion changes only the bar's top-border colour, captures the same clip, and requires different pixels. It then restores the original style before hover captures. This proves the clip contains the stroke, including dark compact mode; a baseline match alone did not prove that. No comparison tolerance was increased and no old image was replaced during this review. The historical cause remains unconfirmed; the current blind spot is guarded by an executable check.
