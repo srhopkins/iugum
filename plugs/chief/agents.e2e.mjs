@@ -1,0 +1,36 @@
+import {chromium} from '../../silverbullet/node_modules/playwright/index.mjs';
+import assert from 'node:assert/strict';
+const base=process.env.CHIEF_UI_TEST_URL;if(!base?.startsWith('http://127.0.0.1:'))throw Error('Set isolated URL');
+const browser=await chromium.launch({headless:true});
+try{
+ const page=await browser.newPage({serviceWorkers:'block'});
+ await page.route('**/.proxy/iugum/api/agents',r=>r.fulfill({json:[{id:'default',name:'Coordinator'},{id:'local',name:'Local helper',model:'ollama/test'},{id:'managed',name:'Managed helper',transport:'iugum'}]}));
+ await page.route('**/.proxy/iugum/api/agents/local/*',r=>{const path=new URL(r.request().url()).pathname;return r.fulfill({json:path.endsWith('/status')?{name:'Local helper'}:path.endsWith('/messages')?[{role:'assistant',text:'Local history',html:'<p>Local history</p>',at:'2026-09-13T12:00:00Z'}]:[]})});
+ let starts=0,stops=0;
+ await page.route('**/.proxy/iugum/api/agents/managed/*',r=>{const path=new URL(r.request().url()).pathname;
+ if(path.endsWith('/start'))starts++;if(path.endsWith('/stop'))stops++;
+ return r.fulfill({json:path.endsWith('/status')?{name:'Managed helper',metadata:{open_mode:'true'}}:path.endsWith('/start')||path.endsWith('/stop')?{ok:true}:[]});});
+ await page.goto(base);const input=page.getByRole('textbox',{name:'Message agent',exact:true});await input.waitFor({timeout:60000});
+ const model=page.getByRole('combobox',{name:'Model',exact:true});
+ const labels={default:'Coordinator',local:'Local helper · ollama/test',managed:'Managed helper'};
+ const picker={selectOption:async id=>{await page.getByRole('button',{name:'Agents',exact:true}).click();await page.getByRole('searchbox',{name:'Search agents',exact:true}).fill('');const d=page.getByRole('complementary',{name:'Agents drawer'});await d.getByRole('button',{name:labels[id],exact:true}).click();await d.waitFor({state:'hidden'});},boundingBox:()=>model.boundingBox(),inputValue:()=>model.inputValue()};
+ await input.fill('Coordinator draft');await picker.selectOption('local');await page.getByText('Local history',{exact:true}).waitFor();
+ assert.equal(await input.inputValue(),'');await input.fill('Local draft');
+ await picker.selectOption('default');assert.equal(await input.inputValue(),'Coordinator draft');
+ await page.getByText('Local history',{exact:true}).waitFor({state:'hidden'});
+ await picker.selectOption('local');await page.getByText('Local history',{exact:true}).waitFor();assert.equal(await input.inputValue(),'Local draft');
+ assert.equal(await page.getByRole('button',{name:'Chief',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Chat',exact:true}).count(),1);
+ await picker.selectOption('managed');
+ await page.getByText('Open mode: agent policy bypass is active for this run.').waitFor();
+ await page.getByRole('button',{name:'Start agent',exact:true}).click();assert.equal(starts,1);
+ await page.getByRole('button',{name:'Stop agent',exact:true}).click();assert.equal(stops,1);
+ await picker.selectOption('local');assert.equal(await page.getByRole('button',{name:'Start agent',exact:true}).isVisible(),false);
+ const pickerBox=await picker.boundingBox(),inputBox=await input.boundingBox();assert(pickerBox.y>inputBox.y,'picker is below composer');
+ const url=page.url();await page.getByRole('button',{name:'Agents',exact:true}).click();
+ const drawer=page.getByRole('complementary',{name:'Agents drawer'});assert(await drawer.isVisible());
+ await page.getByRole('searchbox',{name:'Search agents',exact:true}).fill('Coordinator');
+ await drawer.getByRole('button',{name:'Coordinator',exact:true}).click();await drawer.waitFor({state:'hidden'});assert.equal(page.url(),url);assert.equal(await model.innerText(),'Provider default');
+ await page.getByRole('button',{name:'Agents',exact:true}).click();await page.getByRole('searchbox',{name:'Search agents',exact:true}).press('Escape');assert(await drawer.isHidden());
+ console.log('Generic controls, agent picker, isolated histories, and per-agent drafts pass.');
+}finally{await browser.close()}

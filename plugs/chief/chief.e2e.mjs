@@ -1,0 +1,38 @@
+import {chromium} from '../../silverbullet/node_modules/playwright/index.mjs';
+import assert from 'node:assert/strict';
+const base=process.env.CHIEF_UI_TEST_URL;
+if(!base||!base.startsWith('http://127.0.0.1:'))throw Error('Set CHIEF_UI_TEST_URL to an isolated local test wiki');
+const browser=await chromium.launch({headless:true});
+const page=await browser.newPage({viewport:{width:1440,height:960}});
+const errors=[];page.on('response',r=>{if(r.status()>=400)errors.push(r.status()+' '+r.url())});page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+try{
+ await page.goto(base+'/');
+ await page.getByRole('textbox',{name:'Message agent',exact:true}).waitFor({timeout:60000});
+ assert.equal(await page.locator('#sb-main').count(),1);
+ assert.equal(await page.locator('iframe[title="Wiki"]').count(),0);
+ assert.equal(await page.locator('#iugum-chief-tools').count(),1);
+ const response=page.waitForResponse(r=>r.url().endsWith('/.proxy/iugum/api/chat')&&r.request().method()==='POST');
+ await page.getByRole('textbox',{name:'Message agent',exact:true}).fill('status');await page.getByRole('textbox',{name:'Message agent',exact:true}).press('Enter');
+ assert.equal((await response).status(),200);
+ await page.getByRole('button',{name:'Send',exact:true}).waitFor();
+ assert.match(await page.locator('.chief-messages').innerText(),/status/);
+ await page.goto(base+'/Commitments');
+ await page.waitForURL('**/Commitments');
+ assert.equal(await page.locator('#iugum-chief-tools').count(),1);
+ const editor=page.locator('#sb-editor .cm-content');await editor.click();await page.keyboard.press(process.platform==='darwin'?'Meta+End':'Control+End');await page.keyboard.insertText('\nSynthetic wiki edit.');
+ await page.waitForResponse(r=>r.url().includes('/.fs/Commitments.md')&&r.request().method()==='PUT',{timeout:15000});
+ await page.getByRole('button',{name:'Close chat',exact:true}).click();
+ await page.getByRole('textbox',{name:'Message agent',exact:true}).waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('textbox',{name:'Message agent',exact:true}).waitFor();
+ await page.getByRole('searchbox',{name:'Search wiki, sessions, and tasks'}).fill('Native wiki fixture');
+ await page.getByLabel('Source or project scope',{exact:true}).fill('wiki');
+ await page.getByRole('button',{name:'Search',exact:true}).click();
+ await page.locator('#iugum-chief-results article').first().waitFor();
+ await page.screenshot({path:'/private/tmp/chief-native-wiki.png',fullPage:true});
+ const before=await page.locator('.chief-messages').innerText();
+ await page.reload();await page.getByRole('textbox',{name:'Message agent',exact:true}).waitFor({timeout:30000});
+ assert.equal(await page.locator('#iugum-chief-tools').count(),1);
+ assert.equal(await page.locator('.chief-messages').innerText(),before);
+ console.log(JSON.stringify({nativeWiki:true,nativePanel:true,search:true,navigation:true,editing:true,reopen:true,persistence:true,errors}));
+}catch(e){await page.screenshot({path:'/private/tmp/chief-native-wiki-error.png',fullPage:true});console.error(JSON.stringify({errors,body:(await page.locator('body').innerText()).slice(0,3000)}));throw e;}finally{await browser.close()}
