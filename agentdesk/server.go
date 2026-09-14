@@ -19,6 +19,8 @@ import (
 )
 
 type Config struct {
+	Settings              SettingsControl
+	Models                ModelControl
 	SeparateConversations bool
 	ConversationID        string
 	ConnectionControl     func(context.Context, string, string) error
@@ -236,11 +238,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if s.cfg.HideDefaultAgent && (r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals")) {
+	if s.cfg.HideDefaultAgent && (r.URL.Path == "/api/settings" || r.URL.Path == "/api/models" || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals")) {
 		http.NotFound(w, r)
 		return
 	}
-	if (s.cfg.DisableSearch && r.URL.Path == "/api/search") || (s.cfg.DisableChat && (strings.HasPrefix(r.URL.Path, "/api/agents") || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals"))) {
+	if (s.cfg.DisableSearch && r.URL.Path == "/api/search") || (s.cfg.DisableChat && (strings.HasPrefix(r.URL.Path, "/api/agents") || r.URL.Path == "/api/settings" || r.URL.Path == "/api/models" || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals"))) {
 		http.NotFound(w, r)
 		return
 	}
@@ -263,6 +265,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
+	case r.URL.Path == "/api/settings":
+		s.settingsHTTP(w, r)
+	case r.URL.Path == "/api/models":
+		s.modelsHTTP(w, r)
 	case r.URL.Path == "/api/conversations":
 		s.conversationsHTTP(w, r)
 	case r.URL.Path == "/api/conversation":

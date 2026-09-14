@@ -167,7 +167,7 @@ func runWikiAddons(ctx context.Context, a *app.App, opts contract.WikiOpts, path
 			return gate.Enforce(ctx, contract.Request{Sub: actor, Obj: obj, Act: act})
 		}
 		client := &agentacp.Client{Config: cfg, StateDir: dir, Check: agentCheck}
-		child, e := agentdesk.New(agentdesk.Config{Name: cfg.Name, DataDir: dir, Listen: listen, PassthroughChat: true, Chat: client.Chat, Check: agentCheck, Metadata: map[string]string{"transport": "acp", "model": cfg.Model}})
+		child, e := agentdesk.New(agentdesk.Config{Name: cfg.Name, DataDir: dir, Listen: listen, Models: client.Models, PassthroughChat: true, Chat: client.Chat, Check: agentCheck, Metadata: map[string]string{"transport": "acp", "model": cfg.Model}})
 		if e != nil {
 			return fail(e)
 		}
@@ -235,6 +235,9 @@ func runWikiAddons(ctx context.Context, a *app.App, opts contract.WikiOpts, path
 		wikiErr <- err
 		cancel()
 	}()
+	if err = waitWikiReady(ctx, fmt.Sprintf("http://127.0.0.1:%d/", inner)); err != nil {
+		return fail(err)
+	}
 	fmt.Fprintf(errout, "Wiki add-ons: chat=%t search=%t at http://%s\n", c.Chat, c.Search, listen)
 	err = desk.Run(ctx)
 	select {

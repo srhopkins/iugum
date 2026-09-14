@@ -103,7 +103,7 @@ export const panelCSS = controlCSS + `
 .chief-agent-drawer>button {
   align-self:flex-end
 }
-.chief-agent-drawer input {
+.chief-agent-drawer input, .chief-agent-drawer textarea {
   width:100%;
   box-sizing:border-box;
   padding:9px;

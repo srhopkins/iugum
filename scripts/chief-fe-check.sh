@@ -53,6 +53,7 @@ node plugs/chief/theme.e2e.mjs
 node plugs/chief/agents.e2e.mjs
 node plugs/chief/pending.e2e.mjs
 node plugs/chief/conversations.e2e.mjs
+node plugs/chief/model-settings.e2e.mjs
 if [ "${IUGUM_UI_UPDATE_BASELINES:-0}" = "1" ]; then
   silverbullet/node_modules/.bin/playwright test -c plugs/chief/visual.config.mjs --update-snapshots=all
 else

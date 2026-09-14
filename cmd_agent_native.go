@@ -253,6 +253,10 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 				fmt.Fprintf(errout, "Agent wiki: %v\n", e)
 			}
 		}()
+		if e = waitWikiReady(ctx, c.WikiURL); e != nil {
+			fmt.Fprintln(errout, e)
+			return 1
+		}
 	}
 	exe, _ := os.Executable()
 	for name, p := range c.Repositories {
@@ -749,14 +753,14 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 		}
 		dataDir := filepath.Join(c.DataDir, "chat-agents", id)
 		agentCheck := func(ctx context.Context, obj, act string) error { return check(ctx, "agent/acp/"+id+"/"+obj, act) }
-		client := &agentacp.Client{Config: config, StateDir: dataDir, Check: agentCheck}
-		child, err := agentdesk.New(agentdesk.Config{Name: config.Name, DataDir: dataDir, Listen: c.Listen, SeparateConversations: true, Chat: func(ctx context.Context, text string) (string, error) {
+		client := &agentacp.Client{Config: config, StateDir: dataDir, ModelPath: filepath.Join(dataDir, "model.json"), Check: agentCheck}
+		child, err := agentdesk.New(agentdesk.Config{Name: config.Name, DataDir: dataDir, Listen: c.Listen, Models: client.Models, SeparateConversations: true, Chat: func(ctx context.Context, text string) (string, error) {
 			if id := agentdesk.ConversationID(ctx); id != "main" {
 				dir := filepath.Join(client.StateDir, "conversations", id)
 				if err := os.MkdirAll(dir, 0700); err != nil {
 					return "", err
 				}
-				isolated := &agentacp.Client{Config: client.Config, StateDir: dir, Check: client.Check}
+				isolated := &agentacp.Client{Config: client.Config, StateDir: dir, ModelPath: client.ModelPath, Check: client.Check}
 				return isolated.Chat(ctx, text)
 			}
 			return client.Chat(ctx, text)
@@ -767,7 +771,15 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 		}
 		chatAgents[id] = child
 	}
-	desk, e = agentdesk.New(agentdesk.Config{ControlToken: process.Token, Stop: stop, Agents: chatAgents, WikiIntegrated: c.WikiURL != "", CommitmentsPath: commitmentsPath, ApprovalExecute: func(ctx context.Context, approval agentdesk.Approval) (string, error) {
+	desk, e = agentdesk.New(agentdesk.Config{Settings: func(ctx context.Context, id string, value *string) (agentdesk.SettingsState, error) {
+		chatMu.Lock()
+		defer chatMu.Unlock()
+		return nativeSettingsControl(ctx, c, check, id, value)
+	}, Models: func(ctx context.Context, id string) (agentdesk.ModelState, error) {
+		chatMu.Lock()
+		defer chatMu.Unlock()
+		return nativeModelControl(ctx, runtime, c, &selectedProfile, &selectedSubscription, routingPath, check, id)
+	}, ControlToken: process.Token, Stop: stop, Agents: chatAgents, WikiIntegrated: c.WikiURL != "", CommitmentsPath: commitmentsPath, ApprovalExecute: func(ctx context.Context, approval agentdesk.Approval) (string, error) {
 		if approvalExecutor == nil {
 			return "", fmt.Errorf("approval execution is not ready")
 		}

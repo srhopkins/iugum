@@ -10,7 +10,7 @@ func TestDisabledFeatureRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/search", "/api/agents", "/api/messages", "/.proxy/iugum/api/search", "/api/approvals"} {
+	for _, path := range []string{"/api/search", "/api/agents", "/api/messages", "/api/models", "/api/settings", "/.proxy/iugum/api/search", "/api/approvals"} {
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:3850"+path, nil))
 		if w.Code != 404 {

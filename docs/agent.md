@@ -141,3 +141,11 @@ Replace its allow row with narrower rules when an agent needs restrictions.
 `iugum agent clone --config agent.yaml --name candidate --output ./candidate` creates a named configuration candidate with separate writable state. See [Named clones](native-clones.md).
 
 `iugum agent session capabilities` describes verified coding-session control. See [Claude session control](native-session-control.md).
+
+### Wiki model selection and settings
+
+The chat model picker lists the active runtime's choices. Native agents expose configured profiles; selecting one uses the same policy, credentials and routing checks as the `model_select` tool. It does not switch billing transports. ACP agents expose model choices from session configuration options. Selection is saved locally, applied to resumed turns, and checked against current policy. Discovering ACP choices starts or resumes the provider session but sends no prompt.
+
+Model selection applies to the selected agent's next turn. It preserves conversations and namespaces. Managed-agent connections proxy the same model and settings endpoints through the attachment gate. Providers without choices display an unavailable explanation.
+
+The Agent settings drawer edits configured mission and instruction documents for native agents. Each read/write checks `agent/settings/mission` or `agent/settings/instructions`; API access also passes the normal agentdesk policy check. Saves replace only the named configured document and apply on the next turn. The drawer does not edit permissions, credentials, namespaces, or runtime commands. ACP providers without an instruction-document editor report that limitation. Unsaved text remains available after a rejected save.
