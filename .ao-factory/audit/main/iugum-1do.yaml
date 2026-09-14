@@ -1,0 +1,8 @@
+bead: iugum-1do
+namespace: main
+search_query: "Fix wiki displacement when opening chat and verify message formatting"
+candidates: []
+associated_issues: [iugum-phj]
+duplicate_issues: none
+checked_at: 2026-09-14T21:25:07Z
+written_by: ayo-related-set

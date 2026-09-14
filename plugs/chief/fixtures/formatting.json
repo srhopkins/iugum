@@ -1,0 +1,20 @@
+{
+  "conversation_title": "Formatting fixture",
+  "messages": [
+    {
+      "role": "user",
+      "text": "Review formatting",
+      "at": "2026-09-14T12:00:00Z"
+    },
+    {
+      "role": "assistant",
+      "text": "**Formatted answer**\n\n- First item\n- Second item\n\n```go\nfmt.Println(\"safe\")\n```\n\n| Name | State |\n| --- | --- |\n| Test | Ready |\n\n<script>alert(1)</script>",
+      "at": "2026-09-14T12:01:00Z"
+    },
+    {
+      "role": "assistant",
+      "text": "Latest session: test\nLast recorded message: **Saved evidence**\nSource: fixture\nEarlier context: Prior context",
+      "at": "2026-09-14T12:02:00Z"
+    }
+  ]
+}
