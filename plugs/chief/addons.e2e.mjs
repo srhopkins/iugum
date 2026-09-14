@@ -9,7 +9,9 @@ try {
  assert.equal(await page.getByRole('textbox',{name:'Message agent',exact:true}).count(),0);
  await search.fill('navigation');await page.getByRole('button',{name:'Search',exact:true}).click();
  await page.locator('#iugum-chief-results article').first().waitFor();
- await page.locator('#iugum-chief-results article>button').first().click();
+ // The long layout fixture also contains "navigation"; select the intended
+ // page rather than depending on search ranking among unrelated fixtures.
+ await page.locator('#iugum-chief-results article>button').filter({hasText:'SearchTarget'}).click();
  await page.waitForURL('**/SearchTarget');
  const status=await page.request.get(base+'/api/agents');assert.equal(status.status(),404);
  console.log('Standalone search works without agent chat; result navigates and chat endpoint is disabled.');

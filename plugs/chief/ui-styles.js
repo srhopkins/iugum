@@ -496,6 +496,12 @@ export const hostCSS = controlCSS + `
   --iugum-code-font:ui-monospace,monospace;
   --iugum-space-4:4px; --iugum-space-8:8px; --iugum-space-12:12px; --iugum-space-16:16px;
 }
+/* The editor must shrink beside a fixed-size chat panel, including full width.
+   Its automatic minimum otherwise overflows the viewport and composer focus
+   scrolls the entire document horizontally. Scrolling stays inside the editor. */
+#sb-editor {
+  min-width:0;
+}
 #sb-main .cm-editor {
   --editor-font:var(--iugum-editor-font,var(--iugum-reading-font));
   font-size:var(--iugum-reading-size);

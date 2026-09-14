@@ -17,6 +17,9 @@ cp plugs/editor-width/EditorWidth.md "$TASK_DIR/wiki/EditorWidth.md"
 cp plugs/theme-menu/ThemeMenu.md "$TASK_DIR/wiki/ThemeMenu.md"
 printf 'Keyboard regression fixture.\n' > "$TASK_DIR/wiki/index.md"
 printf 'Search navigation fixture.\n' > "$TASK_DIR/wiki/SearchTarget.md"
+cp docs/wiki-ui-audit-2026-09-13.md "$TASK_DIR/wiki/LayoutRegression.md"
+mkdir -p "$TASK_DIR/data/conversations/ffffffffffffffffffffffffffffffff"
+cp plugs/chief/fixtures/formatting.json "$TASK_DIR/data/conversations/ffffffffffffffffffffffffffffffff/workspace.json"
 cat > "$TASK_DIR/agent.yaml" <<CONFIG
 name: chief-regression-test
 runtime: native
@@ -49,6 +52,7 @@ node plugs/chief/shared-ui.e2e.mjs
 node plugs/chief/accessibility.e2e.mjs
 node plugs/chief/sticky.e2e.mjs
 node plugs/chief/width.e2e.mjs
+node plugs/chief/layout-formatting.e2e.mjs
 node plugs/chief/theme.e2e.mjs
 node plugs/chief/agents.e2e.mjs
 node plugs/chief/pending.e2e.mjs
