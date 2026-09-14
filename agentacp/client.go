@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	acp "github.com/coder/acp-go-sdk"
+	"github.com/srhopkins/iugum/agentdesk"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,16 +24,25 @@ type Config struct {
 	AllowTools bool              `yaml:"allow_tools"`
 }
 type Client struct {
-	Config   Config
-	StateDir string
-	Check    func(context.Context, string, string) error
-	mu       sync.Mutex
-	outputMu sync.Mutex
-	output   strings.Builder
-	loading  bool
+	Config    Config
+	ModelPath string
+	StateDir  string
+	Check     func(context.Context, string, string) error
+	mu        sync.Mutex
+	outputMu  sync.Mutex
+	output    strings.Builder
+	loading   bool
 }
 
 func (c *Client) Chat(ctx context.Context, text string) (string, error) {
+	return c.exchange(ctx, text, nil, "")
+}
+func (c *Client) Models(ctx context.Context, id string) (agentdesk.ModelState, error) {
+	state := agentdesk.ModelState{Options: []agentdesk.ModelOption{}}
+	_, err := c.exchange(ctx, "", &state, id)
+	return state, err
+}
+func (c *Client) exchange(ctx context.Context, text string, models *agentdesk.ModelState, selected string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.Config.Command) == 0 {
@@ -83,36 +93,113 @@ func (c *Client) Chat(ctx context.Context, text string) (string, error) {
 	c.output.Reset()
 	c.loading = true
 	c.outputMu.Unlock()
+	var configOptions []acp.SessionConfigOption
 	if session != "" {
 		if !init.AgentCapabilities.LoadSession {
 			return "", fmt.Errorf("ACP agent cannot reload its saved session; use a load-session capable agent")
 		}
-		_, err = conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: session, Cwd: c.Config.Cwd, McpServers: []acp.McpServer{}})
+		var loaded acp.LoadSessionResponse
+		loaded, err = conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: session, Cwd: c.Config.Cwd, McpServers: []acp.McpServer{}})
+		configOptions = loaded.ConfigOptions
 	} else {
 		var s acp.NewSessionResponse
 		s, err = conn.NewSession(ctx, acp.NewSessionRequest{Cwd: c.Config.Cwd, McpServers: []acp.McpServer{}})
 		session = s.SessionId
+		configOptions = s.ConfigOptions
 	}
 	if err != nil {
 		return "", err
 	}
-	if c.Config.Model != "" {
-		if err = c.Check(ctx, "model/"+c.Config.Model, "call"); err != nil {
+
+	modelPath := c.ModelPath
+	if modelPath == "" {
+		modelPath = filepath.Join(c.StateDir, "model.json")
+	}
+	model := c.Config.Model
+	if saved, readErr := os.ReadFile(modelPath); readErr == nil {
+		if err = json.Unmarshal(saved, &model); err != nil {
 			return "", err
 		}
-		b, _ := json.Marshal(map[string]any{"sessionId": session, "configId": "model", "value": c.Config.Model})
+	} else if !os.IsNotExist(readErr) {
+		return "", readErr
+	}
+	configID := "model"
+	for _, option := range configOptions {
+		if choice := option.Select; choice != nil && (string(choice.Id) == "model" || (choice.Category != nil && string(*choice.Category) == "model")) {
+			configID = string(choice.Id)
+			break
+		}
+	}
+	if models != nil {
+		for _, option := range configOptions {
+			choice := option.Select
+			if choice == nil || (string(choice.Id) != "model" && (choice.Category == nil || string(*choice.Category) != "model")) {
+				continue
+			}
+			configID = string(choice.Id)
+			models.Selected = string(choice.CurrentValue)
+			choices := []acp.SessionConfigSelectOption{}
+			if choice.Options.Ungrouped != nil {
+				choices = append(choices, *choice.Options.Ungrouped...)
+			}
+			if choice.Options.Grouped != nil {
+				for _, group := range *choice.Options.Grouped {
+					choices = append(choices, group.Options...)
+				}
+			}
+			for _, item := range choices {
+				if c.Check(ctx, "model/"+string(item.Value), "call") == nil {
+					models.Options = append(models.Options, agentdesk.ModelOption{ID: string(item.Value), Name: item.Name})
+				}
+			}
+			break
+		}
+		if len(models.Options) == 0 {
+			models.Reason = "The ACP provider exposes no permitted model choices."
+		}
+		if selected != "" {
+			allowed := false
+			for _, choice := range models.Options {
+				if choice.ID == selected {
+					allowed = true
+				}
+			}
+			if !allowed {
+				return "", fmt.Errorf("ACP model unavailable or denied")
+			}
+			model = selected
+		}
+	}
+	if model != "" {
+		if err = c.Check(ctx, "model/"+model, "call"); err != nil {
+			return "", err
+		}
+		b, _ := json.Marshal(map[string]any{"sessionId": session, "configId": configID, "value": model})
 		var req acp.SetSessionConfigOptionRequest
 		_ = json.Unmarshal(b, &req)
 		if _, err = conn.SetSessionConfigOption(ctx, req); err != nil {
 			return "", fmt.Errorf("select ACP model: %w", err)
 		}
+		if models != nil {
+			models.Selected = model
+		}
 	}
+
 	if err = os.MkdirAll(c.StateDir, 0700); err != nil {
 		return "", err
 	}
 	b, _ = json.Marshal(session)
 	if err = writeState(path, b); err != nil {
 		return "", err
+	}
+	if models != nil {
+		if selected != "" {
+			saved, _ := json.Marshal(selected)
+			if err = writeState(modelPath, saved); err != nil {
+				return "", err
+			}
+		}
+		return "", nil
 	}
 	c.outputMu.Lock()
 	c.loading = false
@@ -125,7 +212,7 @@ func (c *Client) Chat(ctx context.Context, text string) (string, error) {
 	if usageErr != nil {
 		return "", usageErr
 	}
-	usageErr = json.NewEncoder(usage).Encode(map[string]any{"at": time.Now(), "model": c.Config.Model, "usage": result.Usage, "stop_reason": result.StopReason})
+	usageErr = json.NewEncoder(usage).Encode(map[string]any{"at": time.Now(), "model": model, "usage": result.Usage, "stop_reason": result.StopReason})
 	closeErr := usage.Close()
 	if usageErr != nil {
 		return "", usageErr

@@ -173,7 +173,21 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     manage.onclick=toggleDrawer;agentSearch.oninput=renderAgentList;
     drawer.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();closeDrawer();}};
     let agentCatalog=[];
-    const updateModel=()=>{const agent=agentCatalog.find(a=>a.id===selectedAgent);modelPicker.replaceChildren(node("option",agent?.model || "Provider default"));};
+    let modelRequest=0;
+    const updateModel=async()=>{
+        const request=++modelRequest,agent=selectedAgent;
+        modelPicker.disabled=true;
+        modelPicker.replaceChildren(node("option",agentCatalog.find(a=>a.id===agent)?.model || "Provider default"));
+        try {
+            const state=await agentAPI("/models");
+            if(request!==modelRequest || agent!==selectedAgent)return;
+            if(state.options?.length){
+                modelPicker.replaceChildren(...state.options.map(choice=>{const option=node("option",choice.name);option.value=choice.id;return option;}));
+                modelPicker.value=state.selected;modelPicker.disabled=s.busy;
+                modelPicker.title="Choose the model profile for the next turn";
+            }else modelPicker.title=state.reason || "Model selection is unavailable";
+        }catch{modelPicker.title="This runtime does not expose model selection.";}
+    };
     let managedAgents=new Set();
     const updateControls=()=>{startAgent.hidden=stopAgent.hidden=!managedAgents.has(selectedAgent);};
     for(const [button,verb] of [[startAgent,"start"],[stopAgent,"stop"]]) button.onclick=async()=>{
@@ -221,6 +235,12 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 	send.type = "submit";
 	const modelPicker=node("select");modelPicker.setAttribute("aria-label","Model");modelPicker.disabled=true;modelPicker.title="Configured model; runtime model switching is not available yet";
     actions.append(modelPicker, send);
+    modelPicker.onchange=async()=>{
+        const agent=selectedAgent,id=modelPicker.value;modelPicker.disabled=true;
+        try { await agentPost("/models",{id}); }
+        catch(err){if(agent===selectedAgent)error.textContent="Could not change model: "+err.message;}
+        finally{if(agent===selectedAgent)await updateModel();}
+    };
 	form.append(text, actions);
     text.oninput=persistDraft;
     const historyArea=node("div",undefined,"chief-history");
@@ -429,7 +449,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 	}
 	async function submit(value) {
 		if (s.busy || !value.trim()) return;
-		s.busy = true;
+		s.busy = true;modelPicker.disabled=true;
         name.disabled = true;
 		send.disabled = true;
 		status.disabled = true;
@@ -448,7 +468,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
             error.textContent = e.message;
             if(!text.value){text.value=value;persistDraft();showMessages(priorHistory);}
         } finally {
-			s.busy = false;
+			s.busy = false;updateModel();
             name.disabled = false;
 			send.disabled = false;
 			status.disabled = false;
@@ -589,8 +609,27 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
         for(const [label,run] of [["Export transcript",()=>{
             const transcript=displayedHistory.map(item=>"## "+(item.role==="user"?"You":activeName)+(item.at?" · "+item.at:"")+"\n\n"+item.text).join("\n\n");
             const url=URL.createObjectURL(new Blob([transcript],{type:"text/markdown;charset=utf-8"}));const link=node("a");link.href=url;link.download="chat-transcript.md";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-        }],["Agent settings",()=>{
-            drawer.hidden=false;manage.setAttribute("aria-expanded","true");agentSearch.hidden=true;agentList.replaceChildren(node("strong",activeName),node("p","Model: "+(agentCatalog.find(a=>a.id===selectedAgent)?.model || "Provider default")),node("p","Settings are managed in the agent configuration file."));
+        }],["Agent settings",async()=>{
+            const agent=selectedAgent;
+            drawer.hidden=false;manage.setAttribute("aria-expanded","true");agentSearch.hidden=true;
+            agentList.replaceChildren(node("strong",activeName),node("p","Loading settings…"));
+            try {
+                const settings=await agentAPI("/settings");
+                if(agent!==selectedAgent || drawer.hidden || !agentSearch.hidden)return;
+                agentList.replaceChildren(node("strong",activeName));
+                if(settings.reason)agentList.append(node("p",settings.reason));
+                for(const field of settings.fields || []){
+                    const label=node("label",field.label),input=node("textarea"),save=node("button","Save "+field.label.toLowerCase()),notice=node("p");
+                    input.value=field.value;input.setAttribute("aria-label",field.label);input.readOnly=!field.editable;label.append(input);
+                    save.type="button";save.disabled=!field.editable;notice.setAttribute("role","status");
+                    save.onclick=async()=>{save.disabled=true;notice.textContent="Saving…";
+                        try{await post((agent==="default"?"":"/agents/"+encodeURIComponent(agent))+"/settings",{id:field.id,value:input.value});notice.textContent="Saved. Applies to the next turn.";}
+                        catch(err){notice.textContent="Could not save: "+err.message;}
+                        finally{save.disabled=!field.editable;}
+                    };
+                    agentList.append(label,save,notice);
+                }
+            }catch(err){if(agent===selectedAgent && !drawer.hidden)agentList.replaceChildren(node("p","Could not load settings: "+err.message));}
         }]]){
             const entry=node("button",label);entry.type="button";entry.onclick=()=>{menus.close();run();};menuPopup.append(entry);
         }

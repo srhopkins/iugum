@@ -40,6 +40,9 @@ func TestACPHelper(t *testing.T) {
 			}
 			result = map[string]any{"configOptions": []any{}}
 		case "session/prompt":
+			if os.Getenv("IUGUM_ACP_NO_PROMPT") == "1" {
+				os.Exit(8)
+			}
 			b, _ := json.Marshal(r.Params)
 			if !strings.Contains(string(b), "Current time:") {
 				os.Exit(4)
@@ -47,6 +50,9 @@ func TestACPHelper(t *testing.T) {
 			n := map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "fixture-session", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "ACP answer"}}}}
 			_ = json.NewEncoder(os.Stdout).Encode(n)
 			result = map[string]any{"stopReason": "end_turn"}
+		}
+		if r.Method == "session/new" || r.Method == "session/load" {
+			result["configOptions"] = []any{map[string]any{"id": "model", "name": "Model", "type": "select", "category": "model", "currentValue": "ollama/test", "options": []any{map[string]any{"value": "ollama/test", "name": "Local test"}}}}
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": r.ID, "result": result})
 	}
@@ -74,5 +80,27 @@ func TestPermissionDefaultsToDenied(t *testing.T) {
 	r, err := c.RequestPermission(context.Background(), acp.RequestPermissionRequest{})
 	if err != nil || r.Outcome.Cancelled == nil {
 		t.Fatal(r, err)
+	}
+}
+
+func TestModelDiscoverySelectionAndResume(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Command: []string{os.Args[0], "-test.run=TestACPHelper"}, Cwd: dir, Env: map[string]string{"IUGUM_ACP_TEST_HELPER": "1", "IUGUM_ACP_NO_PROMPT": "1"}}
+	check := func(context.Context, string, string) error { return nil }
+	c := &Client{Config: cfg, StateDir: dir, Check: check}
+	state, err := c.Models(context.Background(), "")
+	if err != nil || len(state.Options) != 1 {
+		t.Fatalf("%+v %v", state, err)
+	}
+	if _, err = c.Models(context.Background(), "unknown"); err == nil {
+		t.Fatal("accepted unknown model")
+	}
+	if _, err = c.Models(context.Background(), "ollama/test"); err != nil {
+		t.Fatal(err)
+	}
+	delete(cfg.Env, "IUGUM_ACP_NO_PROMPT")
+	restored := &Client{Config: cfg, StateDir: dir, Check: check}
+	if answer, err := restored.Chat(context.Background(), "resume"); err != nil || answer != "ACP answer" {
+		t.Fatalf("%s %v", answer, err)
 	}
 }
