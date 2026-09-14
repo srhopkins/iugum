@@ -50,6 +50,7 @@ node plugs/chief/width.e2e.mjs
 node plugs/chief/theme.e2e.mjs
 node plugs/chief/agents.e2e.mjs
 node plugs/chief/pending.e2e.mjs
+node plugs/chief/conversations.e2e.mjs
 if [ "${1:-}" = "--prove-regression" ]; then
   if CHIEF_KEYBOARD_NEGATIVE_CONTROL=1 node plugs/chief/keyboard.e2e.mjs > "$TASK_DIR/negative.log" 2>&1; then
     echo 'ERROR: removing the fix did not fail the regression test.' >&2

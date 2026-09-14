@@ -66,7 +66,7 @@ func (s *Server) serveAgentRoute(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		switch parts[1] {
-		case "status", "messages", "chat", "approvals", "conversation":
+		case "status", "messages", "chat", "approvals", "conversation", "conversations":
 		default:
 			http.NotFound(w, r)
 			return true
@@ -112,7 +112,7 @@ func (s *Server) serveAgentRoute(w http.ResponseWriter, r *http.Request) bool {
 	// Only conversation surfaces are selectable. Wiki/search remain shared and
 	// independently authorized; no arbitrary child route or path forwarding.
 	switch parts[1] {
-	case "status", "messages", "chat", "approvals", "conversation":
+	case "status", "messages", "chat", "approvals", "conversation", "conversations":
 	default:
 		http.NotFound(w, r)
 		return true
