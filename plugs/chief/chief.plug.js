@@ -84,7 +84,7 @@ async function restoreChat() {
 }
 const manifest={name:"iugum-agent-chat",version:1,functions:{
  openChat:{path:"./chief.js:openChat",command:{name:"Chat: Open"}},
- restoreChat:{path:"./chief.js:restoreChat",events:["editor:pageLoaded","editor:pageReloaded"]}
+ restoreChat:{path:"./chief.js:restoreChat",events:["system:ready","plugs:loaded","editor:pageLoaded","editor:pageReloaded"]}
 }};
 const functionMapping={openChat,restoreChat};
 wireWorker(functionMapping,manifest,self.postMessage);
