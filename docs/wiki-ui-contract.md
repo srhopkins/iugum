@@ -90,3 +90,12 @@ Existing tests remain useful, but a green existing suite does not establish comp
 
 <!-- <atom id="C0000015" slug="maintenance" iugum-kind="decision"/> -->
 Future UI changes must reference the relevant rule and preserve the others. Record proposed departures explicitly for discussion. Keep historical audit findings intact; update implementation status in Beads rather than rewriting the audit to imply earlier compliance.
+
+## Running the contract checks
+
+<!-- <atom id="C0000016" slug="running-checks" iugum-kind="reference"/> -->
+Install the existing SilverBullet browser test dependencies and Chromium, then run `npm ci --prefix plugs/chief` for the pinned axe accessibility dependency. Run `scripts/chief-fe-check.sh` for the disposable-wiki suite. It uses generated fixtures and does not call models or read personal conversations.
+
+The suite checks owned chat and search UI with axe, including the open options menu and agent drawer. It also checks keyboard behavior, focus, conversation persistence, resizing, scrolling, and theme overrides. Static checks reject inline style strings in feature modules and repeated properties within a shared CSS rule. Calculated geometry remains permitted. This is a focused guard, not a complete CSS duplication detector.
+
+Visual checks cover both theme families in Day and Night at 900- and 1440-pixel viewport widths. Baselines use Playwright Chromium on macOS. Review changes on that environment; font rasterization can differ on other systems. To propose new baselines, run `IUGUM_UI_UPDATE_BASELINES=1 scripts/chief-fe-check.sh`, inspect every changed image, then rerun without that variable. Never accept a baseline merely because a comparison failed. Browser failure artifacts are written to `plugs/chief/visual-results/` and are not committed.

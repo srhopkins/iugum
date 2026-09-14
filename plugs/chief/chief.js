@@ -95,12 +95,16 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     resize.setAttribute("role", "separator");
     resize.setAttribute("aria-label", "Resize chat");
     resize.setAttribute("aria-orientation", "vertical");
+    resize.setAttribute("aria-valuenow", "0");
+    resize.setAttribute("aria-valuemin", "0");
+    resize.setAttribute("aria-valuemax", "100");
     resize.tabIndex = 0;
     resize.title = "Drag to resize chat; arrow keys adjust width";
     const setWidth = width => {
         const bounded = Math.round(Math.max(290, Math.min(innerWidth - 240, width)));
         document.documentElement.style.setProperty("--iugum-chat-panel-size", "0 0 " + bounded + "px");
-        resize.setAttribute("aria-valuenow", String(bounded));
+        resize.setAttribute("aria-valuenow", String(Math.round(bounded / innerWidth * 100)));
+        resize.setAttribute("aria-valuetext", bounded + " pixels wide");
     };
     resize.onpointerdown = event => {
         if (event.button !== 0) return;
@@ -179,6 +183,9 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     const policyNotice=node("div");policyNotice.setAttribute("role","status");panel.append(policyNotice);
 	const messages = node("div", undefined, "chief-messages");
     const updatePromptOverflow = () => {
+        const panelWidth = Math.round(panel.getBoundingClientRect().width);
+        resize.setAttribute("aria-valuenow", String(Math.round(panelWidth / innerWidth * 100)));
+        resize.setAttribute("aria-valuetext", panelWidth + " pixels wide");
         for (const card of messages.querySelectorAll(".chief-message.user")) {
             const body = card.querySelector(".chief-markdown");
             const long = body.scrollHeight > parseFloat(getComputedStyle(body).fontSize) * 6 + 1;
@@ -550,7 +557,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     };
     chatTitle.ondblclick=editTitle;
     chatTitle.onkeydown=e=>{if(e.key==="Enter"&&e.target===chatTitle){e.preventDefault();e.stopPropagation();editTitle();}};
-    icon(chatGlyph,"Conversation","M4 3h16v14H8l-5 4V4z");chatTitle.append(chatGlyph,chatTitleText);
+    icon(chatGlyph,"Conversation","M4 3h16v14H8l-5 4V4z");chatGlyph.removeAttribute("aria-label");chatGlyph.setAttribute("aria-hidden","true");chatTitle.append(chatGlyph,chatTitleText);
     const newChat=node("button");icon(newChat,"New chat","M12 4v16 M4 12h16");newChat.disabled=true;newChat.title="New chat requires separate conversation support (not yet available)";
     icon(manage,"Agents","M3 4h18v16H3z M15 4v16");
     close.hidden=true;

@@ -42,15 +42,22 @@ process.exit(1);
 JS
 then cat "$TASK_DIR/server.log"; exit 1; fi
 node --test plugs/chief/chief.test.mjs
+node --test plugs/chief/styles.test.mjs
 node plugs/chief/keyboard.e2e.mjs
 node plugs/chief/search.e2e.mjs
 node plugs/chief/shared-ui.e2e.mjs
+node plugs/chief/accessibility.e2e.mjs
 node plugs/chief/sticky.e2e.mjs
 node plugs/chief/width.e2e.mjs
 node plugs/chief/theme.e2e.mjs
 node plugs/chief/agents.e2e.mjs
 node plugs/chief/pending.e2e.mjs
 node plugs/chief/conversations.e2e.mjs
+if [ "${IUGUM_UI_UPDATE_BASELINES:-0}" = "1" ]; then
+  silverbullet/node_modules/.bin/playwright test -c plugs/chief/visual.config.mjs --update-snapshots=all
+else
+  silverbullet/node_modules/.bin/playwright test -c plugs/chief/visual.config.mjs --update-snapshots=none
+fi
 if [ "${1:-}" = "--prove-regression" ]; then
   if CHIEF_KEYBOARD_NEGATIVE_CONTROL=1 node plugs/chief/keyboard.e2e.mjs > "$TASK_DIR/negative.log" 2>&1; then
     echo 'ERROR: removing the fix did not fail the regression test.' >&2

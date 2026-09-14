@@ -1,0 +1,2 @@
+import {defineConfig} from '../../silverbullet/node_modules/@playwright/test/index.mjs';
+export default defineConfig({testDir:'.',testMatch:'visual.spec.mjs',workers:1,timeout:60000,outputDir:'visual-results',snapshotPathTemplate:'{testDir}/visual-baselines/{arg}{ext}',use:{baseURL:process.env.CHIEF_UI_TEST_URL,serviceWorkers:'block',timezoneId:'America/Phoenix',locale:'en-US'},expect:{toHaveScreenshot:{animations:'disabled',maxDiffPixelRatio:0.001}}});

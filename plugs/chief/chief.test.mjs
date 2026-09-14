@@ -57,6 +57,7 @@ class Element {
 		this.children = [];
 		this.append(...items);
 	}
+	removeAttribute(k) { delete this[k]; }
 	setAttribute(k, v) {
 		this[k] = v;
 	}

@@ -715,7 +715,7 @@ export const hostCSS = controlCSS + `
   left:50%;
   top:50%;
   transform:translate(-50%,-50%);
-  width:min(560px,48vw)
+  width:min(560px,48vw,calc(100vw - 620px))
 }
 @media(max-width:800px) {
   #sb-top:has(#iugum-chief-tools) #sb-current-page {
