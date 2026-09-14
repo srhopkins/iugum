@@ -133,3 +133,11 @@ p, *, schedule, remove, deny
 
 The starter `home/policy.csv` matches iugum's current Casbin allow-all policy.
 Replace its allow row with narrower rules when an agent needs restrictions.
+
+## Native agents
+
+`iugum agent run --config examples/chief/agent.yaml` runs an agent's local chat workspace and native model/tool loop. It leaves the existing container commands intact. See [Native agent workspace](native-agent.md) for configuration, model pools, policy, and current limitations.
+
+`iugum agent clone --config agent.yaml --name candidate --output ./candidate` creates a named configuration candidate with separate writable state. See [Named clones](native-clones.md).
+
+`iugum agent session capabilities` describes verified coding-session control. See [Claude session control](native-session-control.md).

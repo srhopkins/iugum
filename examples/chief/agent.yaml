@@ -1,0 +1,47 @@
+name: chief
+runtime: native
+listen: 127.0.0.1:3850
+data_dir: data
+# Point these at your existing wiki. iugum does not replace its server.
+wiki_url: http://127.0.0.1:3000
+wiki_dir: ../../wiki
+instructions_file: soul.md
+policy_file: policy.csv
+models:
+  default_profile: mini
+  timezone: America/Phoenix
+  max_steps: 8
+  pools:
+    openai:
+      provider: openai
+      base_url: https://api.openai.com/v1
+      api_key_env: CHIEF_OPENAI_API_KEY
+      monthly_target_usd: 50
+  profiles:
+    mini:
+      pool: openai
+      model: gpt-5-mini
+      input_usd_per_million: 0.25
+      output_usd_per_million: 2
+      max_completion_tokens: 4096
+# Optional local pool/profile: add these under models.pools and models.profiles.
+# Set openai.fallback_profile: local only after verifying the model is available.
+# pools:
+#   local:
+#     provider: openai-compatible
+#     base_url: http://127.0.0.1:11434/v1
+# profiles:
+#   local:
+#     pool: local
+#     model: YOUR_INSTALLED_MODEL
+#     zero_cost: true
+#     max_completion_tokens: 2048
+# A top-level usage_path can point parent and clones at one shared usage.json.
+# Native profile choices persist in data/routing-state.json and apply next turn.
+# /usage reports the active transport and current native routing separately.
+# Optional allowed CLI models when chat_transport is codex-subscription:
+# subscription_profiles:
+#   fast: YOUR_FAST_CLI_MODEL
+#   deep: YOUR_REASONING_CLI_MODEL
+# model_select chooses within the active transport for the next turn.
+# subscription_model remains the default until a subscription profile is selected.

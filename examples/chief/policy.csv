@@ -1,0 +1,5 @@
+# Example local profile. Replace with narrower policy for each deployment.
+p, agent:chief, *, *, allow
+# Denials take effect on the next operation, without restarting Chief.
+# p, agent:chief, project:*/excluded-project*, read, deny
+# p, agent:chief, transcript:claude:ffai, search, deny

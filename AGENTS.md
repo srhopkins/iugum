@@ -1,5 +1,9 @@
 # iugum — agent context
 
+## Shared wiki UI contract
+
+For wiki, chat, search, menu, or theme changes, follow [docs/wiki-ui-contract.md](docs/wiki-ui-contract.md). It records approved interaction, styling, persistence, and regression rules. Document exceptions; do not replace visual baselines merely to clear failures.
+
 iugum is one Go program.
 The default build is CGO so Beads can open the embedded Dolt store (see NORTHSTARS.md star 1).
 A static (`CGO_ENABLED=0`) build still compiles; beads then needs Dolt server mode.
@@ -30,6 +34,17 @@ The Beads blocks below this layout are generated. Do not rewrite those blocks fo
 
 Wiki flags: `-p` / `--port` (default `3000`), `-L` / `--hostname`. No `serve` subcommand.
 Observe flags: `--port` (default `3848`), `--hostname`. Do not bind SilverBullet `:3737`.
+
+## Chief chat regression checks
+
+For changes to `plugs/chief/` or native wiki keyboard integration, run
+`scripts/chief-fe-check.sh`. It builds the current code, starts a disposable wiki,
+and tests native text editing without touching personal data. Requires the existing
+SilverBullet Playwright installation and its Chromium browser.
+
+For changes to keyboard event handling, also run
+`scripts/chief-fe-check.sh --prove-regression`. This removes the composer handler
+only inside the disposable browser and verifies that the original cursor bug is caught.
 
 ## Build
 
