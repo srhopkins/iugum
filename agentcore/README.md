@@ -70,11 +70,25 @@ are forwarded. Tests use a fake executable, not an authenticated model call.
 `RunSubscriptionTools(ctx, request, binary, model, tools)` adds native Go
 orchestration around that synthesis adapter. Each bounded step starts a fresh CLI
 invocation with the current timestamp and requires a strict JSON decision. The
-model either replies or proposes named tool calls with object arguments. Go
+model either replies or proposes named tool calls with object arguments. If it
+includes prose alongside tool calls, that provisional prose is not published;
+the loop waits for a final response after the tool results. Go
 validates the batch, checks policy and argument authorization immediately before
 each execution, and supplies results as untrusted data on the next step. Malformed
 decisions execute nothing. Each CLI invocation has its own usage entry. This does
 not remove the underlying CLI-version isolation caveat.
+
+The current human request is captured before the tool loop and supplied explicitly
+on every step. Tool results cannot replace it merely because they use a user-role
+message. Historical messages and retrieved evidence supply context, not permission
+for new actions. The host still checks policy and each tool's argument authority.
+
+The normal test suite uses fake CLIs. To evaluate actual Chief task-list behavior,
+run `IUGUM_CHIEF_EVAL_MODEL=<configured-model> go test . -run '^TestChiefCurrentTaskListEvaluation$' -v`
+from the repository root. This opt-in test consumes subscription allowance. It uses
+synthetic names, temporary commitment storage, and a fake read tool; it cannot
+merge projects or send messages. It checks capture despite a distracting earlier
+session question and requires a research attempt after capture.
 
 ## Shared pool accounting and routing
 
