@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,22 @@ var osExecutable = os.Executable
 // It never shells out to an external bd. See adapter/beadview/README.md
 // "Data path" for why a subprocess and not a direct in-process call.
 func (a *App) ServeBeadView(ctx context.Context, port int, host, dir string) error {
+	return a.ServeBeadViewWith(ctx, port, host, dir, BeadViewExtras{})
+}
+
+// BeadViewExtras are the beadview options beyond port/host/dir.
+type BeadViewExtras struct {
+	// ReadOnly disables the JSON API's write endpoints (--read-only).
+	ReadOnly bool
+	// UI is the embedded React build (index.html at its root). Nil serves
+	// a placeholder page at /.
+	UI fs.FS
+}
+
+// ServeBeadViewWith is ServeBeadView plus the read-only flag and the UI
+// build. Writes are gated per request by the Casbin action beadview/write
+// (allowed by the default allow-all policy; deny it to lock writes).
+func (a *App) ServeBeadViewWith(ctx context.Context, port int, host, dir string, extras BeadViewExtras) error {
 	if err := a.Check(ctx, "beadview", "serve"); err != nil {
 		return err
 	}
@@ -56,12 +73,21 @@ func (a *App) ServeBeadView(ctx context.Context, port int, host, dir string) err
 		return fmt.Errorf("beadview: resolving own executable: %w", err)
 	}
 
-	handler := beadview.NewHandler(beadview.NewExecFetcher(exe, abs))
+	handler := beadview.NewHandler(beadview.NewExecFetcher(exe, abs), beadview.Options{
+		ReadOnly: extras.ReadOnly,
+		UI:       extras.UI,
+		AuthorizeWrite: func(ctx context.Context, action string) error {
+			return a.Check(ctx, "beadview", "write")
+		},
+	})
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	srv := &http.Server{Addr: addr, Handler: handler}
 
 	fmt.Fprintf(os.Stdout, "iugum beadview: http://%s\n", addr)
 	fmt.Fprintf(os.Stdout, "iugum beadview data: %s\n", abs)
+	if extras.ReadOnly {
+		fmt.Fprintln(os.Stdout, "iugum beadview: read-only (write endpoints return 405)")
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

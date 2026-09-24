@@ -122,3 +122,32 @@ func TestApplyFilterDoesNotMutateInput(t *testing.T) {
 		t.Fatalf("ApplyFilter mutated caller's slice order: %v", []string{beads[0].ID, beads[1].ID})
 	}
 }
+
+func TestDependencyDecodesListAndShowShapes(t *testing.T) {
+	// bd list --json: edge objects.
+	var listed Bead
+	if err := json.Unmarshal([]byte(`{"id":"a","dependencies":[{"issue_id":"a","depends_on_id":"b","type":"blocks"}]}`), &listed); err != nil {
+		t.Fatal(err)
+	}
+	// bd show --json: the depended-on issue, with dependency_type.
+	var shown Bead
+	if err := json.Unmarshal([]byte(`{"id":"a","dependencies":[{"id":"b","title":"B","issue_type":"task","dependency_type":"blocks"}]}`), &shown); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]Bead{"list": listed, "show": shown} {
+		if len(b.Dependencies) != 1 || b.Dependencies[0].DependsOnID != "b" || b.Dependencies[0].Type != "blocks" {
+			t.Errorf("%s shape decoded to %+v", name, b.Dependencies)
+		}
+	}
+}
+
+func TestIsStartupLock(t *testing.T) {
+	if !isStartupLock("iugum: database is locked (5) (SQLITE_BUSY)") {
+		t.Error("iugum startup lock not detected")
+	}
+	// A lock error from inside bd itself is not retried: bd may have
+	// already written something.
+	if isStartupLock("Error: database is locked") {
+		t.Error("non-startup lock treated as retryable")
+	}
+}

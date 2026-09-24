@@ -2,9 +2,14 @@ package beadview
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"html/template"
+	"io/fs"
+	"log"
 	"net/http"
+	"net/url"
+	"os"
 )
 
 //go:embed templates/*.html
@@ -12,21 +17,72 @@ var templateFS embed.FS
 
 var tmpl = template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
+// Options configures NewHandler. The zero value is a writable server with
+// no UI build (the placeholder page at /), logging to stderr.
+type Options struct {
+	// ReadOnly disables every write endpoint with 405 (--read-only).
+	ReadOnly bool
+	// UI is the React build: an fs.FS whose root holds index.html and
+	// assets/. Nil serves a placeholder page at /.
+	UI fs.FS
+	// AuthorizeWrite, if set, is asked before each write. action is one of
+	// create, update, close, reopen, comment. A non-nil error answers 403.
+	AuthorizeWrite func(ctx context.Context, action string) error
+	// Log receives one line per write attempt. Nil means stderr.
+	Log *log.Logger
+}
+
 // NewHandler builds the beadview HTTP handler. f supplies data; production
 // callers pass NewExecFetcher(exe, dir), tests pass a fake Fetcher.
-func NewHandler(f Fetcher) http.Handler {
+//
+// Routes: /api/* is the JSON API (api.go), also mounted at /api/bd/* so
+// ayo-style clients work unchanged; /legacy/* is the server-rendered
+// html/template viewer; /bead/{id}, /tree and /graph redirect (old
+// bookmarks); everything else is the React build with SPA fallback.
+func NewHandler(f Fetcher, opts Options) http.Handler {
+	if opts.Log == nil {
+		opts.Log = log.New(os.Stderr, "beadview: ", log.LstdFlags)
+	}
 	mux := http.NewServeMux()
-	h := &server{f: f}
-	mux.HandleFunc("GET /{$}", h.handleList)
-	mux.HandleFunc("GET /bead/{id}", h.handleDetail)
-	mux.HandleFunc("GET /tree", h.handleTree)
-	mux.HandleFunc("GET /graph", h.handleGraph)
+	h := &server{f: f, opts: opts}
+
+	h.registerAPI(mux, "/api")
+	h.registerAPI(mux, "/api/bd")
+
+	mux.HandleFunc("GET /legacy/{$}", h.handleList)
+	mux.HandleFunc("GET /legacy/bead/{id}", h.handleDetail)
+	mux.HandleFunc("GET /legacy/tree", h.handleTree)
+	mux.HandleFunc("GET /legacy/graph", h.handleGraph)
+	mux.Handle("GET /legacy", http.RedirectHandler("/legacy/", http.StatusMovedPermanently))
+
+	// Old URLs. /bead/{id} opens the new UI with that bead selected (the
+	// UI reads ?bead=). /graph and /tree keep their old pages under
+	// /legacy: bd's D3 graph and the parent-nested tree have no exact
+	// equivalent in the new UI.
+	mux.HandleFunc("GET /bead/{id}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/?bead="+url.QueryEscape(r.PathValue("id")), http.StatusFound)
+	})
+	mux.HandleFunc("GET /graph", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/legacy/graph", http.StatusFound)
+	})
+	mux.HandleFunc("GET /tree", func(w http.ResponseWriter, r *http.Request) {
+		target := "/legacy/tree"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+	})
+
+	mux.Handle("/", spaHandler(opts.UI))
 	return mux
 }
 
 type server struct {
-	f Fetcher
+	f    Fetcher
+	opts Options
 }
+
+func (s *server) logf(format string, args ...any) { s.opts.Log.Printf(format, args...) }
 
 type listPage struct {
 	Title         string

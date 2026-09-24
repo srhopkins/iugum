@@ -1,5 +1,5 @@
 {{define "detail-content"}}
-<p><a href="/">&larr; all tickets</a></p>
+<p><a href="/legacy/">&larr; all tickets</a></p>
 <h2>{{.Bead.ID}}: {{.Bead.Title}}</h2>
 <dl class="detail-grid">
 <dt>Status</dt><dd class="status-{{.Bead.Status}}">{{.Bead.Status}}</dd>
@@ -10,7 +10,7 @@
 <dt>Labels</dt><dd>{{range .Bead.Labels}}<span class="pill">{{.}}</span> {{else}}<span class="muted">none</span>{{end}}</dd>
 <dt>Created</dt><dd>{{.Bead.CreatedAt}}</dd>
 <dt>Updated</dt><dd>{{.Bead.UpdatedAt}}</dd>
-{{if .Bead.Parent}}<dt>Parent</dt><dd><a href="/bead/{{.Bead.Parent}}">{{.Bead.Parent}}</a></dd>{{end}}
+{{if .Bead.Parent}}<dt>Parent</dt><dd><a href="/legacy/bead/{{.Bead.Parent}}">{{.Bead.Parent}}</a></dd>{{end}}
 </dl>
 
 <h3>Description</h3>
@@ -24,7 +24,7 @@
 <h3>Dependencies</h3>
 {{if .Bead.Dependencies}}
 <ul class="deps">
-{{range .Bead.Dependencies}}<li><a href="/bead/{{.DependsOnID}}">{{.DependsOnID}}</a> <span class="muted">({{.Type}})</span></li>{{end}}
+{{range .Bead.Dependencies}}<li><a href="/legacy/bead/{{.DependsOnID}}">{{.DependsOnID}}</a> <span class="muted">({{.Type}})</span></li>{{end}}
 </ul>
 {{else}}<p class="muted">none</p>{{end}}
 
