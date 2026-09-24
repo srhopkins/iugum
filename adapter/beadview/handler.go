@@ -19,6 +19,7 @@ func NewHandler(f Fetcher) http.Handler {
 	h := &server{f: f}
 	mux.HandleFunc("GET /{$}", h.handleList)
 	mux.HandleFunc("GET /bead/{id}", h.handleDetail)
+	mux.HandleFunc("GET /tree", h.handleTree)
 	mux.HandleFunc("GET /graph", h.handleGraph)
 	return mux
 }
@@ -65,6 +66,37 @@ func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
 		SortOptions:   []string{"updated", "created", "priority", "status", "id", "title"},
 	}
 	s.render(w, "list-content", page.Title, page.Active, page)
+}
+
+type treePage struct {
+	Title  string
+	Active string
+	Dir    string
+	Roots  []*TreeNode
+	Total  int
+	Filter Filter
+}
+
+// handleTree groups beads by Bead.Parent (epic hierarchy) into an indented,
+// expand/collapse tree, unlike handleList's flat table. See the beadview
+// README "What this does not do" for why the table stays flat.
+func (s *server) handleTree(w http.ResponseWriter, r *http.Request) {
+	beads, err := s.f.FetchBeads(r.Context())
+	if err != nil {
+		s.renderError(w, err)
+		return
+	}
+	filter := Filter{Search: r.URL.Query().Get("q")}
+	roots := PruneTree(BuildTree(beads), filter.Search)
+	page := treePage{
+		Title:  "Tree",
+		Active: "tree",
+		Dir:    s.f.Dir(),
+		Roots:  roots,
+		Total:  len(beads),
+		Filter: filter,
+	}
+	s.render(w, "tree-content", page.Title, page.Active, page)
 }
 
 type detailPage struct {

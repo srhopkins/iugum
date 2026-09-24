@@ -63,6 +63,71 @@ function node(tag, text, cls) {
 	if (cls) n.className = cls;
 	return n;
 }
+
+// Provider transcripts do not pass through agentdesk's Goldmark renderer. This
+// fallback deliberately creates DOM nodes instead of accepting provider HTML.
+// It covers the Markdown that agents normally return while keeping untrusted
+// markup inert.
+function markdownLink(url) {
+	try {
+		const parsed = new URL(url, window.location.href);
+		return ["http:", "https:", "mailto:"].includes(parsed.protocol) ? parsed.href : "";
+	} catch { return ""; }
+}
+function appendInline(target, source) {
+	const token = /(\`[^`]*\`|\*\*[^*]+\*\*|__[^_]+__|\[[^\]]+\]\([^\s)]+\)|\*[^*]+\*|_[^_]+_)/g;
+	let cursor = 0;
+	for (const match of String(source || "").matchAll(token)) {
+		target.append(document.createTextNode(source.slice(cursor, match.index)));
+		const value = match[0];
+		if (value.startsWith("`")) target.append(node("code", value.slice(1, -1)));
+		else if (value.startsWith("**") || value.startsWith("__")) {
+			const strong = node("strong"); appendInline(strong, value.slice(2, -2)); target.append(strong);
+		} else if (value.startsWith("[")) {
+			const close = value.indexOf("]("); const href = markdownLink(value.slice(close + 2, -1));
+			if (!href) target.append(document.createTextNode(value));
+			else { const link = node("a"); link.href = href; link.rel = "noopener noreferrer"; appendInline(link, value.slice(1, close)); target.append(link); }
+		} else { const em = node("em"); appendInline(em, value.slice(1, -1)); target.append(em); }
+		cursor = match.index + value.length;
+	}
+	target.append(document.createTextNode(source.slice(cursor)));
+}
+function markdownCell(text) { const cell = node("td"); appendInline(cell, text.trim()); return cell; }
+function isTableRule(line) { return /^\s*\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?\s*$/.test(line); }
+function tableCells(line) { return line.trim().replace(/^\||\|$/g, "").split("|"); }
+function renderMarkdownFallback(text) {
+	const root = document.createDocumentFragment(), lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+	for (let i = 0; i < lines.length;) {
+		const line = lines[i];
+		if (!line.trim()) { i++; continue; }
+		if (/^```/.test(line)) {
+			const code = [], language = line.slice(3).trim(); i++;
+			while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+			if (i < lines.length) i++;
+			const pre = node("pre"), block = node("code", code.join("\n")); if (language) block.dataset.language = language; pre.append(block); root.append(pre); continue;
+		}
+		const heading = line.match(/^(#{1,3})\s+(.+)$/);
+		if (heading) { const el = node("h" + heading[1].length); appendInline(el, heading[2]); root.append(el); i++; continue; }
+		if (i + 1 < lines.length && isTableRule(lines[i + 1])) {
+			const table = node("table"), head = node("thead"), row = node("tr");
+			for (const value of tableCells(line)) { const cell = node("th"); appendInline(cell, value.trim()); row.append(cell); }
+			head.append(row); table.append(head); i += 2; const body = node("tbody");
+			while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim()) { const bodyRow = node("tr"); for (const value of tableCells(lines[i++])) bodyRow.append(markdownCell(value)); body.append(bodyRow); }
+			table.append(body); root.append(table); continue;
+		}
+		const list = line.match(/^\s*([-*+] |\d+\. )(.+)$/);
+		if (list) {
+			const ordered = /^\s*\d+\. /.test(line), element = node(ordered ? "ol" : "ul");
+			while (i < lines.length) { const item = lines[i].match(ordered ? /^\s*\d+\. (.+)$/ : /^\s*[-*+] (.+)$/); if (!item) break; const li = node("li"); appendInline(li, item[1]); element.append(li); i++; }
+			root.append(element); continue;
+		}
+		if (/^>\s?/.test(line)) { const quote = node("blockquote"), paragraph = node("p"); while (i < lines.length && /^>\s?/.test(lines[i])) { if (paragraph.childNodes.length) paragraph.append(" "); appendInline(paragraph, lines[i++].replace(/^>\s?/, "")); } quote.append(paragraph); root.append(quote); continue; }
+		const paragraph = node("p");
+		while (i < lines.length && lines[i].trim() && !/^```|^(#{1,3})\s+|^\s*([-*+] |\d+\. )|^>\s?/.test(lines[i]) && !(i + 1 < lines.length && isTableRule(lines[i + 1]))) { if (paragraph.childNodes.length) paragraph.append(" "); appendInline(paragraph, lines[i++]); }
+		root.append(paragraph);
+	}
+	return root;
+}
 async function api(path, options) {
 	const r = await fetch(API + path, options);
 	const data = await r.json();
@@ -323,9 +388,11 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 				),
 				(() => {
                     const body = node("div", undefined, "chief-markdown");
-                    // HTML comes exclusively from the server Goldmark + Bluemonday renderer.
-                    if (typeof m.html === "string") body.innerHTML = m.html;
-                    else body.textContent = m.text;
+					// Server HTML is Goldmark + Bluemonday output. Attached provider
+					// transcripts have no server HTML, so render their Markdown with
+					// DOM nodes rather than trusting their raw text as HTML.
+					if (typeof m.html === "string") body.innerHTML = m.html;
+					else body.replaceChildren(renderMarkdownFallback(m.text));
                     return body;
                 })(),
 			);

@@ -1,0 +1,36 @@
+{{define "tree-content"}}
+<form class="filters" method="get" action="/tree">
+<input type="search" name="q" placeholder="search id, title, description" value="{{.Filter.Search}}">
+<button type="submit">Filter</button>
+</form>
+<div class="stat">{{.Total}} tickets, {{len .Roots}} root node{{if ne (len .Roots) 1}}s{{end}}{{if .Filter.Search}} matching "{{.Filter.Search}}"{{end}}</div>
+<div class="tree">
+{{range .Roots}}{{template "tree-node" .}}{{end}}
+</div>
+{{end}}
+
+{{define "tree-node"}}
+{{if .Children}}
+<details class="tree-node" open>
+<summary>
+<a href="/bead/{{.Bead.ID}}">{{.Bead.ID}}</a>
+<span class="tree-title">{{.Bead.Title}}</span>
+<span class="pill status-{{.Bead.Status}}">{{.Bead.Status}}</span>
+<span class="muted">{{.Bead.PriorityLabel}}</span>
+<span class="muted">{{.Bead.IssueType}}</span>
+{{with .ChildProgressLabel}}<span class="tree-progress">{{.}}</span>{{end}}
+</summary>
+<div class="tree-children">
+{{range .Children}}{{template "tree-node" .}}{{end}}
+</div>
+</details>
+{{else}}
+<div class="tree-node leaf">
+<a href="/bead/{{.Bead.ID}}">{{.Bead.ID}}</a>
+<span class="tree-title">{{.Bead.Title}}</span>
+<span class="pill status-{{.Bead.Status}}">{{.Bead.Status}}</span>
+<span class="muted">{{.Bead.PriorityLabel}}</span>
+<span class="muted">{{.Bead.IssueType}}</span>
+</div>
+{{end}}
+{{end}}
