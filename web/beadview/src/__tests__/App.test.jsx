@@ -157,6 +157,29 @@ describe('App', () => {
     expect(screen.getByText('50%')).toBeTruthy()
   })
 
+  it('nests by parent only: each bead is one row after Expand All', async () => {
+    // demo-3 has no parent and depends on demo-2: it stays a top-level row.
+    // demo-1.1 and demo-1.2 have a parent: each shows once, under demo-1.
+    const extra = { id: 'demo-3', title: 'Depends only', status: 'open', priority: 'p2', type: 'task', depends_on: ['demo-2', 'demo-1.1'], labels: [], assignee: '', updated_at: '2026-01-05' }
+    BEADS.push(extra)
+    try {
+      mockApi()
+      const { container } = render(<App />)
+      await screen.findByText('Epic')
+      fireEvent.click(screen.getByRole('button', { name: 'Expand All' }))
+      const rows = container.querySelectorAll('.tree-node-header')
+      expect(rows.length).toBe(BEADS.length)
+      expect(screen.getAllByText('Depends only')).toHaveLength(1)
+      const dep = screen.getByText('Depends only').closest('.tree-node')
+      expect(dep.parentElement.closest('.tree-node')).toBeNull()
+      const child = screen.getByText('Child done').closest('.tree-node')
+      expect(child.parentElement.closest('.tree-node').querySelector('.tree-title').textContent).toBe('Epic')
+      expect(screen.getAllByText('Child done')).toHaveLength(1)
+    } finally {
+      BEADS.pop()
+    }
+  })
+
   it('hides the n shortcut in help when read-only', async () => {
     mockApi({ readOnly: true })
     render(<App />)

@@ -75,9 +75,12 @@ Changed:
 
 - Priority filter, sort, badges, edit and New Bead cover P0 to P4. The
   source viewer offered only P1 to P3 and sorted P0 last.
-- The tree nests a bead under its `parent` when it has one. A bead with no
-  parent nests under the beads it depends on, as before. A dependency cycle
-  no longer recurses forever when you press Expand All.
+- The tree nests a bead under its `parent` only. A bead with no parent is a
+  top-level row, even when it depends on other beads. Each bead shows once,
+  so after Expand All the row count equals the bead count. The source viewer
+  also nested a bead under every bead it depended on, so one bead could show
+  many times. Dependencies stay in the detail panel (blocked by / blocks)
+  and in the Graph tab.
 - The Graph tab loads Mermaid on first use, so the first page load is about
   340 kB of JS instead of about 1 MB.
 - When `/api/config` reports `read_only`, the UI hides New Bead, Edit, Claim,
@@ -88,6 +91,6 @@ Changed:
   form, or above the list for a Pipeline drag. The source viewer ignored
   write failures.
 - Filters and Sort apply to nested rows too. The percent on a parent still
-  counts all of its children.
+  counts all of its `parent`-children, including rows the filters hide.
 - Type, Labels and Assignee filters always show, as in the source viewer.
   An empty list says "No options".

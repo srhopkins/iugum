@@ -67,9 +67,10 @@ describe('tree nesting', () => {
     expect(isChildOf(child, 'y')).toBe(false)
   })
 
-  it('falls back to dependency edges without a parent', () => {
+  it('never nests by dependency edges', () => {
     const b = { id: 'z', depends_on: ['y'] }
-    expect(isChildOf(b, 'y')).toBe(true)
+    expect(isChildOf(b, 'y')).toBe(false)
+    expect(isRoot(b, new Set(['y', 'z']))).toBe(true)
   })
 
   it('is a root when its parent is filtered out', () => {

@@ -1,31 +1,25 @@
 import React, { useState, useMemo } from 'react'
 import StatusBadge from './StatusBadge'
 import PriorityBadge from './PriorityBadge'
-import { depIds } from '../filters'
 
 /**
- * A bead nests under its `parent` when it has one. A bead with no parent
- * nests under every bead it depends on (the original viewer's rule).
+ * A bead nests under its `parent` and nowhere else. Dependencies do not
+ * nest; they show in the detail panel and the Graph tab.
  */
 export function isChildOf(bead, parentId) {
-  if (bead.parent) return bead.parent === parentId
-  return depIds(bead).includes(parentId)
+  return !!bead.parent && bead.parent === parentId
 }
 
-/** A bead is a root when the bead(s) it would nest under are not in `ids`. */
+/** A bead is a root when it has no parent, or its parent is not in `ids`. */
 export function isRoot(bead, ids) {
-  if (bead.parent) return !ids.has(bead.parent)
-  const deps = depIds(bead)
-  return deps.length === 0 || !deps.some((d) => ids.has(d))
+  return !bead.parent || !ids.has(bead.parent)
 }
 
-function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, focusedId, depth = 0, ancestors = new Set() }) {
+function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, focusedId, depth = 0 }) {
   const isExpanded = expandedSet.has(bead.id)
-  // Skip any bead already on the path from the root, so a dependency cycle
-  // cannot recurse forever.
-  const isKid = b => !ancestors.has(b.id) && b.id !== bead.id && isChildOf(b, bead.id)
+  const isKid = b => isChildOf(b, bead.id)
   // Shown children come from the filtered, sorted list, so the filters and
-  // Sort apply at every level. The percent counts every child.
+  // Sort apply at every level. The percent counts every parent-child.
   const children = beads.filter(isKid)
   const allChildren = allBeads.filter(isKid)
 
@@ -74,7 +68,6 @@ function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, 
           onSelect={onSelect}
           focusedId={focusedId}
           depth={depth + 1}
-          ancestors={new Set([...ancestors, bead.id])}
         />
       ))}
     </div>
@@ -103,8 +96,7 @@ export default function TreeView({ beads, allBeads, focusedIndex, onSelect }) {
 
   const rootBeads = useMemo(() => {
     const filteredIds = new Set(beads.map(b => b.id))
-    const roots = beads.filter(b => isRoot(b, filteredIds))
-    return roots.length > 0 ? roots : beads
+    return beads.filter(b => isRoot(b, filteredIds))
   }, [beads])
 
   const focusedId = focusedIndex >= 0 && focusedIndex < beads.length
