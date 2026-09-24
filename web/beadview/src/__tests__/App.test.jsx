@@ -15,12 +15,17 @@ const BEADS = [
   { id: 'demo-2', title: 'Blocked thing', status: 'blocked', priority: 'p4', type: 'bug', depends_on: [], labels: [], assignee: '', updated_at: '2026-01-04' },
 ]
 
-function mockApi({ readOnly = false } = {}) {
+function mockApi({ readOnly = false, writes = {} } = {}) {
   const calls = []
   const fetchMock = vi.fn(async (url, opts = {}) => {
-    calls.push({ url, method: opts.method || 'GET' })
+    const method = opts.method || 'GET'
+    const headers = new Headers(opts.headers || {})
+    calls.push({ url, method, contentType: headers.get('Content-Type'), body: opts.body })
     const path = url.split('?')[0]
-    const json = (v) => new Response(JSON.stringify(v), { headers: { 'Content-Type': 'application/json' } })
+    const json = (v, status = 200) =>
+      new Response(JSON.stringify(v), { status, headers: { 'Content-Type': 'application/json' } })
+    const write = writes[`${method} ${path}`]
+    if (write) return json(write.body, write.status)
     if (path === '/api/beads') return json(BEADS)
     if (path === '/api/mermaid') return new Response('')
     if (path === '/api/config') return json({ ws_port: null, read_only: readOnly, project: 'demo' })
@@ -64,7 +69,7 @@ describe('App', () => {
     }
     expect(screen.getByText('Showing 4 issues')).toBeTruthy()
     expect(screen.getByText('Polling')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ New Bead' })).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('button', { name: '+ New Bead' })).toBeTruthy())
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project' }).value).toBe('demo'))
 
     // Epic is a parent of two children, one closed: 50%.
@@ -104,6 +109,7 @@ describe('App', () => {
       fireEvent.keyDown(document.body, { key: '/' })
     })
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Search beads... ( / )'))
+    await waitFor(() => expect(screen.getByRole('button', { name: '+ New Bead' })).toBeTruthy())
     act(() => {
       document.activeElement.blur()
     })
@@ -121,5 +127,45 @@ describe('App', () => {
     render(<App />)
     await screen.findByText('Epic')
     await waitFor(() => expect(screen.queryByRole('button', { name: '+ New Bead' })).toBeNull())
+  })
+
+  it('shows the server error when a close is refused (409 open blockers)', async () => {
+    const calls = mockApi({
+      writes: {
+        'POST /api/bead/demo-1/close': { status: 409, body: { error: 'cannot close demo-1: 1 open blocker' } },
+      },
+    })
+    render(<App />)
+    await screen.findByText('Epic')
+    fireEvent.click(screen.getByText('Epic'))
+    const close = await screen.findByRole('button', { name: 'Close' })
+    fireEvent.click(close)
+    expect((await screen.findByRole('alert')).textContent).toContain('cannot close demo-1: 1 open blocker')
+    const req = calls.find((c) => c.method === 'POST' && c.url.startsWith('/api/bead/demo-1/close'))
+    expect(req.contentType).toBe('application/json')
+    expect(JSON.parse(req.body)).toEqual({ project: 'demo' })
+  })
+
+  it('applies filters to nested rows but counts every child in the percent', async () => {
+    window.history.replaceState(null, '', '/?priority=p0&priority=p1')
+    mockApi()
+    render(<App />)
+    await screen.findByText('Epic')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand All' }))
+    expect(screen.getByText('Child open')).toBeTruthy()
+    expect(screen.queryByText('Child done')).toBeNull()
+    expect(screen.getByText('50%')).toBeTruthy()
+  })
+
+  it('hides the n shortcut in help when read-only', async () => {
+    mockApi({ readOnly: true })
+    render(<App />)
+    await screen.findByText('Epic')
+    await waitFor(() => expect(screen.queryByRole('button', { name: '+ New Bead' })).toBeNull())
+    act(() => {
+      fireEvent.keyDown(document.body, { key: '?' })
+    })
+    expect(screen.getByText('Keyboard Shortcuts')).toBeTruthy()
+    expect(screen.queryByText('Open new bead form')).toBeNull()
   })
 })

@@ -81,4 +81,13 @@ Changed:
 - The Graph tab loads Mermaid on first use, so the first page load is about
   340 kB of JS instead of about 1 MB.
 - When `/api/config` reports `read_only`, the UI hides New Bead, Edit, Claim,
-  Close, Reopen, the comment box and Pipeline drag.
+  Close, Reopen, the comment box, Pipeline drag and the `n` line in help.
+  The controls stay hidden until `/api/config` answers.
+- A refused write shows the server's `{error}` text: in the detail panel
+  (for example the `409` when open blockers stop a close), in the New Bead
+  form, or above the list for a Pipeline drag. The source viewer ignored
+  write failures.
+- Filters and Sort apply to nested rows too. The percent on a parent still
+  counts all of its children.
+- Type, Labels and Assignee filters always show, as in the source viewer.
+  An empty list says "No options".

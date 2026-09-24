@@ -103,32 +103,27 @@ export default function FilterBar({
           onChange={v => setField('priority', v)}
         />
 
-        {types.length > 0 && (
-          <MultiSelect
-            label="Type"
-            options={types}
-            selected={filters.type}
-            onChange={v => setField('type', v)}
-          />
-        )}
+        {/* Always shown, like the source viewer. An empty list says "No options". */}
+        <MultiSelect
+          label="Type"
+          options={types}
+          selected={filters.type}
+          onChange={v => setField('type', v)}
+        />
 
-        {labels.length > 0 && (
-          <MultiSelect
-            label="Labels"
-            options={labels}
-            selected={filters.labels || []}
-            onChange={v => setField('labels', v)}
-          />
-        )}
+        <MultiSelect
+          label="Labels"
+          options={labels}
+          selected={filters.labels || []}
+          onChange={v => setField('labels', v)}
+        />
 
-        {assignees.length > 0 && (
-          <MultiSelect
-            label="Assignee"
-            options={assignees}
-            selected={filters.assignee}
-            onChange={v => setField('assignee', v)}
-          />
-        )}
+        <MultiSelect
+          label="Assignee"
+          options={assignees}
+          selected={filters.assignee}
+          onChange={v => setField('assignee', v)}
+        />
 
         <div className="sort-controls">
           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sort:</span>

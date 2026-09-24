@@ -14,13 +14,15 @@ const SHORTCUTS = [
   ['Esc', 'Close panel / modal / overlay'],
 ]
 
-export default function HelpOverlay({ onClose }) {
+export default function HelpOverlay({ onClose, readOnly = false }) {
+  // Read-only servers have no New Bead form, so "n" does nothing there.
+  const shortcuts = readOnly ? SHORTCUTS.filter(([key]) => key !== 'n') : SHORTCUTS
   return (
     <div className="help-overlay" onClick={onClose}>
       <div className="help-content" onClick={e => e.stopPropagation()}>
         <h2>Keyboard Shortcuts</h2>
         <div className="shortcut-list">
-          {SHORTCUTS.map(([key, desc]) => (
+          {shortcuts.map(([key, desc]) => (
             <React.Fragment key={key}>
               <span className="shortcut-key">{key}</span>
               <span className="shortcut-desc">{desc}</span>

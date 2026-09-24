@@ -98,12 +98,17 @@ html[data-theme="light"] {
   display: flex;
   align-items: center;
   gap: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .header-controls {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: 16px;
 }
 
 .app-main {
@@ -720,6 +725,8 @@ button.stat-card-clickable.active {
 }
 
 button.bead-id-copy {
+  white-space: nowrap;
+  flex-shrink: 0;
   appearance: none;
   background: none;
   border: none;
@@ -1131,4 +1138,15 @@ button.bead-id-copy:hover {
   font-weight: 600;
   margin-bottom: 8px;
   color: var(--text-muted);
+}
+
+/* A write the server refused (409 open blockers, 405 read-only, 502 bd error). */
+.write-error {
+  margin: 0 20px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-red, #e5534b);
+  border-radius: var(--radius, 6px);
+  color: var(--accent-red, #e5534b);
+  font-size: 13px;
+  white-space: pre-wrap;
 }

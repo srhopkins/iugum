@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import StatusBadge from './StatusBadge'
 import PriorityBadge from './PriorityBadge'
-import { apiFetch } from '../api'
+import { apiFetch, apiWrite } from '../api'
 import { PRIORITIES, depIds, normalizePriority } from '../filters'
 
 function DepRow({ depId, allBeads, onSelectBead }) {
@@ -47,6 +47,7 @@ export default function DetailPanel({
   const [newComment, setNewComment] = useState('')
   const [saving, setSaving] = useState(false)
   const [copyState, setCopyState] = useState('idle') // idle | copied | error
+  const [writeError, setWriteError] = useState(null)
 
   useEffect(() => {
     if (bead) {
@@ -56,6 +57,7 @@ export default function DetailPanel({
       setEditing(false)
       setNewComment('')
       setCopyState('idle')
+      setWriteError(null)
       fetchComments(bead.id)
     }
   }, [bead?.id, project])
@@ -110,6 +112,14 @@ export default function DetailPanel({
     [project]
   )
 
+  /** Run one write. Show the server's error text when it refuses. */
+  async function write(path, method, body) {
+    setWriteError(null)
+    const res = await apiWrite(path, { method, body: { ...body, project }, project })
+    if (!res.ok) setWriteError(res.error)
+    return res.ok
+  }
+
   async function handleSave() {
     if (!bead) return
     setSaving(true)
@@ -124,12 +134,9 @@ export default function DetailPanel({
       }
 
       if (Object.keys(payload).length > 1) {
-        await apiFetch(`/api/bead/${bead.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify(payload),
-          project,
-        })
+        const ok = await write(`/api/bead/${bead.id}`, 'PATCH', payload)
         onRefresh()
+        if (!ok) return
       }
       setEditing(false)
     } finally {
@@ -139,42 +146,26 @@ export default function DetailPanel({
 
   async function handleClaim() {
     if (!bead) return
-    await apiFetch(`/api/bead/${bead.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ claim: true, project }),
-      project,
-    })
+    await write(`/api/bead/${bead.id}`, 'PATCH', { claim: true })
     onRefresh()
   }
 
   async function handleClose() {
     if (!bead) return
-    await apiFetch(`/api/bead/${bead.id}/close`, {
-      method: 'POST',
-      body: JSON.stringify({ project }),
-      project,
-    })
+    await write(`/api/bead/${bead.id}/close`, 'POST', {})
     onRefresh()
   }
 
   async function handleReopen() {
     if (!bead) return
-    await apiFetch(`/api/bead/${bead.id}/reopen`, {
-      method: 'POST',
-      body: JSON.stringify({ project }),
-      project,
-    })
+    await write(`/api/bead/${bead.id}/reopen`, 'POST', {})
     onRefresh()
   }
 
   async function handleAddComment() {
     if (!bead || !newComment.trim()) return
-    await apiFetch(`/api/bead/${bead.id}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ text: newComment, project }),
-      project,
-    })
-    setNewComment('')
+    const ok = await write(`/api/bead/${bead.id}/comments`, 'POST', { text: newComment })
+    if (ok) setNewComment('')
     fetchComments(bead.id)
   }
 
@@ -394,6 +385,12 @@ export default function DetailPanel({
               )}
             </div>
           </div>
+
+          {writeError && (
+            <div className="write-error" role="alert">
+              {writeError}
+            </div>
+          )}
 
           {!readOnly && (
           <div className="detail-actions">
