@@ -601,3 +601,44 @@ func TestUpdateInputArgsUseEqualsForm(t *testing.T) {
 		t.Errorf("Args() = %v: a flag-like value must stay inside --title=", got)
 	}
 }
+
+// bareWriteFetcher returns write results the way bd's update, close and
+// reopen JSON does: no dependency edges and no parent.
+type bareWriteFetcher struct{ *fakeFetcher }
+
+func strip(b *Bead, err error) (*Bead, error) {
+	if b == nil {
+		return b, err
+	}
+	c := *b
+	c.Dependencies, c.Parent = nil, ""
+	return &c, err
+}
+
+func (f bareWriteFetcher) UpdateBead(ctx context.Context, id string, in UpdateInput) (*Bead, error) {
+	return strip(f.fakeFetcher.UpdateBead(ctx, id, in))
+}
+
+func (f bareWriteFetcher) CloseBead(ctx context.Context, id, reason string) (*Bead, error) {
+	return strip(f.fakeFetcher.CloseBead(ctx, id, reason))
+}
+
+func TestAPIWriteResponseKeepsEdges(t *testing.T) {
+	f := apiFixture()
+	c := newAPIClient(t, bareWriteFetcher{f}, Options{})
+	code, body, _ := c.do("PATCH", "/api/bead/task-2", `{"status":"open"}`)
+	if code != 200 {
+		t.Fatalf("update = %d %s", code, body)
+	}
+	b := decode[APIBead](t, body)
+	if b.Status != "open" || strings.Join(b.DependsOn, ",") != "epic-1.1" || strings.Join(b.BlockedBy, ",") != "epic-1.1" {
+		t.Errorf("update response lost its edges: %+v", b)
+	}
+	code, body, _ = c.do("POST", "/api/bead/task-2/close", `{}`)
+	if code != 200 {
+		t.Fatalf("close = %d %s", code, body)
+	}
+	if b := decode[APIBead](t, body); b.Status != "closed" || strings.Join(b.DependsOn, ",") != "epic-1.1" {
+		t.Errorf("close response lost its edges: %+v", b)
+	}
+}

@@ -77,6 +77,9 @@ Write request bodies:
 - Close and reopen: optional `{reason}`. The body may be empty.
 - Comment: `{text}`, required.
 
+The `Bead` that update, close and reopen return is re-read with `show`,
+because the JSON those bd commands print has no dependency edges or parent.
+
 A dependency that fails to add does not undo the create. It is listed in
 `dependency_errors` and in the log. This matches the ayo route.
 

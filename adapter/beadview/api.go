@@ -210,6 +210,32 @@ func (s *server) apiGetBead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.withReverse(r.Context(), *b))
 }
 
+// reread fills in what a write's own result leaves out. The JSON that bd
+// update, close and reopen print has no dependency edges and no parent, so
+// a response built from it alone shows depends_on as empty. The write's
+// result stays the source for every field it does carry; the edges, the
+// parent and the counters come from a fresh `bd show`. If that read fails,
+// the write's result is returned as it is.
+func (s *server) reread(ctx context.Context, b *Bead) APIBead {
+	out := *b
+	if fresh, err := s.f.FetchBead(ctx, b.ID); err == nil && fresh != nil {
+		if len(out.Dependencies) == 0 {
+			out.Dependencies = fresh.Dependencies
+			out.DependencyCnt = fresh.DependencyCnt
+		}
+		if out.Parent == "" {
+			out.Parent = fresh.Parent
+		}
+		if out.DependentCnt == 0 {
+			out.DependentCnt = fresh.DependentCnt
+		}
+		if out.CommentCnt == 0 {
+			out.CommentCnt = fresh.CommentCnt
+		}
+	}
+	return s.withReverse(ctx, out)
+}
+
 // withReverse fills Blocks for a single bead. It needs the full list; if
 // that read fails, the bead is still returned with an empty Blocks.
 func (s *server) withReverse(ctx context.Context, b Bead) APIBead {
@@ -481,7 +507,7 @@ func (s *server) apiUpdateBead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.logf("write ok: update %s status=%s", id, b.Status)
-	writeJSON(w, http.StatusOK, ToAPI(*b, nil))
+	writeJSON(w, http.StatusOK, s.reread(r.Context(), b))
 }
 
 type reasonRequest struct {
@@ -514,7 +540,7 @@ func (s *server) closeOrReopen(w http.ResponseWriter, r *http.Request, action st
 		return
 	}
 	s.logf("write ok: %s %s status=%s", action, id, b.Status)
-	writeJSON(w, http.StatusOK, ToAPI(*b, nil))
+	writeJSON(w, http.StatusOK, s.reread(r.Context(), b))
 }
 
 type commentRequest struct {
