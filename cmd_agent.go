@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls|tui|acp|checkpoint>
+const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls|tui|acp|rm|checkpoint>
 
   supervisor --home DIRECTORY
                  print launchd configuration (does not install or start it)
@@ -35,17 +36,32 @@ const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls
                  create a named candidate with separate writable state
 
   init <name>    create agent.yaml, home/, data/, probes, and starter policy
-  up <name>      create the agent network and start its container
-  down <name>    stop and remove the container and network
+  up <name>      create the agent network and start its container; works with
+                 no ./NAME/agent.yaml when given --kind or --image
+  down <name>    stop and remove the container and network (keeps volumes)
   status <name>  report whether the agent container is running
-  ls             list agent directories and their status
+  ls             list agent directories, merged with running iugum-managed
+                 containers found by Docker/Podman label
   tui <name>     attach an interactive OpenCode terminal
   acp <name>     bridge OpenCode ACP over stdin and stdout
+  rm <name>      stop and remove the container, network, and its volumes;
+                 asks for the name again on stdin unless --yes is given
   checkpoint <name>
                  checkpoint and commit the agent memory database
 
-  up/down flags:  --engine docker|podman|auto, --dry-run
+  up flags:       --engine docker|podman|auto, --dry-run, --kind KIND,
+                  --image IMG, --label K=V (repeatable), --volume SPEC
+                  (repeatable), --network NAME, --shm-size SIZE,
+                  --env K=V (repeatable), --user USER, --mem SIZE,
+                  --cpus N, --port SPEC (repeatable)
+  down flags:     --engine docker|podman|auto, --dry-run
+  rm flags:       --engine docker|podman|auto, --dry-run, --yes
   tui/acp flags:  --dry-run
+
+  With no ./NAME/agent.yaml, agent.yaml values are skipped and --kind or
+  --image is required. Precedence for up: --kind preset < agent.yaml (if
+  present) < flags. Flags for --label/--volume/--env/--port add to the
+  merged list; other flags replace the value.
 `
 
 const starterAgentPolicy = `# Casbin policy: subject, object, action, effect
@@ -107,8 +123,12 @@ func runAgentIO(ctx context.Context, a *app.App, args []string, stdout, stderr i
 		return runNativeAgent(ctx, a, args[1:], stdout, stderr)
 	case "init":
 		return runAgentInit(ctx, a, args[1:], stdout, stderr)
-	case "up", "down":
+	case "up":
+		return runAgentUp(ctx, a, args[1:], stdout, stderr)
+	case "down":
 		return runAgentLifecycle(ctx, a, args[0], args[1:], stdout, stderr)
+	case "rm":
+		return runAgentRm(ctx, a, args[1:], os.Stdin, stdout, stderr)
 	case "status":
 		if len(args) > 1 && strings.HasPrefix(args[1], "--home") {
 			return runAgentProcess(ctx, a, "status", args[1:], stdout, stderr)
@@ -188,17 +208,351 @@ func parseAgentLifecycleArgs(verb string, args []string, stderr io.Writer) (agen
 	return o, true
 }
 
+// agentUpOpts holds the flags for "agent up", which can fully describe an
+// agent without any agent.yaml on disk.
+type agentUpOpts struct {
+	Name    string
+	Engine  string
+	DryRun  bool
+	Kind    string
+	Image   string
+	User    string
+	Network string
+	ShmSize string
+	Mem     string
+	Cpus    string
+	Labels  []string
+	Volumes []string
+	Envs    []string
+	Ports   []string
+}
+
+func parseAgentUpArgs(args []string, stderr io.Writer) (agentUpOpts, bool) {
+	var o agentUpOpts
+	usage := func() {
+		fmt.Fprintln(stderr, "Usage: iugum agent up <name> [--engine E] [--dry-run] [--kind K] [--image IMG]\n"+
+			"    [--label K=V]... [--volume SPEC]... [--network NAME] [--shm-size SIZE]\n"+
+			"    [--env K=V]... [--user USER] [--mem SIZE] [--cpus N] [--port SPEC]...")
+	}
+	// value takes the flag's value, either "--flag=value" or the next argv.
+	value := func(i *int, flag string) (string, bool) {
+		arg := args[*i]
+		if strings.HasPrefix(arg, flag+"=") {
+			return strings.TrimPrefix(arg, flag+"="), true
+		}
+		if *i+1 >= len(args) {
+			fmt.Fprintf(stderr, "agent up: %s requires a value\n", flag)
+			return "", false
+		}
+		*i++
+		return args[*i], true
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		flag := arg
+		if idx := strings.IndexByte(arg, '='); idx >= 0 {
+			flag = arg[:idx]
+		}
+		switch flag {
+		case "--dry-run":
+			o.DryRun = true
+		case "--engine":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Engine = v
+		case "--kind":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Kind = v
+		case "--image":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Image = v
+		case "--user":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.User = v
+		case "--network":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Network = v
+		case "--shm-size":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.ShmSize = v
+		case "--mem":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Mem = v
+		case "--cpus":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Cpus = v
+		case "--label":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Labels = append(o.Labels, v)
+		case "--volume":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Volumes = append(o.Volumes, v)
+		case "--env":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Envs = append(o.Envs, v)
+		case "--port":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Ports = append(o.Ports, v)
+		case "--help", "-h":
+			usage()
+			return o, false
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(stderr, "agent up: unknown flag %s\n", arg)
+				return o, false
+			}
+			if o.Name == "" {
+				o.Name = arg
+			} else {
+				fmt.Fprintf(stderr, "agent up: extra argument %s\n", arg)
+				return o, false
+			}
+		}
+	}
+	if !validAgentName(o.Name) {
+		usage()
+		return o, false
+	}
+	return o, true
+}
+
+// detectDockerContext resolves the Docker context used to pick a kind
+// preset's routing labels: DOCKER_CONTEXT if set, else "<engine> context
+// show" for docker, else "homelab" for podman. A dry run with DOCKER_CONTEXT
+// set never shells out, so it works without docker installed.
+func detectDockerContext(engine string, dryRun bool) string {
+	if v := os.Getenv("DOCKER_CONTEXT"); v != "" {
+		return v
+	}
+	if engine == "podman" {
+		return "homelab"
+	}
+	out, err := exec.Command(engine, "context", "show").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// overlayAgentFile applies agent.yaml's explicitly-set fields on top of a
+// kind preset. Scalars replace; list fields replace wholesale (flags are the
+// only layer that appends).
+func overlayAgentFile(base, over AgentFile) AgentFile {
+	if over.Name != "" {
+		base.Name = over.Name
+	}
+	if over.Image != "" {
+		base.Image = over.Image
+	}
+	if over.Kind != "" {
+		base.Kind = over.Kind
+	}
+	if over.User != "" {
+		base.User = over.User
+	}
+	if len(over.Labels) > 0 {
+		base.Labels = over.Labels
+	}
+	if len(over.Mounts) > 0 {
+		base.Mounts = over.Mounts
+	}
+	if len(over.Volumes) > 0 {
+		base.Volumes = over.Volumes
+	}
+	if len(over.Ports) > 0 {
+		base.Ports = over.Ports
+	}
+	if over.Network.External != "" {
+		base.Network.External = over.Network.External
+	}
+	if over.Network.Name != "" {
+		base.Network.Name = over.Network.Name
+	}
+	if over.Network.Mode != "" {
+		base.Network.Mode = over.Network.Mode
+	}
+	if over.Privileges != nil {
+		base.Privileges = over.Privileges
+	}
+	if over.Startup.Restart != "" {
+		base.Startup.Restart = over.Startup.Restart
+	}
+	if len(over.Startup.Env) > 0 {
+		base.Startup.Env = over.Startup.Env
+	}
+	if len(over.Startup.Command) > 0 {
+		base.Startup.Command = over.Startup.Command
+	}
+	if over.Jobs != "" {
+		base.Jobs = over.Jobs
+	}
+	if over.ShmSize != "" {
+		base.ShmSize = over.ShmSize
+	}
+	if len(over.ExtraHosts) > 0 {
+		base.ExtraHosts = over.ExtraHosts
+	}
+	if over.Mem != "" {
+		base.Mem = over.Mem
+	}
+	if over.Cpus != "" {
+		base.Cpus = over.Cpus
+	}
+	if len(over.Env) > 0 {
+		base.Env = over.Env
+	}
+	return base
+}
+
+// applyAgentUpFlags layers up's flags on top of the merged kindPreset +
+// agent.yaml config. List flags (labels/volumes/env/ports) append; the rest
+// replace the merged value.
+func applyAgentUpFlags(cfg AgentFile, o agentUpOpts) AgentFile {
+	if o.Image != "" {
+		cfg.Image = o.Image
+	}
+	if o.User != "" {
+		cfg.User = o.User
+	}
+	if o.Network != "" {
+		cfg.Network.External = o.Network
+	}
+	if o.ShmSize != "" {
+		cfg.ShmSize = o.ShmSize
+	}
+	if o.Mem != "" {
+		cfg.Mem = o.Mem
+	}
+	if o.Cpus != "" {
+		cfg.Cpus = o.Cpus
+	}
+	cfg.Labels = append(cfg.Labels, o.Labels...)
+	cfg.Volumes = append(cfg.Volumes, o.Volumes...)
+	cfg.Env = append(cfg.Env, o.Envs...)
+	cfg.Ports = append(cfg.Ports, o.Ports...)
+	return cfg
+}
+
+// resolveAgentUpConfig merges the kindPreset, ./NAME/agent.yaml (if present),
+// and up's flags, in that precedence, into the AgentFile agentUp will run.
+func resolveAgentUpConfig(name string, o agentUpOpts, engine string) (string, AgentFile, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", AgentFile{}, err
+	}
+	root := filepath.Join(cwd, name)
+	yamlPath := filepath.Join(root, "agent.yaml")
+	var fileCfg AgentFile
+	hasFile := false
+	if _, statErr := os.Stat(yamlPath); statErr == nil {
+		hasFile = true
+		fileCfg, err = LoadAgentFile(yamlPath)
+		if err != nil {
+			return "", AgentFile{}, err
+		}
+	}
+
+	kind := o.Kind
+	if kind == "" {
+		kind = fileCfg.Kind
+	}
+
+	base := AgentFile{Name: name}
+	if kind != "" {
+		dockerContext := detectDockerContext(engine, o.DryRun)
+		base, err = kindPreset(kind, dockerContext, name)
+		if err != nil {
+			return "", AgentFile{}, err
+		}
+	}
+
+	if hasFile {
+		base = overlayAgentFile(base, fileCfg)
+	}
+	base.Name = name
+	base = applyAgentUpFlags(base, o)
+	base.applyDefaults()
+
+	if base.Image == "" {
+		return "", AgentFile{}, fmt.Errorf("agent up: no ./%s/agent.yaml found; specify --image or --kind (known kinds: %v)", name, kindNames())
+	}
+	if !validAgentName(base.Name) {
+		return "", AgentFile{}, fmt.Errorf("invalid name %q", base.Name)
+	}
+	return root, base, nil
+}
+
+func runAgentUp(ctx context.Context, a *app.App, args []string, stdout, stderr io.Writer) int {
+	o, ok := parseAgentUpArgs(args, stderr)
+	if !ok {
+		return 2
+	}
+	if err := a.Check(ctx, "agent", "run"); err != nil {
+		fmt.Fprintln(stderr, app.DenyMessage(err))
+		return 1
+	}
+	engine, err := resolveEngine(o.Engine, "", o.DryRun)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent up: %v\n", err)
+		return 2
+	}
+	root, cfg, err := resolveAgentUpConfig(o.Name, o, engine)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent up: %v\n", err)
+		return 1
+	}
+	if cfg.Network.Mode == "locked" {
+		fmt.Fprintln(stderr, "agent up: network mode locked is reserved; use open")
+		return 2
+	}
+	return agentUp(engine, root, cfg, o.DryRun, stdout, stderr)
+}
+
 func runAgentLifecycle(ctx context.Context, a *app.App, verb string, args []string, stdout, stderr io.Writer) int {
 	o, ok := parseAgentLifecycleArgs(verb, args, stderr)
 	if !ok {
 		return 2
 	}
-	action := map[string]string{"up": "run", "down": "stop"}[verb]
-	if err := a.Check(ctx, "agent", action); err != nil {
+	if err := a.Check(ctx, "agent", "stop"); err != nil {
 		fmt.Fprintln(stderr, app.DenyMessage(err))
 		return 1
 	}
-	root, cfg, err := loadNamedAgent(o.Name)
+	_, cfg, hasFile, err := loadNamedAgent(o.Name)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent %s: %v\n", verb, err)
 		return 1
@@ -212,32 +566,60 @@ func runAgentLifecycle(ctx context.Context, a *app.App, verb string, args []stri
 		fmt.Fprintf(stderr, "agent %s: %v\n", verb, err)
 		return 2
 	}
-	if verb == "up" {
-		return agentUp(engine, root, cfg, o.DryRun, stdout, stderr)
+	if !hasFile && !o.DryRun {
+		if _, ok := agentContainerByLabel(engine, cfg.Name); !ok {
+			fmt.Fprintf(stderr, "agent %s: no container found with label iugum.agent=%s\n", verb, cfg.Name)
+			return 1
+		}
 	}
 	return agentDown(engine, cfg, o.DryRun, stdout, stderr)
 }
 
-func loadNamedAgent(name string) (string, AgentFile, error) {
+// loadNamedAgent loads ./NAME/agent.yaml when present, and otherwise falls
+// back to a minimal AgentFile so lookups (status/down/tui/acp/rm) can act on
+// a container found by label alone. The bool reports whether agent.yaml was
+// found.
+func loadNamedAgent(name string) (string, AgentFile, bool, error) {
+	if !validAgentName(name) {
+		return "", AgentFile{}, false, fmt.Errorf("invalid name %q", name)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", AgentFile{}, err
+		return "", AgentFile{}, false, err
 	}
 	root := filepath.Join(cwd, name)
-	cfg, err := LoadAgentFile(filepath.Join(root, "agent.yaml"))
+	yamlPath := filepath.Join(root, "agent.yaml")
+	if _, statErr := os.Stat(yamlPath); errors.Is(statErr, os.ErrNotExist) {
+		return root, AgentFile{Name: name}, false, nil
+	}
+	cfg, err := LoadAgentFile(yamlPath)
 	if err != nil {
-		return "", AgentFile{}, err
+		return "", AgentFile{}, false, err
 	}
 	if cfg.Name == "" {
 		cfg.Name = name
 	}
 	if !validAgentName(cfg.Name) {
-		return "", AgentFile{}, fmt.Errorf("invalid name %q in agent.yaml", cfg.Name)
+		return "", AgentFile{}, false, fmt.Errorf("invalid name %q in agent.yaml", cfg.Name)
 	}
 	if cfg.Image == "" {
-		return "", AgentFile{}, errors.New("image is required in agent.yaml")
+		return "", AgentFile{}, false, errors.New("image is required in agent.yaml")
 	}
-	return root, cfg, nil
+	return root, cfg, true, nil
+}
+
+// agentContainerByLabel finds a container by its iugum.agent label, since
+// without agent.yaml the only source of truth is the container itself.
+func agentContainerByLabel(engine, name string) (string, bool) {
+	out, err := exec.Command(engine, "ps", "-a", "--filter", "label=iugum.agent="+name, "--format", "{{.Names}}").Output()
+	if err != nil {
+		return "", false
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return "", false
+	}
+	return fields[0], true
 }
 
 func agentNetworkName(cfg AgentFile) string {
@@ -373,12 +755,23 @@ func agentVolumeCreateArgv(engine, name string, cfg AgentFile) []string {
 	}
 }
 
+// agentNetworkCreateArgv builds the argv that creates an iugum-managed
+// network, with labels before the trailing network name.
+func agentNetworkCreateArgv(engine, name string, cfg AgentFile) []string {
+	return []string{
+		engine, "network", "create",
+		"--label", "iugum.managed=true",
+		"--label", "iugum.agent=" + cfg.Name,
+		name,
+	}
+}
+
 func agentUp(engine, root string, cfg AgentFile, dryRun bool, stdout, stderr io.Writer) int {
 	network := agentNetworkName(cfg)
 	external := cfg.Network.External != ""
 	if dryRun {
 		if !external {
-			fmt.Fprintln(stdout, strings.Join([]string{engine, "network", "create", network}, " "))
+			fmt.Fprintln(stdout, strings.Join(agentNetworkCreateArgv(engine, network, cfg), " "))
 		}
 		for _, v := range cfg.Volumes {
 			name := agentVolumeName(v)
@@ -391,7 +784,7 @@ func agentUp(engine, root string, cfg AgentFile, dryRun bool, stdout, stderr io.
 		return 0
 	}
 	if !external && !agentObjectExists(engine, "network", network) {
-		if code := execArgv([]string{engine, "network", "create", network}, false); code != 0 {
+		if code := execArgv(agentNetworkCreateArgv(engine, network, cfg), false); code != 0 {
 			return code
 		}
 	}
@@ -447,6 +840,138 @@ func agentDown(engine string, cfg AgentFile, dryRun bool, stdout, stderr io.Writ
 	return 0
 }
 
+type agentRmOpts struct {
+	Name   string
+	Engine string
+	DryRun bool
+	Yes    bool
+}
+
+func parseAgentRmArgs(args []string, stderr io.Writer) (agentRmOpts, bool) {
+	var o agentRmOpts
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--dry-run":
+			o.DryRun = true
+		case arg == "--yes":
+			o.Yes = true
+		case arg == "--engine":
+			if i+1 >= len(args) {
+				fmt.Fprintln(stderr, "agent rm: --engine requires a value")
+				return o, false
+			}
+			i++
+			o.Engine = args[i]
+		case strings.HasPrefix(arg, "--engine="):
+			o.Engine = strings.TrimPrefix(arg, "--engine=")
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintf(stderr, "agent rm: unknown flag %s\n", arg)
+			return o, false
+		case o.Name == "":
+			o.Name = arg
+		default:
+			fmt.Fprintf(stderr, "agent rm: extra argument %s\n", arg)
+			return o, false
+		}
+	}
+	if !validAgentName(o.Name) {
+		fmt.Fprintln(stderr, "Usage: iugum agent rm <name> [--engine E] [--dry-run] [--yes]")
+		return o, false
+	}
+	return o, true
+}
+
+// agentRmVolumeNames lists the volumes rm should try to remove: every named
+// volume in cfg.Volumes plus the "<name>-config" convention volume kind
+// presets use, so a dry run without agent.yaml still shows something to do.
+func agentRmVolumeNames(name string, cfg AgentFile) []string {
+	seen := map[string]bool{}
+	var names []string
+	add := func(n string) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	add(name + "-config")
+	for _, v := range cfg.Volumes {
+		add(agentVolumeName(v))
+	}
+	return names
+}
+
+func runAgentRm(ctx context.Context, a *app.App, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	o, ok := parseAgentRmArgs(args, stderr)
+	if !ok {
+		return 2
+	}
+	if err := a.Check(ctx, "agent", "stop"); err != nil {
+		fmt.Fprintln(stderr, app.DenyMessage(err))
+		return 1
+	}
+	_, cfg, hasFile, err := loadNamedAgent(o.Name)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent rm: %v\n", err)
+		return 1
+	}
+	if !o.Yes {
+		fmt.Fprintf(stdout, "Type %s to confirm removing its container, network, and volumes: ", o.Name)
+		reader := bufio.NewReader(stdin)
+		line, _ := reader.ReadString('\n')
+		if strings.TrimSpace(line) != o.Name {
+			fmt.Fprintln(stderr, "agent rm: confirmation did not match; aborted")
+			return 1
+		}
+	}
+	engine, err := resolveEngine(o.Engine, "", o.DryRun)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent rm: %v\n", err)
+		return 2
+	}
+	if !hasFile && !o.DryRun {
+		if _, ok := agentContainerByLabel(engine, cfg.Name); !ok {
+			fmt.Fprintf(stderr, "agent rm: no container found with label iugum.agent=%s\n", cfg.Name)
+			return 1
+		}
+	}
+	network := agentNetworkName(cfg)
+	external := cfg.Network.External != ""
+	volumes := agentRmVolumeNames(o.Name, cfg)
+	if o.DryRun {
+		fmt.Fprintln(stdout, strings.Join([]string{engine, "stop", cfg.Name}, " "))
+		fmt.Fprintln(stdout, strings.Join([]string{engine, "rm", cfg.Name}, " "))
+		if !external {
+			fmt.Fprintln(stdout, strings.Join([]string{engine, "network", "rm", network}, " "))
+		}
+		for _, v := range volumes {
+			fmt.Fprintln(stdout, strings.Join([]string{engine, "volume", "rm", v}, " "))
+		}
+		return 0
+	}
+	if agentObjectExists(engine, "container", cfg.Name) {
+		if code := execArgv([]string{engine, "stop", cfg.Name}, false); code != 0 {
+			return code
+		}
+		if code := execArgv([]string{engine, "rm", cfg.Name}, false); code != 0 {
+			return code
+		}
+	}
+	if !external && agentObjectExists(engine, "network", network) {
+		if code := execArgv([]string{engine, "network", "rm", network}, false); code != 0 {
+			fmt.Fprintf(stderr, "agent rm: network %s is still in use\n", network)
+			return code
+		}
+	}
+	out, err := exec.Command(engine, "volume", "ls", "-q", "--filter", "label=iugum.agent="+cfg.Name).Output()
+	if err == nil {
+		for _, v := range strings.Fields(string(out)) {
+			execArgv([]string{engine, "volume", "rm", v}, false)
+		}
+	}
+	return 0
+}
+
 func agentObjectExists(engine, kind, name string) bool {
 	args := []string{"inspect", name}
 	switch kind {
@@ -485,7 +1010,7 @@ func runAgentAttach(ctx context.Context, a *app.App, verb string, args []string,
 		fmt.Fprintln(stderr, app.DenyMessage(err))
 		return 1
 	}
-	_, cfg, err := loadNamedAgent(o.Name)
+	_, cfg, hasFile, err := loadNamedAgent(o.Name)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent %s: %v\n", verb, err)
 		return 1
@@ -494,6 +1019,12 @@ func runAgentAttach(ctx context.Context, a *app.App, verb string, args []string,
 	if err != nil {
 		fmt.Fprintf(stderr, "agent %s: %v\n", verb, err)
 		return 2
+	}
+	if !hasFile && !o.DryRun {
+		if _, ok := agentContainerByLabel(engine, cfg.Name); !ok {
+			fmt.Fprintf(stderr, "agent %s: no container found with label iugum.agent=%s\n", verb, cfg.Name)
+			return 1
+		}
 	}
 	argv := agentAttachArgv(engine, cfg.Name, verb)
 	if o.DryRun {
@@ -516,9 +1047,13 @@ func runAgentCheckpoint(ctx context.Context, a *app.App, args []string, stdout, 
 		fmt.Fprintln(stderr, app.DenyMessage(err))
 		return 1
 	}
-	root, _, err := loadNamedAgent(args[0])
+	root, _, hasFile, err := loadNamedAgent(args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "agent checkpoint: %v\n", err)
+		return 1
+	}
+	if !hasFile {
+		fmt.Fprintf(stderr, "agent checkpoint: no ./%s/agent.yaml found\n", args[0])
 		return 1
 	}
 	if err := checkpointAgentMemory(root, args[0], "sqlite3", stdout, stderr); err != nil {
@@ -608,13 +1143,23 @@ func runAgentStatus(ctx context.Context, a *app.App, args []string, stdout, stde
 		fmt.Fprintln(stderr, app.DenyMessage(err))
 		return 1
 	}
-	_, cfg, err := loadNamedAgent(args[0])
+	_, cfg, hasFile, err := loadNamedAgent(args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "agent status: %v\n", err)
 		return 1
 	}
 	engine, err := resolveEngine("", "", false)
-	if err != nil || !agentRunning(engine, cfg.Name) {
+	if err != nil {
+		fmt.Fprintf(stdout, "%s not-running\n", args[0])
+		return 0
+	}
+	if !hasFile {
+		if _, ok := agentContainerByLabel(engine, cfg.Name); !ok {
+			fmt.Fprintf(stdout, "%s not-running\n", args[0])
+			return 0
+		}
+	}
+	if !agentRunning(engine, cfg.Name) {
 		fmt.Fprintf(stdout, "%s not-running\n", args[0])
 		return 0
 	}
@@ -637,6 +1182,7 @@ func runAgentList(ctx context.Context, a *app.App, args []string, stdout, stderr
 		return 1
 	}
 	engine, engineErr := resolveEngine("", "", false)
+	seen := map[string]bool{}
 	for _, entry := range entries {
 		if !entry.IsDir() || !validAgentName(entry.Name()) {
 			continue
@@ -645,13 +1191,47 @@ func runAgentList(ctx context.Context, a *app.App, args []string, stdout, stderr
 		if err != nil {
 			continue
 		}
+		seen[cfg.Name] = true
 		status := "not-running"
 		if engineErr == nil && agentRunning(engine, cfg.Name) {
 			status = "running"
 		}
 		fmt.Fprintf(stdout, "%s\t%s\n", entry.Name(), status)
 	}
+	if engineErr == nil {
+		for _, line := range agentListManagedContainers(engine) {
+			fields := strings.SplitN(line, "\t", 3)
+			if len(fields) == 0 || fields[0] == "" || seen[fields[0]] {
+				continue
+			}
+			status := "not-running"
+			if len(fields) > 2 && strings.HasPrefix(fields[2], "Up") {
+				status = "running"
+			}
+			fmt.Fprintf(stdout, "%s\t%s\n", fields[0], status)
+		}
+	}
 	return 0
+}
+
+// agentListManagedContainers lists every container carrying the
+// iugum.managed=true label, so "ls" can show containers started with no
+// agent.yaml on disk alongside agent directories.
+func agentListManagedContainers(engine string) []string {
+	out, err := exec.Command(engine, "ps", "-a",
+		"--filter", "label=iugum.managed=true",
+		"--format", `{{.Names}}\t{{.Label "iugum.kind"}}\t{{.Status}}`,
+	).Output()
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func validAgentName(name string) bool {
