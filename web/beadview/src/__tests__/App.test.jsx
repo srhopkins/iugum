@@ -180,6 +180,27 @@ describe('App', () => {
     }
   })
 
+  it('does not hang on a parent loop and shows each bead once', async () => {
+    // loop-a and loop-b point at each other as parent: with no guard this
+    // would recurse forever on Expand All. demo-2 is a normal bead.
+    const loopA = { id: 'loop-a', title: 'Loop A', status: 'open', priority: 'p2', type: 'task', parent: 'loop-b', depends_on: [], labels: [], assignee: '', updated_at: '2026-01-06' }
+    const loopB = { id: 'loop-b', title: 'Loop B', status: 'open', priority: 'p2', type: 'task', parent: 'loop-a', depends_on: [], labels: [], assignee: '', updated_at: '2026-01-07' }
+    BEADS.push(loopA, loopB)
+    try {
+      mockApi()
+      const { container } = render(<App />)
+      await screen.findByText('Epic')
+      fireEvent.click(screen.getByRole('button', { name: 'Expand All' }))
+      const rows = container.querySelectorAll('.tree-node-header')
+      expect(rows.length).toBe(BEADS.length)
+      for (const bead of BEADS) {
+        expect(screen.getAllByText(bead.title)).toHaveLength(1)
+      }
+    } finally {
+      BEADS.splice(BEADS.indexOf(loopA), 2)
+    }
+  })
+
   it('hides the n shortcut in help when read-only', async () => {
     mockApi({ readOnly: true })
     render(<App />)
