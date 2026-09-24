@@ -19,15 +19,18 @@ export function isRoot(bead, ids) {
   return deps.length === 0 || !deps.some((d) => ids.has(d))
 }
 
-function TreeNode({ bead, allBeads, expandedSet, toggleExpand, onSelect, focusedId, depth = 0, ancestors = new Set() }) {
+function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, focusedId, depth = 0, ancestors = new Set() }) {
   const isExpanded = expandedSet.has(bead.id)
   // Skip any bead already on the path from the root, so a dependency cycle
   // cannot recurse forever.
-  const children = allBeads.filter(b => !ancestors.has(b.id) && b.id !== bead.id && isChildOf(b, bead.id))
+  const isKid = b => !ancestors.has(b.id) && b.id !== bead.id && isChildOf(b, bead.id)
+  // Shown children come from the filtered, sorted list, so the filters and
+  // Sort apply at every level. The percent counts every child.
+  const children = beads.filter(isKid)
+  const allChildren = allBeads.filter(isKid)
 
-  // Calculate completion percentage for nodes with children
-  const childCount = children.length
-  const closedChildren = children.filter(c => c.status === 'closed').length
+  const childCount = allChildren.length
+  const closedChildren = allChildren.filter(c => c.status === 'closed').length
   const completionPct = childCount > 0 ? Math.round((closedChildren / childCount) * 100) : null
 
   return (
@@ -64,6 +67,7 @@ function TreeNode({ bead, allBeads, expandedSet, toggleExpand, onSelect, focused
         <TreeNode
           key={child.id}
           bead={child}
+          beads={beads}
           allBeads={allBeads}
           expandedSet={expandedSet}
           toggleExpand={toggleExpand}
@@ -126,6 +130,7 @@ export default function TreeView({ beads, allBeads, focusedIndex, onSelect }) {
         <TreeNode
           key={bead.id}
           bead={bead}
+          beads={beads}
           allBeads={allBeads}
           expandedSet={expandedSet}
           toggleExpand={toggleExpand}

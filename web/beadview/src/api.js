@@ -53,3 +53,27 @@ export async function apiFetch(path, options = {}) {
   const { project: _drop, ...fetchOpts } = options
   return fetch(p, { ...fetchOpts, headers, credentials: 'same-origin' })
 }
+
+/**
+ * A write (POST/PATCH) that never throws. It resolves to `{ ok, status,
+ * data, error }`. On a refused write, `error` is the server's `{error}` text
+ * (409 when open blockers stop a close, 405 when read-only, 502 for a bd
+ * failure), or a status line when the body is not JSON.
+ */
+export async function apiWrite(path, { method = 'POST', body = {}, project } = {}) {
+  let resp
+  try {
+    resp = await apiFetch(path, { method, body: JSON.stringify(body), project })
+  } catch (err) {
+    return { ok: false, status: 0, data: null, error: err instanceof Error ? err.message : String(err) }
+  }
+  let data = null
+  try {
+    data = await resp.json()
+  } catch {
+    /* not JSON */
+  }
+  if (resp.ok) return { ok: true, status: resp.status, data, error: null }
+  const error = (data && data.error) || `${method} ${path} failed (${resp.status})`
+  return { ok: false, status: resp.status, data, error: String(error) }
+}

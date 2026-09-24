@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import PriorityBadge from './PriorityBadge'
 
-export default function NewBeadModal({ onClose, onCreate, allBeads, project }) {
+export default function NewBeadModal({ onClose, onCreate, allBeads, project, error }) {
   const [title, setTitle] = useState('')
   const [priority, setPriority] = useState('')
   const [type, setType] = useState('')
@@ -143,6 +143,11 @@ export default function NewBeadModal({ onClose, onCreate, allBeads, project }) {
             )}
           </div>
 
+          {error && (
+            <div className="write-error" role="alert">
+              {error}
+            </div>
+          )}
           <div className="modal-footer">
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={!title.trim()}>Create Bead</button>

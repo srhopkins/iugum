@@ -8,7 +8,7 @@ import KanbanView from './components/KanbanView'
 import DetailPanel from './components/DetailPanel'
 import NewBeadModal from './components/NewBeadModal'
 import HelpOverlay from './components/HelpOverlay'
-import { apiFetch } from './api'
+import { apiFetch, apiWrite } from './api'
 import { resolveMermaidSource } from './mermaidGraph'
 import { filterAndSortBeads, uniqueLabelsFromBeads } from './filters'
 
@@ -94,7 +94,10 @@ export default function App() {
   const [detailOpen, setDetailOpen] = useState(() => !!getInitialBeadId())
   const [showNewBead, setShowNewBead] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
-  const [readOnly, setReadOnly] = useState(false)
+  // Write controls stay hidden until /api/config says the server takes writes.
+  const [readOnly, setReadOnly] = useState(true)
+  const [writeError, setWriteError] = useState(null)
+  const [createError, setCreateError] = useState(null)
   const [theme, setTheme] = useState(() => readStorage(THEME_STORAGE_KEY) || 'dark')
   const [focusedIndex, setFocusedIndex] = useState(-1)
   const searchInputRef = useRef(null)
@@ -128,6 +131,11 @@ export default function App() {
   useEffect(() => {
     if (project) writeStorage(PROJECT_STORAGE_KEY, project)
   }, [project])
+
+  // A reopened New Bead form starts without the last refusal.
+  useEffect(() => {
+    if (!showNewBead) setCreateError(null)
+  }, [showNewBead])
 
   // GET /api/projects drives the project selector. iugum beadview serves
   // one project, so a stored or URL project it does not know falls back to
@@ -393,32 +401,31 @@ export default function App() {
   }
 
   async function handleStatusChange(beadId, newStatus) {
-    try {
-      const resp = await apiFetch(`/api/bead/${beadId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status: newStatus }),
-        project,
-      })
-      if (resp.ok) fetchData()
-    } catch {
-      /* silent */
-    }
+    setWriteError(null)
+    const res = await apiWrite(`/api/bead/${beadId}`, {
+      method: 'PATCH',
+      body: { status: newStatus, project },
+      project,
+    })
+    if (!res.ok) setWriteError(`${beadId}: ${res.error}`)
+    fetchData()
   }
 
   async function handleCreateBead(data) {
-    try {
-      const resp = await apiFetch('/api/bead', {
-        method: 'POST',
-        body: JSON.stringify({ ...data, project }),
-        project,
-      })
-      if (resp.ok) {
-        setShowNewBead(false)
-        fetchData()
-      }
-    } catch {
-      /* silent */
+    setCreateError(null)
+    const res = await apiWrite('/api/bead', { method: 'POST', body: { ...data, project }, project })
+    if (!res.ok) {
+      setCreateError(res.error)
+      return
     }
+    // The bead exists even when a dependency failed to add. Say which ones.
+    const depErrors = res.data?.dependency_errors
+    if (Array.isArray(depErrors) && depErrors.length > 0) {
+      setWriteError(`${res.data.id} created, but some dependencies failed:\n${depErrors.join('\n')}`)
+    }
+    setShowNewBead(false)
+    fetchData()
+    if (res.data?.id) openDetail(res.data.id)
   }
 
   const selectedBead = beads.find((b) => b.id === selectedBeadId) || null
@@ -483,6 +490,15 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {writeError && (
+            <div className="write-error" role="alert" style={{ margin: '0 0 12px' }}>
+              {writeError}{' '}
+              <button type="button" className="btn btn-sm" onClick={() => setWriteError(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
 
           <FilterBar
             filters={filters}
@@ -554,6 +570,7 @@ export default function App() {
 
       {showNewBead && !readOnly && (
         <NewBeadModal
+          error={createError}
           onClose={() => setShowNewBead(false)}
           onCreate={handleCreateBead}
           allBeads={beads}
@@ -561,7 +578,7 @@ export default function App() {
         />
       )}
 
-      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
+      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} readOnly={readOnly} />}
     </div>
   )
 }
