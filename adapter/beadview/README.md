@@ -1,10 +1,11 @@
 # beadview
 
-A read-mostly HTML viewer for the beads work graph: a filterable ticket
-table plus bd's own interactive dependency graph. `iugum beadview` starts it.
+A beads viewer: a React UI with a JSON API, plus the older server-rendered
+ticket table and bd's own interactive dependency graph under `/legacy/`.
+`iugum beadview` starts it.
 
 ```
-iugum beadview [--port N] [--hostname ADDR] [--dir DIR]
+iugum beadview [--port N] [--hostname ADDR] [--dir DIR] [--read-only]
 ```
 
 - `--port` default `3849`.
@@ -12,9 +13,110 @@ iugum beadview [--port N] [--hostname ADDR] [--dir DIR]
   by default).
 - `--dir` the beads repo to view (must contain `.beads/`). Default: the
   process's current directory.
+- `--read-only` turns off every write endpoint. They answer `405` with
+  `Allow: GET`, and `/api/config` reports `"read_only": true` so the UI can
+  hide its write controls.
 
-Open `http://127.0.0.1:3849/` for the ticket table, `/graph` for the
-dependency graph, `/bead/<id>` for one ticket.
+## Routes
+
+| Path | What it serves |
+|---|---|
+| `/` and any other unknown path | The React UI (`index.html`), so client-side routes work |
+| `/assets/*` | The UI's built files. A missing file here is a real `404`, not `index.html` |
+| `/api/*` | The JSON API below. Also mounted at `/api/bd/*`, the ayo viewer's prefix. Unknown `/api` paths are a JSON `404` |
+| `/legacy/` | The server-rendered ticket table (`html/template`) |
+| `/legacy/tree` | Beads nested by parent (epic hierarchy), with search |
+| `/legacy/bead/{id}` | One ticket, server-rendered |
+| `/legacy/graph` | `bd graph --all --html`, served as-is |
+| `/bead/{id}` | Redirects to `/?bead={id}` (the UI opens that bead) |
+| `/graph`, `/tree` | Redirect to `/legacy/graph` and `/legacy/tree` |
+
+## JSON API
+
+One project, no auth, no API key. Paths match the ayo viewer's
+`/api/bd/*` routes (`AvantOpsIO/ayo-agent` `src/app/api/bd/`), so the
+ported React code runs unchanged. The UI's `?project=` query and `project`
+body field are accepted and ignored.
+
+Every call runs one `iugum beads -C <dir> ...` child process (see "Data
+path" below). "Bead" in the table means this shape:
+
+- The ayo fields: `id`, `title`, `description`, `status`, `priority` as the
+  string `"p0"`..`"p4"`, `type` (bd's `issue_type`), `labels` (always a
+  list), `assignee`, `created_at`, `updated_at`, and `depends_on` and
+  `dependencies` (the same list of depended-on IDs, any edge type).
+- Extra fields the ayo UI does not need: `issue_type`, `notes`, `owner`,
+  `created_by`, `started_at`, `closed_at`, `close_reason`, `parent`,
+  `blocked_by` (IDs this bead waits on through a `blocks` edge), `blocks`
+  (IDs that wait on this bead), `dependency_edges`
+  (`[{issue_id, depends_on_id, type}]`, the edges with their types), and the
+  `dependency_count`, `dependent_count` and `comment_count` counters.
+
+| Method | Path | bd subcommand | Response |
+|---|---|---|---|
+| GET | `/api/beads` | `list --json --all --limit 0` | `Bead[]` |
+| GET | `/api/bead/{id}` | `show --json -- <id>` (plus `list` to fill `blocks`) | `Bead`; `404` if unknown |
+| GET | `/api/bead/{id}/comments` | `comments --json -- <id>` | `[{id, issue_id, author, text, created_at}]` |
+| GET | `/api/mermaid?root=<id>` | `dep tree --format=mermaid --direction=both -- <id>` | Mermaid text. With no `root`: empty. On error: a one-node flowchart, still `200` |
+| GET | `/api/config` | none | `{ws_port: null, ws_path: null, has_websockets: false, read_only, project}` |
+| GET | `/api/projects` | none | `{projects: [{slug, description, enabled, registered}]}`: the one `--dir`, `slug` is its base name |
+| POST | `/api/bead` | `create --json --title= ...`, then `dep add --depends-on=<dep> -- <new>` per dependency | `201 {id, issue: Bead, dependency_errors?}` |
+| PATCH | `/api/bead/{id}` | `update --json [--status= --priority= --description= --title= --type= --claim] -- <id>` | `Bead` |
+| POST | `/api/bead/{id}/close` | `close --json [--reason=] -- <id>` | `Bead`; `409` if open blockers stop the close |
+| POST | `/api/bead/{id}/reopen` | `reopen --json [--reason=] -- <id>` | `Bead` |
+| POST | `/api/bead/{id}/comments` | `comment --json --stdin -- <id>` (text on stdin) | `201 Comment` |
+
+Write request bodies:
+
+- Create: `{title, description?, type?, priority?, dependencies?: [id]}`.
+  `title` is required. `priority` is `"p0"`..`"p4"`, `"0"`..`"4"`, or a
+  number.
+- Update: any of `{status, priority, description, title, type, claim}`.
+  Only the fields present change. `"description": ""` clears it. An empty
+  body is a `400`.
+- Close and reopen: optional `{reason}`. The body may be empty.
+- Comment: `{text}`, required.
+
+A dependency that fails to add does not undo the create. It is listed in
+`dependency_errors` and in the log. This matches the ayo route.
+
+Errors are `{"error": "..."}`: `400` for a bad body or ID, `404` when bd
+reports the bead is not found, `502` for any other bd failure.
+
+### Write safety
+
+Every write goes through these checks, in this order:
+
+1. `--read-only`: `405`.
+2. Cross-site check: the request needs `Content-Type: application/json`
+   (else `415`), and an `Origin` header, if present, must match the `Host`
+   (else `403`). There is no auth, so this stops another web page open in
+   the same browser from writing to a local bead database. A plain HTML form
+   cannot send a JSON content type, and a script from another origin needs a
+   CORS preflight that this server never answers.
+3. Casbin: the action `beadview/write`. The default policy allows it. Add
+   `p, *, beadview, write, deny` to lock writes by policy.
+
+Then the handler checks the body. IDs must match
+`^[A-Za-z0-9][A-Za-z0-9._-]*$`, so they can never be read as flags. Every
+value goes to bd as `--flag=value`, and comment text goes on stdin, so a
+value that starts with `-` is stored as written.
+
+Each attempt is logged to stderr with the action, the bead ID and the
+result. Refused writes are logged too. Description and comment text are not
+logged; only their length is.
+
+## The UI build
+
+The React source and its build steps are in `web/beadview/`. See
+`../../web/beadview/README.md`. `npm run build` writes
+`web/beadview/dist/` (`index.html` plus `assets/`). The build is committed,
+the same as `web/observe/dist`. `beadview_ui.go` in the repo root embeds it
+with `//go:embed all:web/beadview/dist`, so rebuild iugum after a UI build.
+The embed lives in package `main` because `web/beadview/` holds no Go code.
+
+If a program calls `NewHandler` without a UI (`Options.UI` is nil), `/`
+serves a short placeholder page that links to `/legacy/` and `/api/beads`.
 
 ## Data path: subprocess self-exec, not a direct in-process call
 
@@ -65,6 +167,12 @@ non-zero status, which becomes a normal Go `error` the handler renders as a
 exactly what the CLI itself gets. The cost is a fork+exec per request, which
 is a non-issue for a single-operator local viewer.
 
+Child processes run one at a time per server (a mutex in `execFetcher`).
+Concurrent children can fail with "database is locked". Other iugum
+processes on the same host can also hold iugum's own startup store for a
+moment. That failure (`iugum: database is locked`) happens in `app.New`,
+before any bd code runs, so `execFetcher` retries it up to three times.
+
 ## Why `bd graph --all --html` and not a rebuilt beads-dashboard frontend
 
 The original plan for this package was to reuse
@@ -94,26 +202,30 @@ edges. It is upstream Beads code under `beads/LICENSE` (MIT, an actual file
 this time), already vetted by `docs/beads-vendor.md`, and needs no frontend
 build step at all.
 
-Given that, beadview does not vendor or rebuild beads-dashboard. `/graph`
-serves `bd graph --all --html` verbatim (see `data.go` `FetchGraphHTML`).
-The ticket table (`/`, `/bead/<id>`) is original Go: `html/template` pages
-this package owns outright, so there is no license question and no Node/npm
-build dependency inside iugum (`NORTHSTARS.md` star 1: one Go program, no
-sidecar stack).
+Given that, beadview did not vendor or rebuild beads-dashboard at the time.
+`/legacy/graph` still serves `bd graph --all --html` verbatim (see
+`data.go` `FetchGraphHTML`), and the ticket table (`/legacy/`,
+`/legacy/bead/<id>`) is original Go: `html/template` pages this package
+owns outright.
+
+Update (bead `iugum-puu`, "vendor the ayo React beads UI"): the UI at `/`
+is now a React port of the ayo `/beads` viewer, in `web/beadview/`. Its
+provenance and build are described in `../../web/beadview/README.md`. It
+is built with Vite and committed as `dist/`, like `web/observe`.
 
 ## What this does not do
 
-- **No epic/parent hierarchy in the ticket table.** The table view is flat;
-  `Bead.Parent` links to the parent ticket but the table does not nest
-  children under it. `/graph` does show parent-child edges (dashed, per its
-  legend) because that comes straight from `bd graph --all --html`.
-- **Read-only.** No create/comment/close/reopen/edit from the browser. bd's
-  own CLI (`iugum beads ...`) is still the way to write. Verification against
-  a real repo (`/Users/steve/projects/github/FutureFit-ai`) never wrote to
-  that repo's beads database for this reason as much as courtesy: there is no
-  code path in this package that could.
-- **No live updates.** No websocket, no polling. Reload the page to see new
-  data (`bd`'s own DB is the source of truth, iugum does not cache it).
+- **No epic/parent hierarchy in the legacy ticket table.** `/legacy/` is
+  flat. `/legacy/tree` nests by `Bead.Parent`, and `/legacy/graph` shows
+  parent-child edges because that comes straight from
+  `bd graph --all --html`.
+- **Writes are on by default.** The JSON API can create, update, close,
+  reopen and comment. Use `--read-only` (or the Casbin deny rule above) to
+  view a repository without any write path.
+- **No push updates.** No websocket (`/api/config` reports `ws_port: null`).
+  The UI polls `/api/beads`. The server does not cache: each call reads
+  bd's own database.
+- **One project.** `/api/projects` returns the one `--dir`.
 - **No auth.** Same posture as `iugum wiki`/`iugum observe`: binds
   `127.0.0.1` by default, meant for one operator on one machine. Do not put
   `--hostname 0.0.0.0` behind anything without adding a real gate first.
