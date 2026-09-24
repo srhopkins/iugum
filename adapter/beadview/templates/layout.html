@@ -53,11 +53,12 @@ footer{padding:1rem 1.25rem;color:var(--muted);font-size:.75rem;border-top:1px s
 </head>
 <body>
 <header>
-<h1>iugum beadview</h1>
+<h1>iugum beadview <span class="muted">(legacy)</span></h1>
 <nav>
-<a href="/" class="{{if eq .Active "list"}}active{{end}}">Tickets</a>
-<a href="/tree" class="{{if eq .Active "tree"}}active{{end}}">Tree</a>
-<a href="/graph" class="{{if eq .Active "graph"}}active{{end}}">Dependency graph</a>
+<a href="/">New UI</a>
+<a href="/legacy/" class="{{if eq .Active "list"}}active{{end}}">Tickets</a>
+<a href="/legacy/tree" class="{{if eq .Active "tree"}}active{{end}}">Tree</a>
+<a href="/legacy/graph" class="{{if eq .Active "graph"}}active{{end}}">Dependency graph</a>
 </nav>
 <span class="dir">{{.Dir}}</span>
 </header>

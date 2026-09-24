@@ -1,5 +1,5 @@
 {{define "list-content"}}
-<form class="filters" method="get" action="/">
+<form class="filters" method="get" action="/legacy/">
 <input type="search" name="q" placeholder="search id, title, description" value="{{.Filter.Search}}">
 <select name="status">
 <option value="">any status</option>
@@ -20,7 +20,7 @@
 <tbody>
 {{range .Beads}}
 <tr>
-<td><a href="/bead/{{.ID}}">{{.ID}}</a></td>
+<td><a href="/legacy/bead/{{.ID}}">{{.ID}}</a></td>
 <td>{{.Title}}</td>
 <td class="status-{{.Status}}">{{.Status}}</td>
 <td>{{.PriorityLabel}}</td>

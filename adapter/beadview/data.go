@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Dependency is one edge on a bead, as bd export/list/show report it.
@@ -19,6 +21,29 @@ type Dependency struct {
 	IssueID     string `json:"issue_id"`
 	DependsOnID string `json:"depends_on_id"`
 	Type        string `json:"type"`
+}
+
+// UnmarshalJSON accepts both dependency shapes bd emits. `bd list --json`
+// gives edges ({issue_id, depends_on_id, type}); `bd show --json` gives
+// the depended-on issue itself ({id, title, ..., dependency_type}). Both
+// become the same edge; IssueID stays empty for the show shape.
+func (d *Dependency) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		IssueID        string `json:"issue_id"`
+		DependsOnID    string `json:"depends_on_id"`
+		Type           string `json:"type"`
+		ID             string `json:"id"`
+		DependencyType string `json:"dependency_type"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	d.IssueID, d.DependsOnID, d.Type = raw.IssueID, raw.DependsOnID, raw.Type
+	if d.DependsOnID == "" && raw.ID != "" {
+		d.DependsOnID = raw.ID
+		d.Type = raw.DependencyType
+	}
+	return nil
 }
 
 // Bead is the subset of bd's issue JSON the viewer renders. Extra fields in
@@ -33,9 +58,12 @@ type Bead struct {
 	IssueType     string       `json:"issue_type"`
 	Assignee      string       `json:"assignee"`
 	Owner         string       `json:"owner"`
+	CreatedBy     string       `json:"created_by"`
 	CreatedAt     string       `json:"created_at"`
 	UpdatedAt     string       `json:"updated_at"`
+	StartedAt     string       `json:"started_at"`
 	ClosedAt      string       `json:"closed_at"`
+	CloseReason   string       `json:"close_reason"`
 	Labels        []string     `json:"labels"`
 	Parent        string       `json:"parent"`
 	Dependencies  []Dependency `json:"dependencies"`
@@ -87,7 +115,66 @@ type Fetcher interface {
 	FetchComments(ctx context.Context, id string) ([]Comment, error)
 	FetchGraphHTML(ctx context.Context) (string, error)
 	FetchStatus(ctx context.Context) (string, error)
+	// FetchMermaid returns `bd dep tree <root> --format mermaid` text.
+	FetchMermaid(ctx context.Context, root string) (string, error)
+
+	// Write methods. Each one is exactly one bd write subcommand. The
+	// handler gates them (read-only flag, Casbin, request checks) and logs
+	// them; the Fetcher itself does no policy.
+	CreateBead(ctx context.Context, in CreateInput) (*Bead, error)
+	AddDependency(ctx context.Context, id, dependsOn string) error
+	UpdateBead(ctx context.Context, id string, in UpdateInput) (*Bead, error)
+	CloseBead(ctx context.Context, id, reason string) (*Bead, error)
+	ReopenBead(ctx context.Context, id, reason string) (*Bead, error)
+	AddComment(ctx context.Context, id, text string) (*Comment, error)
+
 	Dir() string
+}
+
+// CreateInput is one `bd create`. Priority is bd's own form ("0".."4").
+// Empty fields are not passed, so bd applies its defaults.
+type CreateInput struct {
+	Title       string
+	Description string
+	Type        string
+	Priority    string
+}
+
+// UpdateInput is one `bd update`. A nil pointer means "leave unchanged";
+// a non-nil empty Description clears it.
+type UpdateInput struct {
+	Status      *string
+	Priority    *string
+	Description *string
+	Title       *string
+	Type        *string
+	Claim       bool
+}
+
+// Empty reports whether the update would change nothing.
+func (u UpdateInput) Empty() bool {
+	return u.Status == nil && u.Priority == nil && u.Description == nil &&
+		u.Title == nil && u.Type == nil && !u.Claim
+}
+
+// Args renders the update as bd flags. Every value uses --flag=value form
+// so a value that starts with "-" is never parsed as a flag.
+func (u UpdateInput) Args() []string {
+	var a []string
+	add := func(name string, v *string) {
+		if v != nil {
+			a = append(a, "--"+name+"="+*v)
+		}
+	}
+	add("status", u.Status)
+	add("priority", u.Priority)
+	add("description", u.Description)
+	add("title", u.Title)
+	add("type", u.Type)
+	if u.Claim {
+		a = append(a, "--claim")
+	}
+	return a
 }
 
 // execFetcher runs `<exe> beads -C <dir> <args...>` as a child process and
@@ -95,6 +182,12 @@ type Fetcher interface {
 type execFetcher struct {
 	exe string
 	dir string
+	// mu serializes child processes. The UI fetches /api/beads and
+	// /api/mermaid in parallel, and concurrent children can fail with
+	// "database is locked" (embedded store, and iugum's own startup
+	// store). Other iugum processes on the host can still hold the
+	// startup store; runStdin retries that case.
+	mu sync.Mutex
 }
 
 // NewExecFetcher builds the production Fetcher. exe is the path to the
@@ -110,8 +203,48 @@ func (f *execFetcher) Dir() string { return f.dir }
 // Execute() can call os.Exit on error paths, which is why this is a
 // subprocess and not a direct in-process call (see README "Data path").
 func (f *execFetcher) run(ctx context.Context, args ...string) ([]byte, error) {
+	return f.runStdin(ctx, "", args...)
+}
+
+// runStdin is run with stdin set to input (empty means no stdin).
+func (f *execFetcher) runStdin(ctx context.Context, input string, args ...string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for attempt := 1; ; attempt++ {
+		out, msg, err := f.once(ctx, input, args)
+		if err == nil {
+			return out, nil
+		}
+		// iugum's own startup (app.New, before any bd code runs) opens a
+		// SQLite store shared with every other iugum process on the host.
+		// Under contention it fails with "iugum: database is locked". The
+		// bd command never started, so retrying is safe for reads and
+		// writes alike.
+		if attempt < startupRetries && isStartupLock(msg) {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(attempt) * 150 * time.Millisecond):
+				continue
+			}
+		}
+		return nil, fmt.Errorf("iugum beads %s: %w: %s", strings.Join(args, " "), err, msg)
+	}
+}
+
+const startupRetries = 4
+
+func isStartupLock(msg string) bool {
+	return strings.HasPrefix(msg, "iugum: ") && strings.Contains(msg, "database is locked")
+}
+
+// once runs one child process and returns stdout, the trimmed error text
+// (stderr, or stdout if stderr is empty), and the exit error.
+func (f *execFetcher) once(ctx context.Context, input string, args []string) ([]byte, string, error) {
 	full := append([]string{"beads", "-C", f.dir}, args...)
 	cmd := exec.CommandContext(ctx, f.exe, full...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -120,9 +253,9 @@ func (f *execFetcher) run(ctx context.Context, args ...string) ([]byte, error) {
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
-		return nil, fmt.Errorf("iugum beads %s: %w: %s", strings.Join(args, " "), err, msg)
+		return nil, msg, err
 	}
-	return []byte(stdout.String()), nil
+	return []byte(stdout.String()), "", nil
 }
 
 func (f *execFetcher) FetchBeads(ctx context.Context) ([]Bead, error) {
@@ -138,7 +271,7 @@ func (f *execFetcher) FetchBeads(ctx context.Context) ([]Bead, error) {
 }
 
 func (f *execFetcher) FetchBead(ctx context.Context, id string) (*Bead, error) {
-	out, err := f.run(ctx, "show", id, "--json")
+	out, err := f.run(ctx, "show", "--json", "--", id)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +286,7 @@ func (f *execFetcher) FetchBead(ctx context.Context, id string) (*Bead, error) {
 }
 
 func (f *execFetcher) FetchComments(ctx context.Context, id string) ([]Comment, error) {
-	out, err := f.run(ctx, "comments", id, "--json")
+	out, err := f.run(ctx, "comments", "--json", "--", id)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +314,109 @@ func (f *execFetcher) FetchStatus(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+func (f *execFetcher) FetchMermaid(ctx context.Context, root string) (string, error) {
+	out, err := f.run(ctx, "dep", "tree", "--format=mermaid", "--direction=both", "--", root)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// parseOne decodes bd --json output that is either one object or a
+// one-element array (create returns an object; update/close/reopen/show
+// return an array).
+func parseOne(out []byte, what string) (*Bead, error) {
+	trimmed := strings.TrimSpace(string(out))
+	if strings.HasPrefix(trimmed, "[") {
+		var beads []Bead
+		if err := json.Unmarshal(out, &beads); err != nil {
+			return nil, fmt.Errorf("parsing bd %s --json: %w", what, err)
+		}
+		if len(beads) == 0 {
+			return nil, fmt.Errorf("bd %s returned no issue", what)
+		}
+		return &beads[0], nil
+	}
+	var b Bead
+	if err := json.Unmarshal(out, &b); err != nil {
+		return nil, fmt.Errorf("parsing bd %s --json: %w", what, err)
+	}
+	if b.ID == "" {
+		return nil, fmt.Errorf("bd %s returned no issue id: %s", what, trimmed)
+	}
+	return &b, nil
+}
+
+func (f *execFetcher) CreateBead(ctx context.Context, in CreateInput) (*Bead, error) {
+	args := []string{"create", "--json", "--title=" + in.Title}
+	if in.Description != "" {
+		args = append(args, "--description="+in.Description)
+	}
+	if in.Type != "" {
+		args = append(args, "--type="+in.Type)
+	}
+	if in.Priority != "" {
+		args = append(args, "--priority="+in.Priority)
+	}
+	out, err := f.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return parseOne(out, "create")
+}
+
+func (f *execFetcher) AddDependency(ctx context.Context, id, dependsOn string) error {
+	_, err := f.run(ctx, "dep", "add", "--json", "--depends-on="+dependsOn, "--", id)
+	return err
+}
+
+func (f *execFetcher) UpdateBead(ctx context.Context, id string, in UpdateInput) (*Bead, error) {
+	args := append([]string{"update", "--json"}, in.Args()...)
+	out, err := f.run(ctx, append(args, "--", id)...)
+	if err != nil {
+		return nil, err
+	}
+	return parseOne(out, "update")
+}
+
+func (f *execFetcher) CloseBead(ctx context.Context, id, reason string) (*Bead, error) {
+	args := []string{"close", "--json"}
+	if reason != "" {
+		args = append(args, "--reason="+reason)
+	}
+	out, err := f.run(ctx, append(args, "--", id)...)
+	if err != nil {
+		return nil, err
+	}
+	return parseOne(out, "close")
+}
+
+func (f *execFetcher) ReopenBead(ctx context.Context, id, reason string) (*Bead, error) {
+	args := []string{"reopen", "--json"}
+	if reason != "" {
+		args = append(args, "--reason="+reason)
+	}
+	out, err := f.run(ctx, append(args, "--", id)...)
+	if err != nil {
+		return nil, err
+	}
+	return parseOne(out, "reopen")
+}
+
+// AddComment passes the text on stdin, never as an argument, so any text
+// (including a leading "-") is stored as written.
+func (f *execFetcher) AddComment(ctx context.Context, id, text string) (*Comment, error) {
+	out, err := f.runStdin(ctx, text, "comment", "--json", "--stdin", "--", id)
+	if err != nil {
+		return nil, err
+	}
+	var c Comment
+	if err := json.Unmarshal(out, &c); err != nil {
+		return nil, fmt.Errorf("parsing bd comment --json: %w", err)
+	}
+	return &c, nil
 }
 
 // Filter narrows a bead list for the table view.

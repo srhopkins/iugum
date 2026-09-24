@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +20,16 @@ type fakeFetcher struct {
 	comments  map[string][]Comment
 	graphHTML string
 	failBeads bool
+
+	failMermaid bool
+	failWrite   bool
+
+	creates     []CreateInput
+	depAdds     []string
+	updates     []string
+	closes      []string
+	reopens     []string
+	commentAdds []string
 }
 
 func (f *fakeFetcher) FetchBeads(context.Context) ([]Bead, error) {
@@ -47,6 +59,92 @@ func (f *fakeFetcher) FetchStatus(context.Context) (string, error) { return "", 
 
 func (f *fakeFetcher) Dir() string { return "/fake/dir" }
 
+func (f *fakeFetcher) FetchMermaid(_ context.Context, root string) (string, error) {
+	if f.failMermaid {
+		return "", errors.New("mermaid boom")
+	}
+	return "flowchart TD\n  " + root + "\n", nil
+}
+
+func (f *fakeFetcher) CreateBead(_ context.Context, in CreateInput) (*Bead, error) {
+	f.creates = append(f.creates, in)
+	if f.failWrite {
+		return nil, errors.New("write boom")
+	}
+	b := &Bead{ID: "new-1", Title: in.Title, Description: in.Description, IssueType: in.Type,
+		Priority: json.Number(in.Priority), Status: "open"}
+	f.byID[b.ID] = b
+	return b, nil
+}
+
+func (f *fakeFetcher) AddDependency(_ context.Context, id, dependsOn string) error {
+	f.depAdds = append(f.depAdds, id+"->"+dependsOn)
+	if _, ok := f.byID[dependsOn]; !ok {
+		return errors.New("issue " + dependsOn + " not found")
+	}
+	b := f.byID[id]
+	b.Dependencies = append(b.Dependencies, Dependency{IssueID: id, DependsOnID: dependsOn, Type: "blocks"})
+	return nil
+}
+
+func (f *fakeFetcher) UpdateBead(_ context.Context, id string, in UpdateInput) (*Bead, error) {
+	f.updates = append(f.updates, id+" "+strings.Join(in.Args(), " "))
+	b, ok := f.byID[id]
+	if !ok {
+		return nil, errors.New("no issue found matching " + id)
+	}
+	cp := *b
+	if in.Status != nil {
+		cp.Status = *in.Status
+	}
+	if in.Priority != nil {
+		cp.Priority = json.Number(*in.Priority)
+	}
+	return &cp, nil
+}
+
+func (f *fakeFetcher) CloseBead(_ context.Context, id, reason string) (*Bead, error) {
+	f.closes = append(f.closes, id+":"+reason)
+	if id == "epic-1.1" {
+		return nil, errors.New("cannot close epic-1.1: blocked by open issues [x] (use --force to override)")
+	}
+	b, ok := f.byID[id]
+	if !ok {
+		return nil, errors.New("no issue found matching " + id)
+	}
+	cp := *b
+	cp.Status, cp.CloseReason = "closed", reason
+	return &cp, nil
+}
+
+func (f *fakeFetcher) ReopenBead(_ context.Context, id, reason string) (*Bead, error) {
+	f.reopens = append(f.reopens, id+":"+reason)
+	b, ok := f.byID[id]
+	if !ok {
+		return nil, errors.New("no issue found matching " + id)
+	}
+	cp := *b
+	cp.Status = "open"
+	return &cp, nil
+}
+
+func (f *fakeFetcher) AddComment(_ context.Context, id, text string) (*Comment, error) {
+	f.commentAdds = append(f.commentAdds, id+":"+text)
+	return &Comment{ID: "c-new", IssueID: id, Author: "tester", Text: text}, nil
+}
+
+// writes counts every write call the handler made, for read-only tests.
+func (f *fakeFetcher) writes() int {
+	return len(f.creates) + len(f.depAdds) + len(f.updates) + len(f.closes) + len(f.reopens) + len(f.commentAdds)
+}
+
+func newTestHandler(f Fetcher, opts Options) http.Handler {
+	if opts.Log == nil {
+		opts.Log = log.New(io.Discard, "", 0)
+	}
+	return NewHandler(f, opts)
+}
+
 func newFakeServer() *fakeFetcher {
 	epic := Bead{ID: "epic-1", Title: "Epic <one>", Status: "open", Priority: json.Number("1"), IssueType: "epic"}
 	child := Bead{
@@ -65,10 +163,10 @@ func newFakeServer() *fakeFetcher {
 }
 
 func TestHandlerList(t *testing.T) {
-	srv := httptest.NewServer(NewHandler(newFakeServer()))
+	srv := httptest.NewServer(newTestHandler(newFakeServer(), Options{}))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/")
+	resp, err := http.Get(srv.URL + "/legacy/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +185,10 @@ func TestHandlerList(t *testing.T) {
 }
 
 func TestHandlerListFilterByStatus(t *testing.T) {
-	srv := httptest.NewServer(NewHandler(newFakeServer()))
+	srv := httptest.NewServer(newTestHandler(newFakeServer(), Options{}))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/?status=in_progress")
+	resp, err := http.Get(srv.URL + "/legacy/?status=in_progress")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +205,10 @@ func TestHandlerListFilterByStatus(t *testing.T) {
 func TestHandlerListUpstreamError(t *testing.T) {
 	f := newFakeServer()
 	f.failBeads = true
-	srv := httptest.NewServer(NewHandler(f))
+	srv := httptest.NewServer(newTestHandler(f, Options{}))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/")
+	resp, err := http.Get(srv.URL + "/legacy/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +219,10 @@ func TestHandlerListUpstreamError(t *testing.T) {
 }
 
 func TestHandlerDetail(t *testing.T) {
-	srv := httptest.NewServer(NewHandler(newFakeServer()))
+	srv := httptest.NewServer(newTestHandler(newFakeServer(), Options{}))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/bead/epic-1")
+	resp, err := http.Get(srv.URL + "/legacy/bead/epic-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +237,10 @@ func TestHandlerDetail(t *testing.T) {
 }
 
 func TestHandlerDetailNotFound(t *testing.T) {
-	srv := httptest.NewServer(NewHandler(newFakeServer()))
+	srv := httptest.NewServer(newTestHandler(newFakeServer(), Options{}))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/bead/does-not-exist")
+	resp, err := http.Get(srv.URL + "/legacy/bead/does-not-exist")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,10 +251,10 @@ func TestHandlerDetailNotFound(t *testing.T) {
 }
 
 func TestHandlerGraph(t *testing.T) {
-	srv := httptest.NewServer(NewHandler(newFakeServer()))
+	srv := httptest.NewServer(newTestHandler(newFakeServer(), Options{}))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/graph")
+	resp, err := http.Get(srv.URL + "/legacy/graph")
 	if err != nil {
 		t.Fatal(err)
 	}

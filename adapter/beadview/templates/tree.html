@@ -1,5 +1,5 @@
 {{define "tree-content"}}
-<form class="filters" method="get" action="/tree">
+<form class="filters" method="get" action="/legacy/tree">
 <input type="search" name="q" placeholder="search id, title, description" value="{{.Filter.Search}}">
 <button type="submit">Filter</button>
 </form>
@@ -13,7 +13,7 @@
 {{if .Children}}
 <details class="tree-node" open>
 <summary>
-<a href="/bead/{{.Bead.ID}}">{{.Bead.ID}}</a>
+<a href="/legacy/bead/{{.Bead.ID}}">{{.Bead.ID}}</a>
 <span class="tree-title">{{.Bead.Title}}</span>
 <span class="pill status-{{.Bead.Status}}">{{.Bead.Status}}</span>
 <span class="muted">{{.Bead.PriorityLabel}}</span>
@@ -26,7 +26,7 @@
 </details>
 {{else}}
 <div class="tree-node leaf">
-<a href="/bead/{{.Bead.ID}}">{{.Bead.ID}}</a>
+<a href="/legacy/bead/{{.Bead.ID}}">{{.Bead.ID}}</a>
 <span class="tree-title">{{.Bead.Title}}</span>
 <span class="pill status-{{.Bead.Status}}">{{.Bead.Status}}</span>
 <span class="muted">{{.Bead.PriorityLabel}}</span>
