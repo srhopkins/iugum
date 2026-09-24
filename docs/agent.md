@@ -23,18 +23,36 @@ iugum agent up scout
 iugum agent status scout
 iugum agent ls
 iugum agent down scout
+iugum agent rm scout
 ```
 
-`up` creates the agent's `iugum-agent-scout` network and starts a detached container, with restart policy `unless-stopped`.
-The container runs as no fixed user by default; set `user` in `agent.yaml` to add `--user`. This is a behavior change: earlier versions always ran the container as `1000:1000`. Images that must start as root (for example linuxserver.io images that drop privilege themselves via s6-init) need `user` left empty.
+`up` creates the agent's `iugum-agent-scout` network (labeled `iugum.managed=true` and `iugum.agent=scout`) and starts a detached container, with restart policy `unless-stopped`.
+The container runs as no fixed user by default; set `user` in `agent.yaml`, or pass `--user`, to add `--user`. This is a behavior change: earlier versions always ran the container as `1000:1000`. Images that must start as root (for example linuxserver.io images that drop privilege themselves via s6-init) need `user` left empty.
 `startup.command` is optional extra argv after the image. Use `[run]` for jobs only (no wiki). Use `[up, --hostname, 0.0.0.0]` when the image has code-server and you publish port 8080. Empty keeps the image default (`up`).
 Running `up` again leaves a running container unchanged or starts a stopped container.
-Use `--dry-run` on `up` or `down` to print the Docker or Podman commands.
+Use `--dry-run` on `up`, `down`, or `rm` to print the Docker or Podman commands.
 
-`down` stops and removes the container.
+### `up` with no `agent.yaml`
+
+`up` works in an empty directory: no `./NAME/agent.yaml` is required as long as `--kind` or `--image` is given.
+
+```text
+iugum agent up chrome1 --kind selkies
+```
+
+`--kind selkies` fills in a built-in preset: image, volumes, env, memory/CPU limits, and the reverse-proxy labels for the active Docker context (Traefik on the homelab tower, Caddy on Docker Desktop for Mac). The Docker context comes from the `DOCKER_CONTEXT` environment variable if set, else `<engine> context show` (podman always uses the homelab preset).
+
+`up` flags: `--image`, `--kind`, `--label KEY=VALUE` (repeatable), `--volume SPEC` (repeatable), `--network NAME` (join an existing external network), `--shm-size SIZE`, `--env KEY=VALUE` (repeatable), `--user USER`, `--mem SIZE`, `--cpus N`, `--port SPEC` (repeatable), plus `--engine` and `--dry-run`.
+
+Precedence, low to high: the `--kind` preset, then `./NAME/agent.yaml` if it exists, then flags. `--label`/`--volume`/`--env`/`--port` add to whatever the preset and `agent.yaml` already set; every other flag replaces the merged value. With no `agent.yaml`, no `--kind`, and no `--image`, `up` fails and names `--image` or `--kind` in its error.
+
+`down` stops and removes the container. It keeps any named volumes.
 It removes the network when no container still uses it, unless `network.external` is set (see below).
+`rm` stops and removes the container, its network (unless external), and every volume labeled `iugum.agent=NAME` — including the `NAME-config` convention volume a `--kind` preset uses. It asks you to type the agent's name again on stdin, unless `--yes` is given.
 `status` reports `running` or `not-running` and succeeds for a missing container.
-`ls` finds directories with an `agent.yaml` under the current directory.
+`ls` lists directories with an `agent.yaml` under the current directory, merged with any running or stopped container found by the `iugum.managed=true` label — so a container started with `--kind` and no directory still shows up.
+
+`status`, `down`, `tui`, `acp`, and `rm` all work on a container with no `agent.yaml` on disk: they look it up by the `iugum.agent=NAME` container label.
 
 Network mode `locked` is reserved for future network enforcement.
 Lifecycle commands reject it until that enforcement exists.

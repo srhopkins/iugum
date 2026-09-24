@@ -115,7 +115,11 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum container stop [--name N] [--engine E] [--dry-run]
   iugum agent init <name>
   iugum agent run --config FILE [--listen 127.0.0.1:3850]
-  iugum agent up|down <name> [--engine E] [--dry-run]
+  iugum agent up <name> [--engine E] [--dry-run] [--kind K] [--image IMG]
+    [--label K=V]... [--volume SPEC]... [--network NAME] [--shm-size SIZE]
+    [--env K=V]... [--user USER] [--mem SIZE] [--cpus N] [--port SPEC]...
+  iugum agent down <name> [--engine E] [--dry-run]
+  iugum agent rm <name> [--engine E] [--dry-run] [--yes]
   iugum agent status <name>
   iugum agent ls
   iugum agent tui|acp <name> [--dry-run]
