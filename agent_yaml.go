@@ -17,7 +17,11 @@ const (
 type AgentFile struct {
 	Name       string          `yaml:"name"`
 	Image      string          `yaml:"image"`
+	Kind       string          `yaml:"kind,omitempty"`
+	User       string          `yaml:"user,omitempty"` // empty = no --user flag (image's own entrypoint decides)
+	Labels     []string        `yaml:"labels,omitempty"`
 	Mounts     []AgentMount    `yaml:"mounts,omitempty"`
+	Volumes    []string        `yaml:"volumes,omitempty"` // "name:target[:ro]", named docker/podman volumes
 	Ports      []string        `yaml:"ports,omitempty"`
 	Network    AgentNetwork    `yaml:"network"`
 	Privileges *AgentPrivilege `yaml:"privileges,omitempty"`
@@ -25,6 +29,9 @@ type AgentFile struct {
 	Jobs       string          `yaml:"jobs,omitempty"`
 	ShmSize    string          `yaml:"shm_size,omitempty"` // docker --shm-size, e.g. 1g for Chromium
 	ExtraHosts []string        `yaml:"extra_hosts,omitempty"`
+	Mem        string          `yaml:"mem,omitempty"`  // docker --memory / --memory-swap
+	Cpus       string          `yaml:"cpus,omitempty"` // docker --cpus
+	Env        []string        `yaml:"env,omitempty"`  // "KEY=VALUE" literal values, in addition to Startup.Env name passthrough
 }
 
 // AgentMount describes a bind mount or a tmpfs mask.
@@ -37,8 +44,9 @@ type AgentMount struct {
 }
 
 type AgentNetwork struct {
-	Name string `yaml:"name"`
-	Mode string `yaml:"mode,omitempty"`
+	Name     string `yaml:"name"`
+	Mode     string `yaml:"mode,omitempty"`
+	External string `yaml:"external,omitempty"` // join an existing network by name; iugum never creates or removes it
 }
 
 type AgentPrivilege struct {

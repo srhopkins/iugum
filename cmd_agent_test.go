@@ -166,7 +166,6 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 		"docker run -d",
 		"--network iugum-agent-scout",
 		"--restart unless-stopped",
-		"--user 1000:1000",
 		"/home/iugum:ro",
 		"-e SSH_AUTH_SOCK",
 		"--cap-add NET_ADMIN",
@@ -183,6 +182,19 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 	}
 	if strings.Contains(argv, "--env-file") {
 		t.Fatalf("argv leaked --env-file without home/.env: %s", argv)
+	}
+	if strings.Contains(argv, "--user") {
+		t.Fatalf("argv leaked --user with no user set: %s", argv)
+	}
+	for _, want := range []string{
+		"--label iugum.managed=true",
+		"--label iugum.agent=scout",
+		"--label iugum.image=example:v1",
+		"--label iugum.kind=custom",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv %q lacks %q", argv, want)
+		}
 	}
 
 	cfg.ExtraHosts = []string{"host.docker.internal:host-gateway"}
@@ -201,6 +213,96 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 	withEnv := strings.Join(agentRunArgv("docker", root, cfg), " ")
 	if !strings.Contains(withEnv, "--env-file "+envPath) {
 		t.Fatalf("argv %q lacks --env-file %s", withEnv, envPath)
+	}
+}
+
+func TestAgentRunArgvNewFields(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sel")
+	cfg := AgentFile{
+		Name:    "sel",
+		Image:   "agentbox:latest",
+		Kind:    "selkies",
+		User:    "",
+		Labels:  []string{"traefik.enable=true", "a=b"},
+		Network: AgentNetwork{External: "proxy"},
+		Volumes: []string{"sel-config:/config"},
+		Env:     []string{"PUID=1000", "TZ=America/Los_Angeles"},
+		Mem:     "5g",
+		Cpus:    "3",
+	}
+	argv := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	for _, want := range []string{
+		"--network proxy",
+		"--label traefik.enable=true",
+		"--label a=b",
+		"--label iugum.managed=true",
+		"--label iugum.agent=sel",
+		"--label iugum.image=agentbox:latest",
+		"--label iugum.kind=selkies",
+		"-v sel-config:/config",
+		"-e PUID=1000",
+		"-e TZ=America/Los_Angeles",
+		"--memory 5g",
+		"--memory-swap 5g",
+		"--cpus 3",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv %q lacks %q", argv, want)
+		}
+	}
+	if strings.Contains(argv, "--user") {
+		t.Fatalf("argv leaked --user when user is empty: %s", argv)
+	}
+
+	cfg.User = "0:0"
+	withUser := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	if !strings.Contains(withUser, "--user 0:0") {
+		t.Fatalf("argv %q lacks --user 0:0", withUser)
+	}
+}
+
+func TestAgentKindDefaultsToCustom(t *testing.T) {
+	if got, want := agentKind(AgentFile{}), "custom"; got != want {
+		t.Fatalf("agentKind() = %q, want %q", got, want)
+	}
+	if got, want := agentKind(AgentFile{Kind: "selkies"}), "selkies"; got != want {
+		t.Fatalf("agentKind() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentNetworkNameHonorsExternal(t *testing.T) {
+	cfg := AgentFile{Name: "sel", Network: AgentNetwork{External: "proxy"}}
+	if got, want := agentNetworkName(cfg), "proxy"; got != want {
+		t.Fatalf("agentNetworkName() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentVolumeCreateArgv(t *testing.T) {
+	cfg := AgentFile{Name: "sel"}
+	got := strings.Join(agentVolumeCreateArgv("docker", "sel-config", cfg), " ")
+	want := "docker volume create --label iugum.managed=true --label iugum.agent=sel sel-config"
+	if got != want {
+		t.Fatalf("agentVolumeCreateArgv() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentUpDryRunSkipsNetworkCreateWhenExternal(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sel")
+	cfg := AgentFile{
+		Name:    "sel",
+		Image:   "agentbox:latest",
+		Network: AgentNetwork{External: "proxy"},
+		Volumes: []string{"sel-config:/config"},
+	}
+	var out, errOut strings.Builder
+	if code := agentUp("docker", root, cfg, true, &out, &errOut); code != 0 {
+		t.Fatalf("agentUp dry-run exit = %d, stderr = %s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "network create") {
+		t.Fatalf("dry-run must not create a network when network.external is set: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "volume create") || !strings.Contains(out.String(), "sel-config") {
+		t.Fatalf("dry-run must print the volume create line: %s", out.String())
 	}
 }
 
