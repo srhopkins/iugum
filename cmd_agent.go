@@ -241,11 +241,28 @@ func loadNamedAgent(name string) (string, AgentFile, error) {
 }
 
 func agentNetworkName(cfg AgentFile) string {
+	if cfg.Network.External != "" {
+		return cfg.Network.External
+	}
 	name := cfg.Network.Name
 	if name == "" || name == cfg.Name {
 		return "iugum-agent-" + cfg.Name
 	}
 	return "iugum-agent-" + cfg.Name + "-" + name
+}
+
+// agentKind returns the agent's declared kind, or "custom" when unset.
+func agentKind(cfg AgentFile) string {
+	if cfg.Kind == "" {
+		return "custom"
+	}
+	return cfg.Kind
+}
+
+// agentVolumeName extracts the leading "name" from a "name:target[:ro]" volume spec.
+func agentVolumeName(spec string) string {
+	name, _, _ := strings.Cut(spec, ":")
+	return name
 }
 
 func agentRunArgv(engine, root string, cfg AgentFile) []string {
@@ -254,8 +271,19 @@ func agentRunArgv(engine, root string, cfg AgentFile) []string {
 		"--name", cfg.Name,
 		"--network", agentNetworkName(cfg),
 		"--restart", cfg.Startup.Restart,
-		"--user", "1000:1000",
 	}
+	if cfg.User != "" {
+		argv = append(argv, "--user", cfg.User)
+	}
+	for _, label := range cfg.Labels {
+		argv = append(argv, "--label", label)
+	}
+	argv = append(argv,
+		"--label", "iugum.managed=true",
+		"--label", "iugum.agent="+cfg.Name,
+		"--label", "iugum.image="+cfg.Image,
+		"--label", "iugum.kind="+agentKind(cfg),
+	)
 	for _, m := range cfg.Mounts {
 		if m.Target == "" {
 			continue
@@ -278,6 +306,12 @@ func agentRunArgv(engine, root string, cfg AgentFile) []string {
 		}
 		argv = append(argv, "-v", value)
 	}
+	for _, v := range cfg.Volumes {
+		if v == "" {
+			continue
+		}
+		argv = append(argv, "-v", v)
+	}
 	for _, port := range cfg.Ports {
 		argv = append(argv, "-p", port)
 	}
@@ -287,6 +321,18 @@ func agentRunArgv(engine, root string, cfg AgentFile) []string {
 	}
 	for _, name := range cfg.Startup.Env {
 		argv = append(argv, "-e", name)
+	}
+	for _, kv := range cfg.Env {
+		if kv == "" {
+			continue
+		}
+		argv = append(argv, "-e", kv)
+	}
+	if cfg.Mem != "" {
+		argv = append(argv, "--memory", cfg.Mem, "--memory-swap", cfg.Mem)
+	}
+	if cfg.Cpus != "" {
+		argv = append(argv, "--cpus", cfg.Cpus)
 	}
 	if cfg.ShmSize != "" {
 		argv = append(argv, "--shm-size", cfg.ShmSize)
@@ -316,15 +362,45 @@ func agentRunArgv(engine, root string, cfg AgentFile) []string {
 	return argv
 }
 
+// agentVolumeCreateArgv builds the argv that ensures a named volume exists,
+// stamped with the same iugum.* labels the container gets.
+func agentVolumeCreateArgv(engine, name string, cfg AgentFile) []string {
+	return []string{
+		engine, "volume", "create",
+		"--label", "iugum.managed=true",
+		"--label", "iugum.agent=" + cfg.Name,
+		name,
+	}
+}
+
 func agentUp(engine, root string, cfg AgentFile, dryRun bool, stdout, stderr io.Writer) int {
 	network := agentNetworkName(cfg)
+	external := cfg.Network.External != ""
 	if dryRun {
-		fmt.Fprintln(stdout, strings.Join([]string{engine, "network", "create", network}, " "))
+		if !external {
+			fmt.Fprintln(stdout, strings.Join([]string{engine, "network", "create", network}, " "))
+		}
+		for _, v := range cfg.Volumes {
+			name := agentVolumeName(v)
+			if name == "" {
+				continue
+			}
+			fmt.Fprintln(stdout, strings.Join(agentVolumeCreateArgv(engine, name, cfg), " "))
+		}
 		fmt.Fprintln(stdout, strings.Join(agentRunArgv(engine, root, cfg), " "))
 		return 0
 	}
-	if !agentObjectExists(engine, "network", network) {
+	if !external && !agentObjectExists(engine, "network", network) {
 		if code := execArgv([]string{engine, "network", "create", network}, false); code != 0 {
+			return code
+		}
+	}
+	for _, v := range cfg.Volumes {
+		name := agentVolumeName(v)
+		if name == "" || agentObjectExists(engine, "volume", name) {
+			continue
+		}
+		if code := execArgv(agentVolumeCreateArgv(engine, name, cfg), false); code != 0 {
 			return code
 		}
 	}
@@ -339,14 +415,19 @@ func agentUp(engine, root string, cfg AgentFile, dryRun bool, stdout, stderr io.
 }
 
 func agentDown(engine string, cfg AgentFile, dryRun bool, stdout, stderr io.Writer) int {
+	network := agentNetworkName(cfg)
+	external := cfg.Network.External != ""
 	commands := [][]string{
 		{engine, "stop", cfg.Name},
 		{engine, "rm", cfg.Name},
-		{engine, "network", "rm", agentNetworkName(cfg)},
+		{engine, "network", "rm", network},
 	}
 	if dryRun {
-		for _, argv := range commands {
+		for _, argv := range commands[:2] {
 			fmt.Fprintln(stdout, strings.Join(argv, " "))
+		}
+		if !external {
+			fmt.Fprintln(stdout, strings.Join(commands[2], " "))
 		}
 		return 0
 	}
@@ -357,9 +438,9 @@ func agentDown(engine string, cfg AgentFile, dryRun bool, stdout, stderr io.Writ
 			}
 		}
 	}
-	if agentObjectExists(engine, "network", agentNetworkName(cfg)) {
+	if !external && agentObjectExists(engine, "network", network) {
 		if code := execArgv(commands[2], false); code != 0 {
-			fmt.Fprintf(stderr, "agent down: network %s is still in use\n", agentNetworkName(cfg))
+			fmt.Fprintf(stderr, "agent down: network %s is still in use\n", network)
 			return code
 		}
 	}
@@ -368,8 +449,11 @@ func agentDown(engine string, cfg AgentFile, dryRun bool, stdout, stderr io.Writ
 
 func agentObjectExists(engine, kind, name string) bool {
 	args := []string{"inspect", name}
-	if kind == "network" {
+	switch kind {
+	case "network":
 		args = []string{"network", "inspect", name}
+	case "volume":
+		args = []string{"volume", "inspect", name}
 	}
 	cmd := exec.Command(engine, args...)
 	return cmd.Run() == nil

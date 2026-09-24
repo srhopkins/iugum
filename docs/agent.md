@@ -25,14 +25,14 @@ iugum agent ls
 iugum agent down scout
 ```
 
-`up` creates the agent's `iugum-agent-scout` network and starts a detached container.
-The container runs as user `1000:1000` with restart policy `unless-stopped`.
+`up` creates the agent's `iugum-agent-scout` network and starts a detached container, with restart policy `unless-stopped`.
+The container runs as no fixed user by default; set `user` in `agent.yaml` to add `--user`. This is a behavior change: earlier versions always ran the container as `1000:1000`. Images that must start as root (for example linuxserver.io images that drop privilege themselves via s6-init) need `user` left empty.
 `startup.command` is optional extra argv after the image. Use `[run]` for jobs only (no wiki). Use `[up, --hostname, 0.0.0.0]` when the image has code-server and you publish port 8080. Empty keeps the image default (`up`).
 Running `up` again leaves a running container unchanged or starts a stopped container.
 Use `--dry-run` on `up` or `down` to print the Docker or Podman commands.
 
 `down` stops and removes the container.
-It removes the network when no container still uses it.
+It removes the network when no container still uses it, unless `network.external` is set (see below).
 `status` reports `running` or `not-running` and succeeds for a missing container.
 `ls` finds directories with an `agent.yaml` under the current directory.
 
@@ -84,17 +84,27 @@ startup:
 
 - `name` is the agent and container name.
 - `image` is the container image.
+- `kind` is a free-text label for the agent's flavor (example `selkies`). It shows up as the `iugum.kind` container label; empty defaults to `custom`.
+- `user` sets Docker `--user` (example `1000:1000`). Empty omits the flag, so the image's own entrypoint decides. Images that must start as root belong here with `user` left unset.
+- `labels` is a list of `KEY=VALUE` strings, each added with its own `--label`. Use this for reverse-proxy routing labels (Traefik, Caddy).
 - `mounts` is a list of bind mounts or tmpfs masks. A bind mount has `source` and `target`. Set `ro: true` for read-only access. A tmpfs mask has `target` and `tmpfs: true`, with no `source`.
+- `volumes` is a list of named-volume specs, `name:target[:ro]` (example `sel-config:/config`). Unlike `mounts`, these are Docker/Podman named volumes, not host paths. `up` creates a missing volume first (`<engine> volume create`, stamped with the same `iugum.*` labels as the container); `down` never removes it.
 - `ports` is an optional list of Docker-style port mappings, such as `127.0.0.1:8080:8080`.
 - `network.name` is the agent's Docker network.
 - `network.mode` defaults to `open`. `locked` is reserved for network enforcement.
-- `privileges.cap_add` is an optional list of Linux capabilities. The container still runs as a non-root user.
+- `network.external` joins an existing network by name instead of the agent's own private one (example: a shared Traefik/Caddy proxy network). `up` does not create it and `down` does not remove it.
+- `privileges.cap_add` is an optional list of Linux capabilities. The container still runs as a non-root user unless `user` says otherwise.
 - `startup.restart` defaults to `unless-stopped`.
 - `startup.env` is an optional list of host environment variable names to pass through. Do not put secret values in this file.
+- `env` is an optional list of literal `KEY=VALUE` pairs added with `-e`, alongside the `startup.env` name passthrough.
+- `mem` sets Docker `--memory` and `--memory-swap` to the same value (example `5g`).
+- `cpus` sets Docker `--cpus` (example `"3"`).
 - If `home/.env` exists, `up` passes it to Docker as `--env-file`. That file is gitignored with the rest of `home/`. Put long-lived tokens there (`HASS_TOKEN=...`).
 - `jobs` points to a cron jobs file (default `jobs.yaml`). `up` mounts it at `/workspace/jobs.yaml` and sets `IUGUM_JOBS`.
 - `shm_size` is Docker `/dev/shm` size (example `1g`). Chromium needs this.
 - `extra_hosts` is a list of Docker `--add-host` entries. Empty defaults to `host.docker.internal:host-gateway` so Linux containers can reach services on the host.
+
+Every container also gets `--label iugum.managed=true`, `--label iugum.agent=<name>`, `--label iugum.image=<image>`, and `--label iugum.kind=<kind or custom>`. A named volume `up` creates gets `iugum.managed=true` and `iugum.agent=<name>` too. The private network `up` creates is not labeled; `docker network create` takes the network name as its last, positional argument, so it cannot carry labels the same way.
 
 Inside the container the agent adds work with `iugum job`:
 
