@@ -104,6 +104,16 @@ describe('App', () => {
       fireEvent.keyDown(document.body, { key: '/' })
     })
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Search beads... ( / )'))
+    act(() => {
+      document.activeElement.blur()
+    })
+    // "n" opens New Bead and is not typed into the title field.
+    let notPrevented
+    act(() => {
+      notPrevented = fireEvent.keyDown(document.body, { key: 'n' })
+    })
+    expect(notPrevented).toBe(false)
+    expect(screen.getByRole('heading', { name: 'New Bead' })).toBeTruthy()
   })
 
   it('hides write controls when the server is read-only', async () => {

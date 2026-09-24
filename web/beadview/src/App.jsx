@@ -301,6 +301,9 @@ export default function App() {
           searchInputRef.current?.focus()
           break
         case 'n':
+          // preventDefault stops the "n" from landing in the modal's
+          // autofocused title field.
+          e.preventDefault()
           if (!readOnly) setShowNewBead(true)
           break
         case '1':
