@@ -15,12 +15,47 @@ export function isRoot(bead, ids) {
   return !bead.parent || !ids.has(bead.parent)
 }
 
-function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, focusedId, depth = 0 }) {
+/**
+ * Beads whose `parent` chain loops (e.g. A -> B -> A) never satisfy
+ * isRoot, so they would not render at all. For each such loop, pick one
+ * member (the lowest id, for a stable choice) so the loop still shows up
+ * at top level instead of disappearing.
+ */
+export function findCycleRoots(beads) {
+  const filteredIds = new Set(beads.map(b => b.id))
+  const byId = new Map(beads.map(b => [b.id, b]))
+  const state = new Map() // id -> 'visiting' | 'done'
+  const cycleRepIds = []
+
+  function walk(bead, path) {
+    if (!bead || state.get(bead.id) === 'done') return
+    if (state.get(bead.id) === 'visiting') {
+      const idx = path.indexOf(bead.id)
+      const cycleIds = path.slice(idx)
+      const rep = cycleIds.reduce((a, b) => (a < b ? a : b))
+      if (!cycleRepIds.includes(rep)) cycleRepIds.push(rep)
+      return
+    }
+    if (!isRoot(bead, filteredIds)) {
+      state.set(bead.id, 'visiting')
+      walk(byId.get(bead.parent), [...path, bead.id])
+    }
+    state.set(bead.id, 'done')
+  }
+
+  beads.forEach(b => walk(b, []))
+  return cycleRepIds.map(id => byId.get(id)).filter(Boolean)
+}
+
+function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, focusedId, depth = 0, ancestorIds }) {
   const isExpanded = expandedSet.has(bead.id)
+  const ancestors = ancestorIds || new Set()
   const isKid = b => isChildOf(b, bead.id)
   // Shown children come from the filtered, sorted list, so the filters and
   // Sort apply at every level. The percent counts every parent-child.
-  const children = beads.filter(isKid)
+  // A child already in the ancestor chain (a parent loop) is skipped so
+  // rendering cannot recurse forever.
+  const children = beads.filter(b => isKid(b) && !ancestors.has(b.id))
   const allChildren = allBeads.filter(isKid)
 
   const childCount = allChildren.length
@@ -68,6 +103,7 @@ function TreeNode({ bead, beads, allBeads, expandedSet, toggleExpand, onSelect, 
           onSelect={onSelect}
           focusedId={focusedId}
           depth={depth + 1}
+          ancestorIds={new Set([...ancestors, bead.id])}
         />
       ))}
     </div>
@@ -96,7 +132,8 @@ export default function TreeView({ beads, allBeads, focusedIndex, onSelect }) {
 
   const rootBeads = useMemo(() => {
     const filteredIds = new Set(beads.map(b => b.id))
-    return beads.filter(b => isRoot(b, filteredIds))
+    const roots = beads.filter(b => isRoot(b, filteredIds))
+    return [...roots, ...findCycleRoots(beads)]
   }, [beads])
 
   const focusedId = focusedIndex >= 0 && focusedIndex < beads.length
