@@ -401,6 +401,9 @@ func detectDockerContext(engine string, dryRun bool) string {
 // overlayAgentFile applies agent.yaml's explicitly-set fields on top of a
 // kind preset. Scalars replace; list fields replace wholesale (flags are the
 // only layer that appends).
+// overlayAgentFile layers agent.yaml over a kind preset. Scalars replace;
+// lists (labels, mounts, volumes, ports, env, extra hosts) add to the preset's,
+// so an agent.yaml that sets one env var keeps the preset's PUID and PGID.
 func overlayAgentFile(base, over AgentFile) AgentFile {
 	if over.Name != "" {
 		base.Name = over.Name
@@ -415,16 +418,16 @@ func overlayAgentFile(base, over AgentFile) AgentFile {
 		base.User = over.User
 	}
 	if len(over.Labels) > 0 {
-		base.Labels = over.Labels
+		base.Labels = append(base.Labels, over.Labels...)
 	}
 	if len(over.Mounts) > 0 {
-		base.Mounts = over.Mounts
+		base.Mounts = append(base.Mounts, over.Mounts...)
 	}
 	if len(over.Volumes) > 0 {
-		base.Volumes = over.Volumes
+		base.Volumes = append(base.Volumes, over.Volumes...)
 	}
 	if len(over.Ports) > 0 {
-		base.Ports = over.Ports
+		base.Ports = append(base.Ports, over.Ports...)
 	}
 	if over.Network.External != "" {
 		base.Network.External = over.Network.External
@@ -454,7 +457,7 @@ func overlayAgentFile(base, over AgentFile) AgentFile {
 		base.ShmSize = over.ShmSize
 	}
 	if len(over.ExtraHosts) > 0 {
-		base.ExtraHosts = over.ExtraHosts
+		base.ExtraHosts = append(base.ExtraHosts, over.ExtraHosts...)
 	}
 	if over.Mem != "" {
 		base.Mem = over.Mem
@@ -463,7 +466,7 @@ func overlayAgentFile(base, over AgentFile) AgentFile {
 		base.Cpus = over.Cpus
 	}
 	if len(over.Env) > 0 {
-		base.Env = over.Env
+		base.Env = append(base.Env, over.Env...)
 	}
 	return base
 }
