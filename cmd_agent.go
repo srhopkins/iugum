@@ -51,7 +51,8 @@ const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls
                  checkpoint and commit the agent memory database
 
   up flags:       --engine docker|podman|auto, --dry-run, --kind KIND,
-                  --image IMG, --label K=V (repeatable), --volume SPEC
+                  --image IMG, --label K=V (repeatable), --volume SPEC,
+                  --mount SRC:DST[:ro] (repeatable), --icon PNG (Selkies tab icon)
                   (repeatable), --network NAME, --shm-size SIZE,
                   --env K=V (repeatable), --user USER, --mem SIZE,
                   --cpus N, --port SPEC (repeatable)
@@ -226,14 +227,21 @@ type agentUpOpts struct {
 	Volumes []string
 	Envs    []string
 	Ports   []string
+	Mounts  []string // SRC:DST[:ro] bind mounts
+	Icon    string   // PNG mounted over the Selkies tab icon
 }
+
+// selkiesIconPath is what the Selkies web page loads as its tab icon
+// (<link rel="icon" href="icon.png"> under nginx root /usr/share/selkies/web/).
+const selkiesIconPath = "/usr/share/selkies/web/icon.png"
 
 func parseAgentUpArgs(args []string, stderr io.Writer) (agentUpOpts, bool) {
 	var o agentUpOpts
 	usage := func() {
 		fmt.Fprintln(stderr, "Usage: iugum agent up <name> [--engine E] [--dry-run] [--kind K] [--image IMG]\n"+
 			"    [--label K=V]... [--volume SPEC]... [--network NAME] [--shm-size SIZE]\n"+
-			"    [--env K=V]... [--user USER] [--mem SIZE] [--cpus N] [--port SPEC]...")
+			"    [--env K=V]... [--user USER] [--mem SIZE] [--cpus N] [--port SPEC]...\n"+
+			"    [--mount SRC:DST[:ro]]... [--icon PNG]")
 	}
 	// value takes the flag's value, either "--flag=value" or the next argv.
 	value := func(i *int, flag string) (string, bool) {
@@ -329,6 +337,18 @@ func parseAgentUpArgs(args []string, stderr io.Writer) (agentUpOpts, bool) {
 				return o, false
 			}
 			o.Ports = append(o.Ports, v)
+		case "--mount":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Mounts = append(o.Mounts, v)
+		case "--icon":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Icon = v
 		case "--help", "-h":
 			usage()
 			return o, false
@@ -466,7 +486,29 @@ func applyAgentUpFlags(cfg AgentFile, o agentUpOpts) AgentFile {
 	cfg.Volumes = append(cfg.Volumes, o.Volumes...)
 	cfg.Env = append(cfg.Env, o.Envs...)
 	cfg.Ports = append(cfg.Ports, o.Ports...)
+	for _, spec := range o.Mounts {
+		if m, ok := parseMountSpec(spec); ok {
+			cfg.Mounts = append(cfg.Mounts, m)
+		}
+	}
+	if o.Icon != "" {
+		cfg.Mounts = append(cfg.Mounts, AgentMount{Source: o.Icon, Target: selkiesIconPath, RO: true})
+	}
 	return cfg
+}
+
+// parseMountSpec reads SRC:DST[:ro]. A relative SRC resolves against the
+// agent directory later, like agent.yaml mounts.
+func parseMountSpec(spec string) (AgentMount, bool) {
+	parts := strings.Split(spec, ":")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return AgentMount{}, false
+	}
+	m := AgentMount{Source: parts[0], Target: parts[1]}
+	if len(parts) > 2 && parts[2] == "ro" {
+		m.RO = true
+	}
+	return m, true
 }
 
 // resolveAgentUpConfig merges the kindPreset, ./NAME/agent.yaml (if present),
