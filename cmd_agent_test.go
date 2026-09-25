@@ -2,12 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/srhopkins/iugum/app"
+	"github.com/srhopkins/iugum/policy"
 )
+
+func testAgentApp(t *testing.T) *app.App {
+	t.Helper()
+	gate, err := policy.New("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &app.App{Actor: "test", Gate: gate}
+}
 
 func TestInitAgentScaffoldAndParse(t *testing.T) {
 	cwd := t.TempDir()
@@ -166,7 +179,6 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 		"docker run -d",
 		"--network iugum-agent-scout",
 		"--restart unless-stopped",
-		"--user 1000:1000",
 		"/home/iugum:ro",
 		"-e SSH_AUTH_SOCK",
 		"--cap-add NET_ADMIN",
@@ -183,6 +195,19 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 	}
 	if strings.Contains(argv, "--env-file") {
 		t.Fatalf("argv leaked --env-file without home/.env: %s", argv)
+	}
+	if strings.Contains(argv, "--user") {
+		t.Fatalf("argv leaked --user with no user set: %s", argv)
+	}
+	for _, want := range []string{
+		"--label iugum.managed=true",
+		"--label iugum.agent=scout",
+		"--label iugum.image=example:v1",
+		"--label iugum.kind=custom",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv %q lacks %q", argv, want)
+		}
 	}
 
 	cfg.ExtraHosts = []string{"host.docker.internal:host-gateway"}
@@ -204,6 +229,96 @@ func TestAgentRunArgvLifecycleAndCapabilities(t *testing.T) {
 	}
 }
 
+func TestAgentRunArgvNewFields(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sel")
+	cfg := AgentFile{
+		Name:    "sel",
+		Image:   "agentbox:latest",
+		Kind:    "selkies",
+		User:    "",
+		Labels:  []string{"traefik.enable=true", "a=b"},
+		Network: AgentNetwork{External: "proxy"},
+		Volumes: []string{"sel-config:/config"},
+		Env:     []string{"PUID=1000", "TZ=America/Los_Angeles"},
+		Mem:     "5g",
+		Cpus:    "3",
+	}
+	argv := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	for _, want := range []string{
+		"--network proxy",
+		"--label traefik.enable=true",
+		"--label a=b",
+		"--label iugum.managed=true",
+		"--label iugum.agent=sel",
+		"--label iugum.image=agentbox:latest",
+		"--label iugum.kind=selkies",
+		"-v sel-config:/config",
+		"-e PUID=1000",
+		"-e TZ=America/Los_Angeles",
+		"--memory 5g",
+		"--memory-swap 5g",
+		"--cpus 3",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv %q lacks %q", argv, want)
+		}
+	}
+	if strings.Contains(argv, "--user") {
+		t.Fatalf("argv leaked --user when user is empty: %s", argv)
+	}
+
+	cfg.User = "0:0"
+	withUser := strings.Join(agentRunArgv("docker", root, cfg), " ")
+	if !strings.Contains(withUser, "--user 0:0") {
+		t.Fatalf("argv %q lacks --user 0:0", withUser)
+	}
+}
+
+func TestAgentKindDefaultsToCustom(t *testing.T) {
+	if got, want := agentKind(AgentFile{}), "custom"; got != want {
+		t.Fatalf("agentKind() = %q, want %q", got, want)
+	}
+	if got, want := agentKind(AgentFile{Kind: "selkies"}), "selkies"; got != want {
+		t.Fatalf("agentKind() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentNetworkNameHonorsExternal(t *testing.T) {
+	cfg := AgentFile{Name: "sel", Network: AgentNetwork{External: "proxy"}}
+	if got, want := agentNetworkName(cfg), "proxy"; got != want {
+		t.Fatalf("agentNetworkName() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentVolumeCreateArgv(t *testing.T) {
+	cfg := AgentFile{Name: "sel"}
+	got := strings.Join(agentVolumeCreateArgv("docker", "sel-config", cfg), " ")
+	want := "docker volume create --label iugum.managed=true --label iugum.agent=sel sel-config"
+	if got != want {
+		t.Fatalf("agentVolumeCreateArgv() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentUpDryRunSkipsNetworkCreateWhenExternal(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sel")
+	cfg := AgentFile{
+		Name:    "sel",
+		Image:   "agentbox:latest",
+		Network: AgentNetwork{External: "proxy"},
+		Volumes: []string{"sel-config:/config"},
+	}
+	var out, errOut strings.Builder
+	if code := agentUp("docker", root, cfg, true, &out, &errOut); code != 0 {
+		t.Fatalf("agentUp dry-run exit = %d, stderr = %s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "network create") {
+		t.Fatalf("dry-run must not create a network when network.external is set: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "volume create") || !strings.Contains(out.String(), "sel-config") {
+		t.Fatalf("dry-run must print the volume create line: %s", out.String())
+	}
+}
+
 func TestAgentNetworkNameIncludesAgentName(t *testing.T) {
 	cfg := AgentFile{Name: "worker", Network: AgentNetwork{Name: "worker"}}
 	if got, want := agentNetworkName(cfg), "iugum-agent-worker"; got != want {
@@ -212,6 +327,163 @@ func TestAgentNetworkNameIncludesAgentName(t *testing.T) {
 	cfg.Network.Name = "private"
 	if got, want := agentNetworkName(cfg), "iugum-agent-worker-private"; got != want {
 		t.Fatalf("custom agentNetworkName() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAgentUpConfigRequiresImageOrKind(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := resolveAgentUpConfig("nothing", agentUpOpts{}, "docker")
+	if err == nil || !strings.Contains(err.Error(), "--image") || !strings.Contains(err.Error(), "--kind") {
+		t.Fatalf("resolveAgentUpConfig() error = %v, want it to name --image and --kind", err)
+	}
+}
+
+func TestResolveAgentUpConfigKindPresetNoFile(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_CONTEXT", "homelab")
+	_, cfg, err := resolveAgentUpConfig("chrome1", agentUpOpts{Kind: "selkies"}, "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Image != "agentbox:latest" || cfg.Kind != "selkies" {
+		t.Fatalf("preset not applied: %+v", cfg)
+	}
+	if cfg.Network.External != "proxy" {
+		t.Fatalf("homelab preset must join proxy: %+v", cfg.Network)
+	}
+}
+
+func TestResolveAgentUpConfigFlagsOverridePresetAndAppendLists(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_CONTEXT", "docker-mac")
+	o := agentUpOpts{
+		Kind:    "selkies",
+		Image:   "agentbox:local",
+		Labels:  []string{"x=y"},
+		Envs:    []string{"FOO=bar"},
+		ShmSize: "2g",
+	}
+	_, cfg, err := resolveAgentUpConfig("chrome3", o, "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Image != "agentbox:local" {
+		t.Fatalf("--image must replace the preset image: %q", cfg.Image)
+	}
+	if cfg.ShmSize != "2g" {
+		t.Fatalf("--shm-size must replace the preset value: %q", cfg.ShmSize)
+	}
+	if !strings.Contains(strings.Join(cfg.Labels, ","), "x=y") || len(cfg.Labels) < 3 {
+		t.Fatalf("--label must append to the preset's labels: %+v", cfg.Labels)
+	}
+	if !strings.Contains(strings.Join(cfg.Env, ","), "FOO=bar") {
+		t.Fatalf("--env must append to the preset's env: %+v", cfg.Env)
+	}
+}
+
+func TestResolveAgentUpConfigAgentYamlOverridesPreset(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "chrome1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "name: chrome1\nimage: agentbox:pinned\nkind: selkies\n"
+	if err := os.WriteFile(filepath.Join(dir, "chrome1", "agent.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_CONTEXT", "homelab")
+	_, cfg, err := resolveAgentUpConfig("chrome1", agentUpOpts{}, "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Image != "agentbox:pinned" {
+		t.Fatalf("agent.yaml must override the preset image: %q", cfg.Image)
+	}
+	if cfg.Network.External != "proxy" {
+		t.Fatalf("preset fields agent.yaml doesn't set must survive: %+v", cfg.Network)
+	}
+}
+
+func TestParseAgentUpArgsCollectsRepeatableFlags(t *testing.T) {
+	var stderr strings.Builder
+	o, ok := parseAgentUpArgs([]string{
+		"chrome1", "--kind", "selkies", "--label", "a=b", "--label", "c=d",
+		"--volume", "v1:/x", "--env", "K=V", "--port", "1:1", "--mem", "2g",
+	}, &stderr)
+	if !ok {
+		t.Fatalf("parseAgentUpArgs failed: %s", stderr.String())
+	}
+	if o.Name != "chrome1" || o.Kind != "selkies" || o.Mem != "2g" {
+		t.Fatalf("scalars = %+v", o)
+	}
+	if strings.Join(o.Labels, ",") != "a=b,c=d" {
+		t.Fatalf("repeated --label = %+v", o.Labels)
+	}
+	if len(o.Volumes) != 1 || len(o.Envs) != 1 || len(o.Ports) != 1 {
+		t.Fatalf("list flags = %+v", o)
+	}
+}
+
+func TestAgentRmVolumeNamesIncludesConventionAndConfigured(t *testing.T) {
+	cfg := AgentFile{Name: "chrome1", Volumes: []string{"extra-data:/data"}}
+	got := agentRmVolumeNames("chrome1", cfg)
+	want := []string{"chrome1-config", "extra-data"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("agentRmVolumeNames() = %v, want %v", got, want)
+	}
+}
+
+func TestRunAgentRmDryRunPrintsVolumeAndNetworkRemoval(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	code := runAgentRm(context.Background(), testAgentApp(t), []string{"chrome1", "--yes", "--dry-run"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runAgentRm() = %d, stderr = %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "stop chrome1") || !strings.Contains(out, "rm chrome1") {
+		t.Fatalf("rm dry-run must print stop and rm: %s", out)
+	}
+	if !strings.Contains(out, "volume rm chrome1-config") {
+		t.Fatalf("rm dry-run must print the convention volume removal: %s", out)
+	}
+}
+
+func TestRunAgentRmRefusesWithoutYesOrMatchingConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	code := runAgentRm(context.Background(), testAgentApp(t), []string{"chrome1", "--dry-run"}, strings.NewReader(""), &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("rm without --yes and no stdin confirmation must refuse; stdout = %s", stdout.String())
 	}
 }
 
