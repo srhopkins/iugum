@@ -4,45 +4,68 @@
     "name": "homelab",
     "project": "iugum",
     "createdAt": "2026-08-24T00:00:00Z",
-    "updatedAt": "2026-08-24T00:00:00Z",
-    "version": 1
+    "updatedAt": "2026-09-17T00:00:00Z",
+    "version": 2
   },
   "spec": {
     "display": {
       "name": "homelab",
-      "description": "MI50 + VII junction/edge/mem in °C, SYS_FAN1 + VII fan RPM, LogQL {stream=\"homelab\"}."
+      "description": "MI50+VII temps, fans, used/allocated ctx, tok/s (OpenObserve Homelab model usage panels)."
     },
     "duration": "1h",
-    "refreshInterval": "0s",
+    "refreshInterval": "30s",
     "variables": [],
     "panels": {
       "mi50Temps": {
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "MI50 °C",
-            "description": "junction / edge / mem. Marks at 50 / 100 / 105 °C."
+            "name": "MI50 \u00b0C",
+            "description": "junction / edge / mem. Marks at 50 / 100 / 105 \u00b0C."
           },
           "plugin": {
             "kind": "TimeSeriesChart",
             "spec": {
-              "legend": { "position": "bottom", "mode": "list", "size": "small" },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "size": "small"
+              },
               "yAxis": {
                 "show": true,
-                "label": "°C",
+                "label": "\u00b0C",
                 "min": 0,
-                "max": 110,
-                "format": { "unit": "celsius", "decimalPlaces": 1 }
+                "format": {
+                  "unit": "celsius",
+                  "decimalPlaces": 1
+                },
+                "max": 110
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "connectNulls": true
               },
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
-                  { "value": 50, "name": "50 °C", "color": "#e6a817" },
-                  { "value": 100, "name": "100 °C", "color": "#e6553f" },
-                  { "value": 105, "name": "105 °C", "color": "#8b1a1a" }
+                  {
+                    "value": 50,
+                    "name": "50 \u00b0C",
+                    "color": "#e6a817"
+                  },
+                  {
+                    "value": 100,
+                    "name": "100 \u00b0C",
+                    "color": "#e6553f"
+                  },
+                  {
+                    "value": 105,
+                    "name": "105 \u00b0C",
+                    "color": "#8b1a1a"
+                  }
                 ]
-              },
-              "visual": { "display": "line", "lineWidth": 1.5, "connectNulls": true }
+              }
             }
           },
           "queries": [
@@ -54,7 +77,10 @@
                   "spec": {
                     "query": "junction_c{gpu=\"mi50\"}",
                     "seriesNameFormat": "junction",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -67,7 +93,10 @@
                   "spec": {
                     "query": "edge_c{gpu=\"mi50\"}",
                     "seriesNameFormat": "edge",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -80,7 +109,109 @@
                   "spec": {
                     "query": "mem_c{gpu=\"mi50\"}",
                     "seriesNameFormat": "mem",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "usedCtx": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Used vs allocated ctx",
+            "description": "used_ctx is KV tokens in the turn. allocated_ctx is num_ctx from /api/ps."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "size": "small"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "tokens",
+                "min": 0,
+                "format": {
+                  "unit": "decimal",
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "connectNulls": true
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "used_ctx{gpu=\"mi50\"}",
+                    "seriesNameFormat": "MI50 used",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "allocated_ctx{gpu=\"mi50\"}",
+                    "seriesNameFormat": "MI50 allocated",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "used_ctx{gpu=\"vii\"}",
+                    "seriesNameFormat": "VII used",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "allocated_ctx{gpu=\"vii\"}",
+                    "seriesNameFormat": "VII allocated",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -92,29 +223,52 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "VII °C",
-            "description": "junction / edge / mem. Marks at 50 / 100 / 105 °C."
+            "name": "VII \u00b0C",
+            "description": "junction / edge / mem."
           },
           "plugin": {
             "kind": "TimeSeriesChart",
             "spec": {
-              "legend": { "position": "bottom", "mode": "list", "size": "small" },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "size": "small"
+              },
               "yAxis": {
                 "show": true,
-                "label": "°C",
+                "label": "\u00b0C",
                 "min": 0,
-                "max": 110,
-                "format": { "unit": "celsius", "decimalPlaces": 1 }
+                "format": {
+                  "unit": "celsius",
+                  "decimalPlaces": 1
+                },
+                "max": 110
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "connectNulls": true
               },
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
-                  { "value": 50, "name": "50 °C", "color": "#e6a817" },
-                  { "value": 100, "name": "100 °C", "color": "#e6553f" },
-                  { "value": 105, "name": "105 °C", "color": "#8b1a1a" }
+                  {
+                    "value": 50,
+                    "name": "50 \u00b0C",
+                    "color": "#e6a817"
+                  },
+                  {
+                    "value": 100,
+                    "name": "100 \u00b0C",
+                    "color": "#e6553f"
+                  },
+                  {
+                    "value": 105,
+                    "name": "105 \u00b0C",
+                    "color": "#8b1a1a"
+                  }
                 ]
-              },
-              "visual": { "display": "line", "lineWidth": 1.5, "connectNulls": true }
+              }
             }
           },
           "queries": [
@@ -126,7 +280,10 @@
                   "spec": {
                     "query": "junction_c{gpu=\"vii\"}",
                     "seriesNameFormat": "junction",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -139,7 +296,10 @@
                   "spec": {
                     "query": "edge_c{gpu=\"vii\"}",
                     "seriesNameFormat": "edge",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -152,7 +312,10 @@
                   "spec": {
                     "query": "mem_c{gpu=\"vii\"}",
                     "seriesNameFormat": "mem",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -170,14 +333,25 @@
           "plugin": {
             "kind": "TimeSeriesChart",
             "spec": {
-              "legend": { "position": "bottom", "mode": "list", "size": "small" },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "size": "small"
+              },
               "yAxis": {
                 "show": true,
                 "label": "RPM",
                 "min": 0,
-                "format": { "unit": "decimal", "decimalPlaces": 0 }
+                "format": {
+                  "unit": "decimal",
+                  "decimalPlaces": 0
+                }
               },
-              "visual": { "display": "line", "lineWidth": 1.5, "connectNulls": true }
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "connectNulls": true
+              }
             }
           },
           "queries": [
@@ -189,7 +363,10 @@
                   "spec": {
                     "query": "fan_rpm{header=\"SYS_FAN1\"}",
                     "seriesNameFormat": "SYS_FAN1",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -202,7 +379,177 @@
                   "spec": {
                     "query": "fan_rpm{gpu=\"vii\"}",
                     "seriesNameFormat": "VII",
-                    "datasource": { "kind": "PrometheusDatasource", "name": "prometheus" }
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "tokS": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "tok/s",
+            "description": "prefill_tok_s is prompt eval. gen_tok_s is generate (0 while prefilling)."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "size": "small"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "tok/s",
+                "min": 0,
+                "format": {
+                  "unit": "decimal",
+                  "decimalPlaces": 1
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "connectNulls": true
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "prefill_tok_s{gpu=\"mi50\"}",
+                    "seriesNameFormat": "MI50 prefill",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "gen_tok_s{gpu=\"mi50\"}",
+                    "seriesNameFormat": "MI50 gen",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "prefill_tok_s{gpu=\"vii\"}",
+                    "seriesNameFormat": "VII prefill",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "gen_tok_s{gpu=\"vii\"}",
+                    "seriesNameFormat": "VII gen",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "usedPct": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Used ctx % of allocated",
+            "description": "100 * used_ctx / allocated_ctx."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "size": "small"
+              },
+              "yAxis": {
+                "show": true,
+                "label": "%",
+                "min": 0,
+                "format": {
+                  "unit": "percent",
+                  "decimalPlaces": 1
+                },
+                "max": 100
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "connectNulls": true
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "used_ctx_pct{gpu=\"mi50\"}",
+                    "seriesNameFormat": "MI50 %",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "used_ctx_pct{gpu=\"vii\"}",
+                    "seriesNameFormat": "VII %",
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "prometheus"
+                    }
                   }
                 }
               }
@@ -233,7 +580,10 @@
                   "spec": {
                     "query": "{stream=\"homelab\"}",
                     "direction": "backward",
-                    "datasource": { "kind": "LokiDatasource", "name": "loki" }
+                    "datasource": {
+                      "kind": "LokiDatasource",
+                      "name": "loki"
+                    }
                   }
                 }
               }
@@ -248,36 +598,73 @@
         "spec": {
           "display": {
             "title": "homelab",
-            "collapse": { "open": true }
+            "collapse": {
+              "open": true
+            }
           },
           "items": [
             {
               "x": 0,
               "y": 0,
               "width": 12,
-              "height": 8,
-              "content": { "$ref": "#/spec/panels/mi50Temps" }
+              "height": 7,
+              "content": {
+                "$ref": "#/spec/panels/mi50Temps"
+              }
             },
             {
               "x": 12,
               "y": 0,
               "width": 12,
-              "height": 8,
-              "content": { "$ref": "#/spec/panels/viiTemps" }
+              "height": 7,
+              "content": {
+                "$ref": "#/spec/panels/usedCtx"
+              }
             },
             {
               "x": 0,
-              "y": 8,
+              "y": 7,
               "width": 12,
               "height": 7,
-              "content": { "$ref": "#/spec/panels/fans" }
+              "content": {
+                "$ref": "#/spec/panels/viiTemps"
+              }
             },
             {
               "x": 12,
-              "y": 8,
+              "y": 7,
               "width": 12,
               "height": 7,
-              "content": { "$ref": "#/spec/panels/homelabLogs" }
+              "content": {
+                "$ref": "#/spec/panels/tokS"
+              }
+            },
+            {
+              "x": 0,
+              "y": 14,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/fans"
+              }
+            },
+            {
+              "x": 12,
+              "y": 14,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/usedPct"
+              }
+            },
+            {
+              "x": 0,
+              "y": 20,
+              "width": 24,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/homelabLogs"
+              }
             }
           ]
         }
