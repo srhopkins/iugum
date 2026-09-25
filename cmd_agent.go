@@ -52,7 +52,7 @@ const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls
 
   up flags:       --engine docker|podman|auto, --dry-run, --kind KIND,
                   --image IMG, --label K=V (repeatable), --volume SPEC,
-                  --mount SRC:DST[:ro] (repeatable), --icon PNG (Selkies tab icon)
+                  --mount SRC:DST[:ro] (repeatable), --icon PNG, --title TEXT (Selkies tab)
                   (repeatable), --network NAME, --shm-size SIZE,
                   --env K=V (repeatable), --user USER, --mem SIZE,
                   --cpus N, --port SPEC (repeatable)
@@ -229,6 +229,7 @@ type agentUpOpts struct {
 	Ports   []string
 	Mounts  []string // SRC:DST[:ro] bind mounts
 	Icon    string   // PNG mounted over the Selkies tab icon
+	Title   string   // browser tab title (Selkies reads env TITLE)
 }
 
 // selkiesIconPath is the source the Selkies nginx init copies to web/icon.png and
@@ -242,7 +243,7 @@ func parseAgentUpArgs(args []string, stderr io.Writer) (agentUpOpts, bool) {
 		fmt.Fprintln(stderr, "Usage: iugum agent up <name> [--engine E] [--dry-run] [--kind K] [--image IMG]\n"+
 			"    [--label K=V]... [--volume SPEC]... [--network NAME] [--shm-size SIZE]\n"+
 			"    [--env K=V]... [--user USER] [--mem SIZE] [--cpus N] [--port SPEC]...\n"+
-			"    [--mount SRC:DST[:ro]]... [--icon PNG]")
+			"    [--mount SRC:DST[:ro]]... [--icon PNG] [--title TEXT]")
 	}
 	// value takes the flag's value, either "--flag=value" or the next argv.
 	value := func(i *int, flag string) (string, bool) {
@@ -350,6 +351,12 @@ func parseAgentUpArgs(args []string, stderr io.Writer) (agentUpOpts, bool) {
 				return o, false
 			}
 			o.Icon = v
+		case "--title":
+			v, ok := value(&i, flag)
+			if !ok {
+				return o, false
+			}
+			o.Title = v
 		case "--help", "-h":
 			usage()
 			return o, false
@@ -494,6 +501,9 @@ func applyAgentUpFlags(cfg AgentFile, o agentUpOpts) AgentFile {
 	}
 	if o.Icon != "" {
 		cfg.Mounts = append(cfg.Mounts, AgentMount{Source: o.Icon, Target: selkiesIconPath, RO: true})
+	}
+	if o.Title != "" {
+		cfg.Env = append(cfg.Env, "TITLE="+o.Title)
 	}
 	return cfg
 }
