@@ -43,6 +43,7 @@ const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls
   ls             list agent directories, merged with running iugum-managed
                  containers found by Docker/Podman label
   tui <name>     attach an interactive OpenCode terminal
+  shell <name>   open a bash shell in the container as the agent user (uid 1000)
   acp <name>     bridge OpenCode ACP over stdin and stdout
   rm <name>      stop and remove the container, network, and its volumes;
                  asks for the name again on stdin unless --yes is given
@@ -136,7 +137,7 @@ func runAgentIO(ctx context.Context, a *app.App, args []string, stdout, stderr i
 		return runAgentStatus(ctx, a, args[1:], stdout, stderr)
 	case "ls":
 		return runAgentList(ctx, a, args[1:], stdout, stderr)
-	case "tui", "acp":
+	case "tui", "acp", "shell":
 		return runAgentAttach(ctx, a, args[0], args[1:], stdout, stderr)
 	case "checkpoint":
 		return runAgentCheckpoint(ctx, a, args[1:], stdout, stderr)
@@ -991,8 +992,22 @@ func agentRunning(engine, name string) bool {
 }
 
 func agentAttachArgv(engine, name, verb string) []string {
-	if verb == "tui" {
+	return agentAttachArgvUser(engine, name, verb, "")
+}
+
+// agentAttachArgvUser builds the exec argv. shell runs as the agent user, not
+// the image default: linuxserver images start their init as root, so a plain
+// `docker exec` lands in a root shell that then writes root-owned files into
+// the user's home.
+func agentAttachArgvUser(engine, name, verb, user string) []string {
+	switch verb {
+	case "tui":
 		return []string{engine, "exec", "-it", name, "opencode"}
+	case "shell":
+		if user == "" {
+			user = "1000:1000"
+		}
+		return []string{engine, "exec", "-it", "-u", user, name, "bash", "-l"}
 	}
 	return []string{engine, "exec", "-i", name, "opencode", "acp"}
 }
@@ -1026,7 +1041,7 @@ func runAgentAttach(ctx context.Context, a *app.App, verb string, args []string,
 			return 1
 		}
 	}
-	argv := agentAttachArgv(engine, cfg.Name, verb)
+	argv := agentAttachArgvUser(engine, cfg.Name, verb, cfg.User)
 	if o.DryRun {
 		fmt.Fprintln(stdout, strings.Join(argv, " "))
 		return 0
