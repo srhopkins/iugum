@@ -1,0 +1,8 @@
+bead: iugum-7ni
+namespace: main
+search_query: "Installed local bin iugum is stale Aug 27 and lacks iugum job add iugum version so drift is visible"
+candidates: []
+associated_issues: none
+duplicate_issues: none
+checked_at: 2026-09-25T04:12:17Z
+written_by: ayo-related-set
