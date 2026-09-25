@@ -83,7 +83,7 @@ func init() {
 	})
 }
 
-const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|run|job|prepare-pr|skill>
+const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|run|job|prepare-pr|skill|version>
 
   up           start wiki, observe, jobs/hooks/watch, code-server, browser, and ttyd in one process
   container    build or stop the iugum image (docker or podman)
@@ -134,6 +134,8 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum job rm <name> | run <name>
   iugum prepare-pr [--repo DIR] [--base main] [--head BRANCH] [--title T] [--body-file F]
   iugum skill run prepare-pr [same flags]
+  iugum version | --version | -v
+               print commit, build date, go version, and cgo on|off
 
   Body: stdin, or --body-file, or --body.
   Empty origin: writes push.md + push.sh.
@@ -149,6 +151,9 @@ func run(args []string) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
 		fmt.Fprint(os.Stdout, usage)
 		return 0
+	}
+	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
+		return runVersion(os.Stdout)
 	}
 
 	cfg, err := config.Load()

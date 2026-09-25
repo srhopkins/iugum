@@ -57,6 +57,14 @@ Manual CGO form on macOS: `CGO_ENABLED=1 CGO_CPPFLAGS="-I$(brew --prefix icu4c)/
 Linux needs `libicu-dev g++ pkg-config`.
 `CGO_ENABLED=0 go build -o iugum .` must keep compiling.
 
+After building, run `scripts/install.sh` (or `scripts/install.sh --static`) to put the
+binary on `PATH` (default `$HOME/.local/bin`, override with `IUGUM_INSTALL_DIR`). It
+replaces the installed file rather than overwriting it in place (macOS SIGKILLs an
+in-place overwrite of a running signed binary), re-signs it on Darwin, and prints the
+built and installed `iugum version` so drift between them is visible immediately
+instead of silently, the way it went undetected for weeks before. Verify with
+`iugum version`.
+
 ## Boundaries
 
 - **Edit:** `main.go`, docs, root `go.mod`, and `beads/cmd/bd` only when exporting `Execute` for in-process beads
