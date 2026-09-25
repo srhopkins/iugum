@@ -231,9 +231,10 @@ type agentUpOpts struct {
 	Icon    string   // PNG mounted over the Selkies tab icon
 }
 
-// selkiesIconPath is what the Selkies web page loads as its tab icon
-// (<link rel="icon" href="icon.png"> under nginx root /usr/share/selkies/web/).
-const selkiesIconPath = "/usr/share/selkies/web/icon.png"
+// selkiesIconPath is the source the Selkies nginx init copies to web/icon.png and
+// web/favicon.ico on every start. Mounting inside web/ itself breaks that init
+// (it wipes the folder first) and leaves nginx answering 403.
+const selkiesIconPath = "/usr/share/selkies/www/icon.png"
 
 func parseAgentUpArgs(args []string, stderr io.Writer) (agentUpOpts, bool) {
 	var o agentUpOpts
