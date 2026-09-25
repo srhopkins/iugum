@@ -33,6 +33,31 @@ esac
 
 die() { echo "build.sh: $*" >&2; exit 1; }
 
+# version_ldflags builds the -X assignments that stamp main.buildCommit,
+# main.buildDate, and main.buildCGO into the binary, so `iugum version` can
+# report what it was built from without relying on runtime/debug's vcs.*
+# settings (those are only populated with -buildvcs=true and a git tree; the
+# tower builds inside a container with -buildvcs=false and no .git).
+#
+# git rev-parse fails outside a git tree (or with none present); that is not
+# a build failure, just a build with no vcs.* fallback either, so version()
+# falls back to "unknown".
+version_ldflags() {
+  local cgo_flag="$1" commit="" dirty="" date
+  if command -v git >/dev/null 2>&1 && git rev-parse --short=12 HEAD >/dev/null 2>&1; then
+    commit="$(git rev-parse --short=12 HEAD)"
+    if ! git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
+      dirty="-dirty"
+    fi
+  fi
+  # No space in the stamped value: ldflags -X splits its argument string on
+  # whitespace, so a literal "YYYY-MM-DD HH:MM" here breaks the link with a
+  # stray unparsed token. Stamp with a T separator instead; version.go turns
+  # it back into "YYYY-MM-DD HH:MM" when it prints.
+  date="$(date -u +%Y-%m-%dT%H:%M)"
+  echo "-X main.buildCommit=${commit}${dirty} -X main.buildDate=${date} -X main.buildCGO=${cgo_flag}"
+}
+
 icu_env_darwin() {
   local prefix="${ICU_PREFIX:-}"
   if [ -z "$prefix" ] && command -v brew >/dev/null 2>&1; then
@@ -76,10 +101,10 @@ if [ "$MODE" = "cgo" ]; then
     *) echo "build.sh: unknown OS $(uname -s); set CGO_CPPFLAGS/CGO_LDFLAGS for ICU yourself" >&2 ;;
   esac
   echo "mode: cgo (CGO_ENABLED=1, embedded Dolt on)"
-  CGO_ENABLED=1 go build -o iugum .
+  CGO_ENABLED=1 go build -ldflags "$(version_ldflags on)" -o iugum .
 else
   echo "mode: static (CGO_ENABLED=0, embedded Dolt off; beads needs server mode)"
-  CGO_ENABLED=0 go build -o iugum .
+  CGO_ENABLED=0 go build -ldflags "$(version_ldflags off)" -o iugum .
 fi
 
 SIZE="$(du -h iugum | cut -f1)"
