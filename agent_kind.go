@@ -38,7 +38,7 @@ func selkiesPreset(dockerContext, name string) AgentFile {
 			"TZ=America/Los_Angeles",
 			"CHROME_CLI=" + chromeCLISelkies,
 		},
-		Mem:  "5g",
+		Mem:  "8g",
 		Cpus: "3",
 		Startup: AgentStartup{
 			Restart: defaultRestart,
