@@ -633,6 +633,25 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 				return string(b), e
 			}},
 		)
+		if c.CodeRepo != "" {
+			shell := agentwork.Shell{Dir: c.CodeRepo, Timeout: 30 * time.Second, MaxOutput: 32 << 10}
+			tools = append(tools, agentcore.Tool{Name: "shell", Description: "Run one shell command in the configured workspace. Use it to inspect files, the local wiki service, repositories, and command output. It runs from the workspace directory; use absolute paths or cd for another location. Output is limited and each command times out after 30 seconds.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"command": map[string]string{"type": "string", "description": "Shell command to run"}}, "required": []string{"command"}}, Authorize: func(ctx context.Context, raw json.RawMessage) error {
+				var q struct{ Command string }
+				if e := json.Unmarshal(raw, &q); e != nil {
+					return e
+				}
+				if strings.TrimSpace(q.Command) == "" {
+					return fmt.Errorf("command is required")
+				}
+				return check(ctx, "agent/shell", "execute")
+			}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var q struct{ Command string }
+				if e := json.Unmarshal(raw, &q); e != nil {
+					return "", e
+				}
+				return shell.Run(ctx, q.Command)
+			}})
+		}
 		tools = append(tools, nativeRoutingToolsWithSubscription(runtime, c, &selectedProfile, &selectedSubscription, routingPath, check)...)
 		tools = append(tools, nativeCommitmentTools(desk, text)...)
 		tools = append(tools, extraTools...)
