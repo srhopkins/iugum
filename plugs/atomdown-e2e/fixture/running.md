@@ -26,30 +26,30 @@ Answer the six above in order. Do not start below them.
 
 <!-- </atom-group> -->
 
-<!-- <atom-group id="NS67J8K5" slug="grant"> -->
+<!-- <atom-group id="NS67J8K5" slug="cases"> -->
 
-<!-- <atom id="6F4BMA13" slug="grant-tickets-due-tonight" digest="sha256:922c179e1d941e64fb60191784c823faa0c121c5d785510724eb193caa65744e"/> -->
-## GRANT tickets - due tonight
+<!-- <atom id="6F4BMA13" slug="case-tickets-due-tonight" digest="sha256:483ccf88360fca4a654a89694b0be1e077cd2b76735ef65e88b799d78d061c39"/> -->
+## Case tickets - due tonight
 
 <!-- <atom id="SDB0XH26" slug="the-work-is-not-writing-tickets-it" digest="sha256:948176c260f9175feff7dcd90b922cd677386bef964c4f9c3f9abbe16d05ae7e"/> -->
 The work is not writing tickets. It is posting a review call into the tracker. Nothing has been posted yet.
 
-<!-- <atom id="XD5WVKTT" slug="the-feature-reads-a-state-case-system" digest="sha256:c676fe912eaa7aefe84d9d4c37c7638796c34b09765e695883aabe5e0068dd23"/> -->
-The feature reads a state case system through `GET /grant-status` and shows the steps in a carousel. Epic: [PROJ-62016 "Home: carousel and action plan status"](https://example.invalid/browse/PROJ-62016).
+<!-- <atom id="XD5WVKTT" slug="the-feature-reads-the-case-system-through" digest="sha256:968e616f31a34a94f85cf1101e5a1dad729d3b9f1db3fa1869f0fbdb9b4dc3eb"/> -->
+The feature reads the case system through `GET /case-status` and shows the steps in a carousel. Epic: [PROJ-101 "Dashboard: carousel and plan status"](https://example.invalid/browse/PROJ-101).
 
-<!-- <atom id="0DM8P8NH" slug="ticket-state-tonight" digest="sha256:f556d2c39a77c2e0aab8ce63526a90d6f51077708699d3f3a892b9778b6e7794"/> -->
+<!-- <atom id="0DM8P8NH" slug="ticket-state-tonight" digest="sha256:5a22177f84ebc0ea0ef1d3e63ec7ab0dad5085492d5b8d8bd2113f62eb3d8269"/> -->
 | Ticket | State | Tonight |
 |---|---|---|
-| [PROJ-72357 "Productionize the programs service"](https://example.invalid/browse/PROJ-72357) | On Hold | Add cache expiry, single flight, rate limit, error code, unique key |
-| [PROJ-62020 "Participant API integration"](https://example.invalid/browse/PROJ-62020) | Triage | Add the dedupe key. Land the connector first |
-| [PROJ-62017 "Carousel and status modal"](https://example.invalid/browse/PROJ-62017) | Triage | Add the per-tenant switch and the fall-back decision |
-| [PROJ-72606 "Confirm the API contract points"](https://example.invalid/browse/PROJ-72606) | Triage | Add the five missing questions. Do not close |
-| [PROJ-72356 "Participant identity: verify and roll out"](https://example.invalid/browse/PROJ-72356) | Triage | **Top blocker.** Move out of Triage, name a backfill owner |
-| [PROJ-72629 "Spike: steps data model and tenant config"](https://example.invalid/browse/PROJ-72629) | In progress | Comment two reversals: row filtering dropped, config moved |
-| [PROJ-62021 "Spike: multi-program extensibility"](https://example.invalid/browse/PROJ-62021) | Verification | Needs owners for the commercial check and the service name |
-| [PROJ-72628 "Spike: print component"](https://example.invalid/browse/PROJ-72628) | Triage | Keep open. It gates the row below |
-| [PROJ-62019 "[nice to have] Print Action Plan"](https://example.invalid/browse/PROJ-62019) | Triage | Keep. Blocked on the print spike |
-| [PROJ-72342 "Close the connector window"](https://example.invalid/browse/PROJ-72342) | Triage | Land the connector before this closes |
+| [PROJ-102 "Productionize the intake service"](https://example.invalid/browse/PROJ-102) | On Hold | Add cache expiry, single flight, rate limit, error code, unique key |
+| [PROJ-103 "Client API integration"](https://example.invalid/browse/PROJ-103) | Triage | Add the dedupe key. Land the connector first |
+| [PROJ-104 "Carousel and status modal"](https://example.invalid/browse/PROJ-104) | Triage | Add the per-site switch and the fall-back decision |
+| [PROJ-105 "Confirm the API contract points"](https://example.invalid/browse/PROJ-105) | Triage | Add the five missing questions. Do not close |
+| [PROJ-106 "Client identity: verify and roll out"](https://example.invalid/browse/PROJ-106) | Triage | **Top blocker.** Move out of Triage, name a backfill owner |
+| [PROJ-107 "Spike: steps data model and site config"](https://example.invalid/browse/PROJ-107) | In progress | Comment two reversals: row filtering dropped, config moved |
+| [PROJ-108 "Spike: multi-queue extensibility"](https://example.invalid/browse/PROJ-108) | Verification | Needs owners for the commercial check and the service name |
+| [PROJ-109 "Spike: print component"](https://example.invalid/browse/PROJ-109) | Triage | Keep open. It gates the row below |
+| [PROJ-110 "[nice to have] Print Plan"](https://example.invalid/browse/PROJ-110) | Triage | Keep. Blocked on the print spike |
+| [PROJ-111 "Close the connector window"](https://example.invalid/browse/PROJ-111) | Triage | Land the connector before this closes |
 
 <!-- <atom id="1EYTGCBP" slug="five-calls-that-gate-the-tickets" digest="sha256:f3f1725f11504b69e578b1b9be9889ac0e859898621fb9024b8c19d6357c9953"/> -->
 ### Five calls that gate the tickets

@@ -139,3 +139,11 @@ network:
       proto: tcp
       port: 25
       action: deny
+
+# Transcript-search scopes for `iugum agent run`. A scope narrows search and
+# `status <scope>` to sessions whose project, account or path contains one of
+# the listed fragments (case-insensitive). A scope that is not listed here is
+# matched as a plain substring. Empty by default.
+# scopes:
+#   work: [acme, acme-corp]
+#   personal: [side-project]

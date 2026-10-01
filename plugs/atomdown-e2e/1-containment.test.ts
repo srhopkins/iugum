@@ -40,7 +40,7 @@
  *     concerned. Nothing but a rect comparison sees it. The fixture's
  *     `decisions` group carries the six-item ordered list it happened on.
  *   - A wide table crossing the card border AND the group border. The
- *     `grant` group's 10-row table is that table; both boxes are measured, so
+ *     `cases` group's 10-row table is that table; both boxes are measured, so
  *     a table that clears the card and still crosses the group is caught.
  *   - The group header's controls clipping at the content column edge. Header
  *     widgets are measured as boxes in their own right, with Rename, Ungroup

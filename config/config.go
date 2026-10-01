@@ -26,6 +26,11 @@ type File struct {
 	HookHTTP   string      `yaml:"hook_http"` // empty = do not bind
 	Container  Container   `yaml:"container"`
 	Network    Network     `yaml:"network"`
+	// Scopes names transcript-search scopes. Each name maps to the project,
+	// account or path fragments (matched case-insensitively) that it stands
+	// for, e.g. work: [acme, acme-corp]. Empty by default: a scope that is
+	// not listed here is matched as a plain substring.
+	Scopes map[string][]string `yaml:"scopes"`
 }
 
 // JobSpec is one cron or @triggered job. workflow is a linear step list.

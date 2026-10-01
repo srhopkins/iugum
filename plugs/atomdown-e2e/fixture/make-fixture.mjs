@@ -13,9 +13,9 @@
  *     the same number it was written for.
  *   - A `decisions` group whose lead atom is one ordered list of exactly six
  *     items — the ordered-list markers that rendered left of the card border.
- *   - A `grant` group holding one 10-row table whose ticket cells are links —
+ *   - A `cases` group holding one 10-row table whose ticket cells are links —
  *     the wide table that crossed the card border and the group border.
- *   - One row, keyed `PROJ-62019`, whose link label contains unescaped square
+ *   - One row, keyed `PROJ-110`, whose link label contains unescaped square
  *     brackets. That closes the label early, so it is NOT a link, and plain
  *     SilverBullet renders it raw too. Rule 5 encodes it as a known-good
  *     exception rather than a failure.
@@ -47,7 +47,7 @@ function atomdownBin() {
     "/usr/local/bin/atomdown",
     join(
       process.env.HOME ?? "",
-      "projects/github/srhopkins/atomdown/atomdown",
+      "src/atomdown/atomdown",
     ),
   ].filter(Boolean);
   for (const c of candidates) if (existsSync(c)) return c;
@@ -75,7 +75,7 @@ const push = (text) => blocks.push(text);
  */
 const GROUP_IDS = {
   decisions: "KATZ94NM",
-  grant: "NS67J8K5",
+  cases: "NS67J8K5",
   editor: "QP41ZR8T",
   parser: "VD07KHM2",
   "board-view": "WX53BCN9",
@@ -202,41 +202,41 @@ group("decisions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Group 2: grant — the 10-row table rule 5 asserts on
+// Group 2: cases — the 10-row table rule 5 asserts on
 // ---------------------------------------------------------------------------
 
 const ticket = (id, label) =>
   `[${id} "${label}"](https://example.invalid/browse/${id})`;
 
-group("grant", () => {
-  push("## GRANT tickets - due tonight");
+group("cases", () => {
+  push("## Case tickets - due tonight");
   push(
     "The work is not writing tickets. It is posting a review call into the " +
       "tracker. Nothing has been posted yet.",
   );
   push(
-    "The feature reads a state case system through `GET /grant-status` and " +
+    "The feature reads the case system through `GET /case-status` and " +
       "shows the steps in a carousel. Epic: " +
-      ticket("PROJ-62016", "Home: carousel and action plan status") +
+      ticket("PROJ-101", "Dashboard: carousel and plan status") +
       ".",
   );
   // Rule 5: one <table>, 10 body rows, an <a href> in every ticket cell
-  // EXCEPT the PROJ-62019 row, whose unescaped brackets close the link label
+  // EXCEPT the PROJ-110 row, whose unescaped brackets close the link label
   // early so the construct is not a link at all.
   push(
     [
       "| Ticket | State | Tonight |",
       "|---|---|---|",
-      `| ${ticket("PROJ-72357", "Productionize the programs service")} | On Hold | Add cache expiry, single flight, rate limit, error code, unique key |`,
-      `| ${ticket("PROJ-62020", "Participant API integration")} | Triage | Add the dedupe key. Land the connector first |`,
-      `| ${ticket("PROJ-62017", "Carousel and status modal")} | Triage | Add the per-tenant switch and the fall-back decision |`,
-      `| ${ticket("PROJ-72606", "Confirm the API contract points")} | Triage | Add the five missing questions. Do not close |`,
-      `| ${ticket("PROJ-72356", "Participant identity: verify and roll out")} | Triage | **Top blocker.** Move out of Triage, name a backfill owner |`,
-      `| ${ticket("PROJ-72629", "Spike: steps data model and tenant config")} | In progress | Comment two reversals: row filtering dropped, config moved |`,
-      `| ${ticket("PROJ-62021", "Spike: multi-program extensibility")} | Verification | Needs owners for the commercial check and the service name |`,
-      `| ${ticket("PROJ-72628", "Spike: print component")} | Triage | Keep open. It gates the row below |`,
-      `| [PROJ-62019 "[nice to have] Print Action Plan"](https://example.invalid/browse/PROJ-62019) | Triage | Keep. Blocked on the print spike |`,
-      `| ${ticket("PROJ-72342", "Close the connector window")} | Triage | Land the connector before this closes |`,
+      `| ${ticket("PROJ-102", "Productionize the intake service")} | On Hold | Add cache expiry, single flight, rate limit, error code, unique key |`,
+      `| ${ticket("PROJ-103", "Client API integration")} | Triage | Add the dedupe key. Land the connector first |`,
+      `| ${ticket("PROJ-104", "Carousel and status modal")} | Triage | Add the per-site switch and the fall-back decision |`,
+      `| ${ticket("PROJ-105", "Confirm the API contract points")} | Triage | Add the five missing questions. Do not close |`,
+      `| ${ticket("PROJ-106", "Client identity: verify and roll out")} | Triage | **Top blocker.** Move out of Triage, name a backfill owner |`,
+      `| ${ticket("PROJ-107", "Spike: steps data model and site config")} | In progress | Comment two reversals: row filtering dropped, config moved |`,
+      `| ${ticket("PROJ-108", "Spike: multi-queue extensibility")} | Verification | Needs owners for the commercial check and the service name |`,
+      `| ${ticket("PROJ-109", "Spike: print component")} | Triage | Keep open. It gates the row below |`,
+      `| [PROJ-110 "[nice to have] Print Plan"](https://example.invalid/browse/PROJ-110) | Triage | Keep. Blocked on the print spike |`,
+      `| ${ticket("PROJ-111", "Close the connector window")} | Triage | Land the connector before this closes |`,
     ].join("\n"),
   );
   push("### Five calls that gate the tickets");

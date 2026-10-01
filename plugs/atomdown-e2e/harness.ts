@@ -99,7 +99,7 @@ export const FIXTURE = {
   tableGroupId: "NS67J8K5",
   decisionsGroupId: "KATZ94NM",
   /** The one row whose link markdown is genuinely raw. See rule 5. */
-  rawLinkTicket: "PROJ-62019",
+  rawLinkTicket: "PROJ-110",
 } as const;
 
 // ---------------------------------------------------------------------------

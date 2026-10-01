@@ -75,7 +75,7 @@ function atomdownBin(): string | null {
     join(process.env.HOME ?? "", "go", "bin", "atomdown"),
     "/usr/local/bin/atomdown",
     "/opt/homebrew/bin/atomdown",
-    join(process.env.HOME ?? "", "projects/github/srhopkins/atomdown/atomdown"),
+    join(process.env.HOME ?? "", "src/atomdown/atomdown"),
   ].filter(Boolean) as string[];
   return candidates.find((c) => existsSync(c)) ?? null;
 }

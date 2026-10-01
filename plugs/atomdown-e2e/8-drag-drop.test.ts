@@ -99,7 +99,7 @@ function atomdownBin(): string | null {
     join(home, "go", "bin", "atomdown"),
     "/usr/local/bin/atomdown",
     "/opt/homebrew/bin/atomdown",
-    join(home, "projects/github/srhopkins/atomdown/atomdown"),
+    join(home, "src/atomdown/atomdown"),
   ].filter(Boolean).find((c) => existsSync(c as string)) as string ?? null;
 }
 

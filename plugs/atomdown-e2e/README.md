@@ -457,7 +457,7 @@ Two things in it look wrong and are not:
   numbers agree. The cost is that nothing here exercises a card with NO
   Atomdown id any more, which is what the text-keyed identity fallbacks in
   `measureBoxes` and `sweepEach` exist for; see `FIXTURE.cards` in the harness.
-- **One row is raw.** The `PROJ-62019` row's link label contains unescaped
+- **One row is raw.** The `PROJ-110` row's link label contains unescaped
   square brackets, which close the label early, so it is not a link. Plain
   SilverBullet renders it raw too. Rule 5 asserts it STAYS raw, so a change
   that starts rendering it - by repairing the markdown behind the reader's

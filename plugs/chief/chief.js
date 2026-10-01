@@ -580,7 +580,6 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
 		"codex",
 		"cursor",
 		"opencode",
-		"acme",
 	]) {
 		const option = node("option");
 		option.value = v;
@@ -604,7 +603,7 @@ export async function mount(showPanel, hidePanel, navigate, feature = "both") {
     find.title = "Search the selected sources or project. Use -word to exclude a term.";
     open.title = "Open chat and focus the message box";
     query.title = "Search wiki pages, transcripts, memory, and tasks";
-    scope.title = "Restrict search to a source or project, such as wiki or acme";
+    scope.title = "Restrict search to a source or project, such as wiki or a project name";
 	open.type = "button";
     const menuTools=node("div");menuTools.id="iugum-chat-menu";
     const historyButton=node("button"),moreButton=node("button");

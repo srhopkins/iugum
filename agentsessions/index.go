@@ -43,7 +43,49 @@ type Hit struct {
 	Text                                      string
 	Timestamp                                 string
 }
-type Index struct{ db *sql.DB }
+type Index struct {
+	db     *sql.DB
+	scopes map[string][]string
+}
+
+// SetScopes installs named scope aliases: each name maps to the project or
+// path fragments it stands for. Names match case-insensitively. Call it once,
+// before the first search. With no aliases a scope is a plain substring.
+func (i *Index) SetScopes(scopes map[string][]string) {
+	i.scopes = map[string][]string{}
+	for name, fragments := range scopes {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		for _, f := range fragments {
+			if f = strings.ToLower(strings.TrimSpace(f)); f != "" {
+				i.scopes[name] = append(i.scopes[name], f)
+			}
+		}
+	}
+}
+
+// scopeClause returns an SQL condition (with a leading " AND ") that limits
+// rows by project, account or path. A configured alias expands to any of its
+// fragments; any other scope is matched as a case-insensitive substring.
+func (i *Index) scopeClause(scope string) (string, []any) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if scope == "" {
+		return "", nil
+	}
+	const field = `instr(lower(project || ' ' || account || ' ' || path),?)>0`
+	fragments := i.scopes[scope]
+	if len(fragments) == 0 {
+		fragments = []string{scope}
+	}
+	conds := make([]string, len(fragments))
+	args := make([]any, len(fragments))
+	for n, f := range fragments {
+		conds[n], args[n] = field, f
+	}
+	return " AND (" + strings.Join(conds, " OR ") + ")", args
+}
 
 func DefaultSources(home string) []Source {
 	return []Source{{"cursor", filepath.Join(home, "Library/Application Support/Cursor/User/globalStorage/state.vscdb"), ""}, {"claude", filepath.Join(home, ".claude/projects"), ""}, {"codex", filepath.Join(home, ".codex/sessions"), ""}, {"cursor", filepath.Join(home, ".cursor/projects"), ""}, {"opencode", filepath.Join(home, ".local/share/opencode/opencode.db"), ""}, {"opencode", filepath.Join(home, ".local/share/opencode/opencode-local.db"), ""}}
@@ -86,7 +128,7 @@ func Open(path string) (*Index, error) {
 		db.Close()
 		return nil, e
 	}
-	return &Index{db}, nil
+	return &Index{db: db}, nil
 }
 func (i *Index) Close() error { return i.db.Close() }
 
@@ -216,9 +258,9 @@ func (i *Index) Search(ctx context.Context, q Query) ([]Hit, error) {
 		join = " OR "
 	}
 	args := []any{strings.Join(terms, join)}
-	if q.Scope != "" {
-		sqlq += ` AND instr(lower(project || ' ' || account || ' ' || path),lower(?))>0`
-		args = append(args, q.Scope)
+	if clause, scopeArgs := i.scopeClause(q.Scope); clause != "" {
+		sqlq += clause
+		args = append(args, scopeArgs...)
 	}
 	for _, x := range q.Exclude {
 		sqlq += ` AND instr(lower(project || ' ' || account || ' ' || path || ' ' || text),lower(?))=0`

@@ -20,11 +20,10 @@ func (i *Index) Latest(ctx context.Context, scope string, authorize func(Hit) er
 	case "claude", "cursor", "codex", "opencode":
 		sqlq += ` AND platform=?`
 		args = append(args, scope)
-	case "acme", "acme", "Acme":
-		sqlq += ` AND (instr(lower(project || ' ' || account || ' ' || path),'acme')>0 OR instr(lower(project || ' ' || account || ' ' || path),'acme')>0)`
 	default:
-		sqlq += ` AND instr(lower(project || ' ' || account || ' ' || path),?)>0`
-		args = append(args, scope)
+		clause, scopeArgs := i.scopeClause(scope)
+		sqlq += clause
+		args = append(args, scopeArgs...)
 	}
 	sqlq += ` ORDER BY julianday(timestamp) DESC, CAST(line AS INTEGER) DESC`
 	rows, err := i.db.QueryContext(ctx, sqlq, args...)

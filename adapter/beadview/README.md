@@ -34,7 +34,7 @@ iugum beadview [--port N] [--hostname ADDR] [--dir DIR] [--read-only]
 ## JSON API
 
 One project, no auth, no API key. Paths match the ayo viewer's
-`/api/bd/*` routes (`example-org/ayo-agent` `src/app/api/bd/`), so the
+`/api/bd/*` routes (`src/app/api/bd/` in that project), so the
 ported React code runs unchanged. The UI's `?project=` query and `project`
 body field are accepted and ignored.
 
@@ -179,16 +179,14 @@ before any bd code runs, so `execFetcher` retries it up to three times.
 ## Why `bd graph --all --html` and not a rebuilt beads-dashboard frontend
 
 The original plan for this package was to reuse
-`github.com/example-org/beads-dashboard` (a fork of the open-source
-`ntellis/beads-dashboard`) as the frontend, with only this Go backend being
+a fork of the open-source `ntellis/beads-dashboard` as the frontend, with only this Go backend being
 new. That plan was dropped after two findings during a review pass:
 
 1. The fork's prebuilt bundle
    (`src/beads_dashboard/static/assets/index-DYX39sTL.js`) has a **live
    Clerk publishable key baked in at build time**
-   (`pk_live_...` decoding to `clerk.example.dev`). Embedding it as-is would
-   point any iugum deployment's sign-in at Steve's personal example-org Clerk
-   tenant. Fixing this needs a real rebuild (Node/npm, Clerk code stripped
+   (`pk_live_...`, decoding to a personal Clerk tenant domain). Embedding it as-is would
+   point any iugum deployment's sign-in at a personal Clerk tenant. Fixing this needs a real rebuild (Node/npm, Clerk code stripped
    out) every time the vendored copy changes, not a one-time edit.
 2. **Neither the fork nor upstream ships a LICENSE file, copyright line, or
    license text.** `pyproject.toml` claims `license = {text = "MIT"}` and the

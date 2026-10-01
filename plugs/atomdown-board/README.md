@@ -649,7 +649,7 @@ which I do want an option to view raw markdown but it should also display
 rendered markdown/commonmark by default"*.
 
 Before this, a card showed its block's raw markdown in a monospace font. A
-heading read as `## GRANT tickets - due tonight`, a table read as pipes, and a
+heading read as `## Case tickets - due tonight`, a table read as pipes, and a
 link read as bracket-paren syntax. On a 291-line page that reads as a cluster
 rather than as the document it came from.
 
@@ -1415,8 +1415,6 @@ additively — do not touch the other files there:
 cp atomdown-board.plug.js /path/to/space/_plug/atomdown-board.plug.js
 ```
 
-It has already been installed this way into the ACME space at
-`~/projects/github/example-repo/_silverbullet/_plug/atomdown-board.plug.js`.
 SilverBullet auto-loads every `*.plug.js` file it finds in the space
 (`client/space.ts` `listPlugs()`); nothing needs to be added to
 `CONFIG.md` for it to load. Then in SilverBullet: **System: Reload** (or
@@ -1665,13 +1663,13 @@ ungroup and a reorder run at compact density against the copy of
 served by `iugum wiki` with the plug installed. The **host's own renderer**, not
 a stub:
 
-- A heading card's rendered body is `<h2>GRANT tickets - due tonight</h2>` — a
+- A heading card's rendered body is `<h2>Case tickets - due tonight</h2>` — a
   real `H2` element, with the raw `<pre>` hidden beside it.
 - The table card holds a real `<table>`: 10 `<tr>`, 30 `<td>`. Its rendered
   width is 784px inside an 802px card, so it does **not** widen the card the
   drop geometry measures.
-- The link card holds one `<a href="https://example.atlassian.net/browse/
-  PROJ-62016" target="_blank">`. Bold, inline code and the ordered list all
+- The link card holds one `<a href="https://example.invalid/browse/
+  PROJ-101" target="_blank">`. Bold, inline code and the ordered list all
   render (6 `<strong>`, 3 `<code>`, 6 `<li>` in one card). Zero `<script>`
   elements anywhere in a card body.
 - **A click on a rendered link selects the card and does not navigate.**
@@ -1688,7 +1686,7 @@ a stub:
   one unit). `dragend` clears every marker.
 - The three-dot menu opens and now carries **Ungroup** and **Show raw
   markdown**. Clicking the view item flips that card to `data-card-view="raw"`,
-  showing `## GRANT tickets - due tonight`, and leaves its neighbour rendered.
+  showing `## Case tickets - due tonight`, and leaves its neighbour rendered.
   Clicking it again flips back.
 - The group header still selects all 7 member cards, and its collapse toggle
   still collapses and expands.
@@ -1768,7 +1766,7 @@ syscall stub, then handed to the binary.
 - **Baseline:** `atomdown lint` reports `ok`, `atomdown verify` reports
   `ok - no drift`.
 - **Three board actions applied:** grouped two adjacent atoms with the typed
-  name "My New Section", renamed the existing `grant` group to "GRANT Work",
+  name "My New Section", renamed the existing `cases` group to "Case Work",
   and named one atom "Header Note" through the attribute editor path.
 - **After:** `atomdown lint` still `ok`, `atomdown verify` still
   `ok - no drift`.
@@ -1800,8 +1798,8 @@ driving it with real DOM events:
 - Confirming calls `atomdown-board.groupAtoms` with the sanitized
   `my-new-section`, not the raw typed text.
 - On a grouped card the menu offers **Ungroup** and **Rename group**; Rename
-  opens the same form prefilled `decisions`, and confirming "GRANT Work" calls
-  `atomdown-board.setGroupSlug` with `KATZ94NM` and `grant-work`.
+  opens the same form prefilled `decisions`, and confirming "Case Work" calls
+  `atomdown-board.setGroupSlug` with `KATZ94NM` and `case-work`.
 - In the attribute editor the labelled slug row is the first row, ahead of the
   generic name/value list.
 
@@ -1870,7 +1868,7 @@ worked on in a scratch directory; the live file was never touched.
 The rendering/edit spike (commits `a171a7f`, `61d85be`) was verified only
 without a browser; the theme fix, modal-chrome fix, and drag-to-reorder
 feature (this change) were verified in a real, running browser against the
-ACME SilverBullet space at `http://localhost:3000`, using a scratch page
+local SilverBullet space at `http://localhost:3000`, using a scratch page
 (`Reference/atomdown-board-test.md`, materialized with the real
 `atomdown materialize --split list-item` binary, then deleted before
 finishing — never a real document):
@@ -1907,8 +1905,8 @@ the real file, with only `syscall()` mocked):
 - `atomdown-board.plug.yaml` is valid YAML.
 - `atomdown-board.plug.js` passes `node --check` (valid JS) and loads as
   an ES module.
-- Against the real test document
-  `_silverbullet/Reference/rollout-plan.md` (copied to a
+- Against the real test document,
+  a private rollout-plan page (copied to a
   scratch file, not modified in place): `toggleBoard()` renders one card
   per each of the document's 34 explicit atom directives, plus 3 more
   cards for its unmarked `---` dividers (implicit atoms) — 37 cards

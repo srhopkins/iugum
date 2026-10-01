@@ -23,6 +23,7 @@ import (
 	"github.com/srhopkins/iugum/agentsessions"
 	"github.com/srhopkins/iugum/agentwork"
 	"github.com/srhopkins/iugum/app"
+	"github.com/srhopkins/iugum/config"
 	"github.com/srhopkins/iugum/contract"
 	chiefui "github.com/srhopkins/iugum/plugs/chief"
 	"github.com/srhopkins/iugum/policy"
@@ -221,6 +222,9 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 		return 1
 	}
 	defer index.Close()
+	if iugumCfg, e := config.Load(); e == nil {
+		index.SetScopes(iugumCfg.Scopes)
+	}
 	if len(c.Sources) == 0 {
 		home, _ := os.UserHomeDir()
 		c.Sources = agentsessions.DefaultSources(home)
@@ -361,9 +365,6 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 			query := agentsessions.Query{Text: q, Exclude: excludes, Limit: 40}
 			if scope != "" && scope != "all" && scope != "transcripts" {
 				query.Scope = scope
-				if scope == "acme" {
-					query.Scope = "acme"
-				}
 				switch scope {
 				case "claude", "codex", "cursor", "opencode":
 					query.Platforms = []string{scope}

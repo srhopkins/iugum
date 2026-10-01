@@ -7,7 +7,7 @@
  * NEGATIVE: the rendered page contains no `<!-- <atom`, no `sha256:`, no
  * `](http`, and no bare `##` or `**` outside code blocks.
  *
- * POSITIVE: the decisions atom is one `<ol>` with six `<li>`; the GRANT atom
+ * POSITIVE: the decisions atom is one `<ol>` with six `<li>`; the case atom
  * is a `<table>` with its expected row count; every ticket cell holds an
  * `<a href>`.
  *
@@ -18,7 +18,7 @@
  * rather than the plug. Asserting the shape positively is what tells those two
  * situations apart.
  *
- * ONE KNOWN-GOOD EXCEPTION, ENCODED AS SUCH. The PROJ-62019 row is genuinely
+ * ONE KNOWN-GOOD EXCEPTION, ENCODED AS SUCH. The PROJ-110 row is genuinely
  * raw in the source: its link label contains unescaped square brackets, which
  * close the label early, so the construct is not a link. Plain SilverBullet
  * with both views off renders that row raw too, because all three use one
@@ -57,7 +57,7 @@ test.afterAll(async () => await server?.stop());
  * Raw markdown that must never reach the reader.
  *
  * `](http` is the link-syntax leak. It has exactly one legitimate occurrence
- * in the fixture — the PROJ-62019 row — which is why the check counts hits
+ * in the fixture — the PROJ-110 row — which is why the check counts hits
  * against that allowance rather than requiring zero.
  */
 const FORBIDDEN = [
@@ -536,7 +536,7 @@ async function assertShape(
   }
 
   // --- The known-good exception, asserted positively ---------------------
-  // The PROJ-62019 row must still be RAW. If a future change starts rendering
+  // The PROJ-110 row must still be RAW. If a future change starts rendering
   // it, that change repaired the markdown behind the reader's back, and this
   // is where we find out.
   const raw = shape.rawRow;

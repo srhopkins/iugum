@@ -2,4 +2,4 @@
 p, agent:chief, *, *, allow
 # Denials take effect on the next operation, without restarting Chief.
 # p, agent:chief, project:*/excluded-project*, read, deny
-# p, agent:chief, transcript:claude:acme, search, deny
+# p, agent:chief, transcript:claude:work, search, deny

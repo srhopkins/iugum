@@ -56,14 +56,14 @@ test.beforeAll(async () => (server = await startSpace()));
 test.afterAll(async () => await server?.stop());
 
 /**
- * The reference card: the first atom of the `grant` group, which sits below
+ * The reference card: the first atom of the `cases` group, which sits below
  * the `decisions` group and above everything else.
  *
  * It has to be BELOW some of the interactions and ABOVE others, or the test
  * cannot tell "nothing moved" from "nothing above it changed". This one is
  * below the six-item ordered list and above nine groups.
  */
-const REFERENCE_SLUG = "GRANT tickets";
+const REFERENCE_SLUG = "Case tickets";
 
 /** Sub-pixel drift is browser rounding. A card moving 1px is not. */
 const Y_TOLERANCE = 0.75;

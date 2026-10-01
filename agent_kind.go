@@ -3,8 +3,8 @@ package main
 import "fmt"
 
 // chromeCLISelkies is the CHROME_CLI value from
-// homelab/agentbox/compose-local.yaml, minus the trailing URL, which is
-// specific to that one Mac instance and not part of the kind preset.
+// the reference compose file, minus the trailing URL, which is specific to
+// one local Docker Desktop host and not part of the kind preset.
 const chromeCLISelkies = "--remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=/config/.chrome-profile --disable-dev-shm-usage --force-device-scale-factor=1.25"
 
 // kindNames lists the built-in --kind presets kindPreset accepts.
@@ -13,8 +13,8 @@ func kindNames() []string {
 }
 
 // kindPreset returns the AgentFile for a built-in agent kind, adjusted for
-// the active Docker context's routing (Traefik on the homelab tower, or
-// caddy-docker-proxy on the Mac).
+// the active Docker context's routing (Traefik on a self-hosted proxy host, or
+// caddy-docker-proxy on a local Docker Desktop host).
 func kindPreset(kind, dockerContext, name string) (AgentFile, error) {
 	switch kind {
 	case "selkies":

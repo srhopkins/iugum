@@ -132,7 +132,7 @@ func orDefault(s, def string) string {
 
 // idPattern is what a bead ID may look like on the API. It never starts
 // with "-", so an ID can never be read as a bd flag. bd IDs look like
-// "iugum-puu" or "bdacme-0la.9.2".
+// "iugum-puu" or "bd-a1b2.3".
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 func validID(id string) bool { return idPattern.MatchString(id) }

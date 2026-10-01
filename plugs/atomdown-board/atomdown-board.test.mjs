@@ -1739,18 +1739,18 @@ const RICH_PAGE = [
   "2. **Stale bead.** The title now states the opposite.",
   "<!-- </atom-group> -->",
   "",
-  '<!-- <atom-group id="NS67J8K5" slug="grant"> -->',
-  '<!-- <atom id="QQE8MK3D" slug="grant-tickets-due-tonight"/> -->',
-  "## GRANT tickets - due tonight",
+  '<!-- <atom-group id="NS67J8K5" slug="cases"> -->',
+  '<!-- <atom id="QQE8MK3D" slug="case-tickets-due-tonight"/> -->',
+  "## Case tickets - due tonight",
   "",
   '<!-- <atom id="J6SXJ01J" slug="the-feature"/> -->',
-  "The feature reads live from SAMPLE. Epic: [PROJ-62016](https://example.test/browse/PROJ-62016).",
+  "The feature reads live from the case system. Epic: [PROJ-101](https://example.test/browse/PROJ-101).",
   "",
   '<!-- <atom id="YFEH04BQ" slug="ticket-state-tonight"/> -->',
   "| Ticket | State | Tonight |",
   "|---|---|---|",
-  "| PROJ-72357 | On Hold | Add cache expiry |",
-  "| PROJ-72358 | Ready | Take off hold |",
+  "| PROJ-102 | On Hold | Add cache expiry |",
+  "| PROJ-112 | Ready | Take off hold |",
   "<!-- </atom-group> -->",
   "",
 ].join("\n");
@@ -1775,7 +1775,7 @@ test("a card renders its block by default, and the board never asked for raw", a
   const renders = calls.filter((c) => c.name === "markdown.markdownToHtml");
   assert.equal(renders.length, parseAtoms(RICH_PAGE).length);
   // A heading is a heading, not a hash.
-  assert.ok(html.includes("<h2>GRANT tickets - due tonight</h2>"));
+  assert.ok(html.includes("<h2>Case tickets - due tonight</h2>"));
   assert.ok(html.includes("<h1>Running todo</h1>"));
   // The rendered body is the visible one; the raw body is the hidden one.
   assert.ok(html.includes('class="board-card-body board-card-rendered"'));
@@ -1786,14 +1786,14 @@ test("a card renders its block by default, and the board never asked for raw", a
 test("a table renders as a table, not as pipes", async () => {
   const { html } = await openBoard(RICH_PAGE);
   assert.ok(html.includes("<table>"));
-  assert.ok(html.includes("<td>PROJ-72357</td>"));
+  assert.ok(html.includes("<td>PROJ-102</td>"));
   // The raw pipes are still in the document and still in the hidden body.
-  assert.ok(html.includes("| PROJ-72357 | On Hold | Add cache expiry |"));
+  assert.ok(html.includes("| PROJ-102 | On Hold | Add cache expiry |"));
 });
 
 test("a link renders as an anchor, and inline code and bold survive", async () => {
   const { html } = await openBoard(RICH_PAGE);
-  assert.ok(html.includes('<a href="https://example.test/browse/PROJ-62016"'));
+  assert.ok(html.includes('<a href="https://example.test/browse/PROJ-101"'));
   assert.ok(html.includes("<code>2066012</code>"));
   assert.ok(html.includes("<strong>Atomdown history.</strong>"));
   assert.ok(html.includes("<ol>"));
@@ -1810,7 +1810,7 @@ test("an absolute link opens a new tab rather than replacing the board", async (
 test("a host with no markdown syscall falls back to raw, and still draws", async () => {
   const { html } = await openBoard(RICH_PAGE, { markdownThrows: true });
   assert.ok(html.includes('data-no-rendered="1"'));
-  assert.ok(html.includes("## GRANT tickets - due tonight"));
+  assert.ok(html.includes("## Case tickets - due tonight"));
   assert.equal(html.includes("<h2>"), false);
   // Every card is still there, with its id and its menu.
   assert.equal((html.match(/class="board-card[ "]/g) || []).length,
