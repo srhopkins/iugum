@@ -1,5 +1,70 @@
 # iugum container image
 
+For the shared **Selkies agent desktop**, use `docker compose up --build -d`
+from the repository root. Its Dockerfile, media tools, and portable deployment
+instructions live in [agentbox](../agentbox/README.md).
+The root Dockerfile described below is the existing iugum service image.
+
+## Agentbox install tiers
+
+The agentbox image has three tiers of tools.
+
+| Tier | What | How you choose it |
+|------|------|-------------------|
+| Core | Always present: Selkies desktop, Google Chrome (amd64; the default browser, profile in `/config/.chrome-profile`, CDP port 9222), code-server, Claude Code, Codex, OpenCode, Cursor Agent, Playwriter, Playwright Chromium, iugum and `bd`, git, gh, ffmpeg, sox, uv. | Nothing to choose. |
+| Optional | A different desktop base. | Build args, set at `docker build`. |
+| Custom | Your own tools, installed when the container starts. | Mount a folder at `/opt/agentbox/install.d`. |
+
+### Optional: build args
+
+| Arg | Default | Meaning |
+|-----|---------|---------|
+| `BASE` | `chromium` | `chromium` uses the Chromium-only Selkies base (`lscr.io/linuxserver/chrome`). `kde` uses the full KDE desktop (`lscr.io/linuxserver/webtop:ubuntu-kde`). |
+| `CHROME_IMAGE` / `KDE_IMAGE` | pinned by digest | Override the base image for that `BASE`. |
+
+```bash
+docker build -f agentbox/Dockerfile -t agentbox:latest .                  # Chromium only
+docker build -f agentbox/Dockerfile --build-arg BASE=kde -t agentbox:kde . # KDE desktop
+```
+
+Google Chrome is core on both bases, because Chrome supports signed-in profiles and Chromium does not. Chromium is optional: it comes from the base image or Playwright, for isolated work. Playwright drives Chrome with `channel: "chrome"`.
+
+`BASE=kde` adds two start scripts. They start Chrome on port 9222
+and stop KDE from prompting when an agent moves the pointer. Everything else
+(ports 3000, 3001, 8080, `/config`, user `abc`) is the same on both bases.
+Use `BASE=chromium` unless an agent needs a full desktop with windows and a taskbar.
+The image label `agentbox.base` records the choice.
+
+The `WITH` arg belongs to the root iugum service image above. The agentbox
+image always installs all of its CLIs.
+
+### Custom: install.d
+
+Mount a folder of scripts, read-only, at `/opt/agentbox/install.d`.
+At start, `/custom-cont-init.d/50-install-d.sh` runs each file in name order, as root.
+An executable file runs as is. A `*.sh` file that is not executable runs with bash. `*.md` files are ignored.
+Each script is logged. A script that fails is logged and skipped. The container always starts.
+Write each script so a second run does nothing (skip if installed).
+
+Example: install Granted (an AWS SSO profile tool) from `10-granted.sh`.
+
+```bash
+#!/bin/bash
+set -euo pipefail
+if command -v granted >/dev/null; then echo "[install.d] granted: already installed"; exit 0; fi
+# download the release tarball, then:
+install -m 0755 granted assume assumego /usr/local/bin/
+echo "[install.d] granted: installed"
+```
+
+```yaml
+# agent.yaml
+mounts:
+  - {source: /data/agentbox/install.d, target: /opt/agentbox/install.d, ro: true}
+```
+
+Do not put secrets in these scripts. Mount config files instead.
+
 The root `Dockerfile` builds iugum from source and installs the agent CLIs you select.
 It works with `docker build` and `podman build`. A clone of this repo is all you need.
 
