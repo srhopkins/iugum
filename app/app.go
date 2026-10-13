@@ -76,7 +76,7 @@ func New(cfg config.File) (*App, error) {
 	if cfg.Embeddings.Enabled && cfg.Embeddings.Vec {
 		vec = "true"
 	}
-	mem, err := plugin.NewMemory(memName, map[string]string{
+	mem, err := newLazyMemory(memName, map[string]string{
 		"data_dir":    data,
 		"glossary":    cfg.Graph.Glossary,
 		"extractor":   cfg.Graph.Extractor,

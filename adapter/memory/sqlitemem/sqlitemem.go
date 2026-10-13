@@ -2,8 +2,8 @@ package sqlitemem
 
 import (
 	"context"
-	"database/sql"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"math"
@@ -95,6 +95,18 @@ func OpenOpts(path string, opt Opts) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	// Wait up to 5s for another process instead of failing with SQLITE_BUSY.
+	// busy_timeout comes first so the WAL switch itself can wait too.
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if path != ":memory:" {
+		if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL`); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS namespaces (
 			path TEXT PRIMARY KEY
