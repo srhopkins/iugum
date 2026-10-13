@@ -91,10 +91,10 @@ function getInitialBeadProject() {
 }
 
 function getInitialView() {
-  if (typeof window === 'undefined') return 'tree'
+  if (typeof window === 'undefined') return 'pipeline'
   const params = new URLSearchParams(window.location.search)
   const v = params.get('view')
-  return VIEWS.includes(v) ? v : 'tree'
+  return VIEWS.includes(v) ? v : 'pipeline'
 }
 
 export default function App() {
@@ -146,7 +146,7 @@ export default function App() {
     ;(filters.hiddenProjects || []).forEach((p) => params.append('hide', p))
     if (swimlanes) params.set('lanes', '1')
     if (filters.sort !== 'updated') params.set('sort', filters.sort)
-    if (activeView !== 'tree') params.set('view', activeView)
+    if (activeView !== 'pipeline') params.set('view', activeView)
     if (selectedBeadId) params.set('bead', selectedBeadId)
     if (selectedBeadId && selectedProject) params.set('bproject', selectedProject)
     const str = params.toString()

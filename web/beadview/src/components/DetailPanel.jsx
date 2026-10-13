@@ -217,7 +217,7 @@ export default function DetailPanel({
               {editing ? (
                 <div className="detail-field">
                   <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
-                    <option value="deferred">Backlog</option>
+                    <option value="deferred">Deferred</option>
                     <option value="open">Open</option>
                     <option value="in_progress">In Progress</option>
                     <option value="blocked">Blocked</option>

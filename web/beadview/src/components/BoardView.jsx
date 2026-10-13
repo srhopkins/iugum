@@ -2,9 +2,9 @@ import React, { useMemo, useRef, useState } from 'react'
 import PriorityBadge from './PriorityBadge'
 import { ProjectTag } from './ProjectChips'
 
-/** Board columns, left to right. `deferred` is the Backlog, `open` is Ready. */
+/** Board columns, left to right. `deferred` is Deferred, `open` is Ready. */
 export const COLUMNS = [
-  { key: 'deferred', label: 'Backlog', color: 'var(--accent-purple)' },
+  { key: 'deferred', label: 'Deferred', color: 'var(--accent-purple)' },
   { key: 'open', label: 'Ready', color: 'var(--accent-blue)' },
   { key: 'in_progress', label: 'In Progress', color: 'var(--accent-yellow)' },
   { key: 'blocked', label: 'Blocked', color: 'var(--accent-red)' },

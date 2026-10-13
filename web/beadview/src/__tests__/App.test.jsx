@@ -38,7 +38,7 @@ function mockApi({ readOnly = false, writes = {} } = {}) {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, '', '/')
+  window.history.replaceState(null, '', '/?view=tree')
   try {
     localStorage.clear()
   } catch {
@@ -82,6 +82,16 @@ describe('App', () => {
 
     const paths = new Set(calls.map((c) => c.url.split('?')[0]))
     expect(paths).toEqual(new Set(['/api/beads', '/api/mermaid', '/api/config', '/api/projects']))
+  })
+
+  it('opens on the Board when no view parameter is given', async () => {
+    window.history.replaceState(null, '', '/')
+    mockApi()
+    const { container } = render(<App />)
+    await screen.findByText('Blocked thing')
+    expect(container.querySelector('.kanban-card')).toBeTruthy()
+    expect(screen.getAllByText('Deferred').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Backlog')).toBeNull()
   })
 
   it('filters on P0 from the priority menu', async () => {
@@ -147,7 +157,7 @@ describe('App', () => {
   })
 
   it('applies filters to nested rows but counts every child in the percent', async () => {
-    window.history.replaceState(null, '', '/?priority=p0&priority=p1')
+    window.history.replaceState(null, '', '/?view=tree&priority=p0&priority=p1')
     mockApi()
     render(<App />)
     await screen.findByText('Epic')

@@ -19,7 +19,7 @@ const BEADS = [
 describe('BoardView', () => {
   it('orders columns deferred, open, in_progress, blocked, closed with their labels', () => {
     expect(COLUMNS.map((c) => c.key)).toEqual(['deferred', 'open', 'in_progress', 'blocked', 'closed'])
-    expect(COLUMNS.map((c) => c.label)).toEqual(['Backlog', 'Ready', 'In Progress', 'Blocked', 'Closed'])
+    expect(COLUMNS.map((c) => c.label)).toEqual(['Deferred', 'Ready', 'In Progress', 'Blocked', 'Closed'])
     expect(columnFor({ status: 'pinned' })).toBe('open')
   })
 

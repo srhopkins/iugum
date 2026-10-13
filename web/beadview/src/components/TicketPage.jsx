@@ -8,7 +8,7 @@ import { apiFetch, apiWrite, beadPath, hashText, ticketHref } from '../api'
 import { PRIORITIES, depIds, normalizePriority } from '../filters'
 
 const STATUSES = [
-  ['deferred', 'Backlog'],
+  ['deferred', 'Deferred'],
   ['open', 'Ready'],
   ['in_progress', 'In Progress'],
   ['blocked', 'Blocked'],
