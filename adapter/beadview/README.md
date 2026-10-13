@@ -13,6 +13,7 @@ iugum beadview [--port N] [--hostname ADDR] [--dir DIR] [--read-only]
   by default).
 - `--dir` the beads repo to view (must contain `.beads/`). Default: the
   process's current directory.
+- `--projects FILE` serves several trackers. YAML list of `{name, path}`, path a repo root with `.beads/`. Replaces `--dir`. `/api/beads?project=<name>` filters, no project means all, every bead has a `project` field. `/api/bead/{project}/{id}` (plus `/comments`, `/close`, `/reopen`, PATCH) routes to that project. Full page at `/bead/{project}/{id}`.
 - `--read-only` turns off every write endpoint. They answer `405` with
   `Allow: GET`, and `/api/config` reports `"read_only": true` so the UI can
   hide its write controls.
