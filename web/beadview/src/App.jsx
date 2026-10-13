@@ -527,7 +527,7 @@ export default function App() {
       />
 
       <div className="app-main">
-        <div className={`main-content${detailOpen ? ' with-panel' : ''}`}>
+        <div className="main-content">
           <StatsRow
             stats={stats}
             activeStatuses={filters.status || []}
@@ -656,6 +656,9 @@ export default function App() {
           )}
         </div>
 
+        {detailOpen && (
+          <div className="detail-backdrop" data-testid="detail-backdrop" onClick={closeDetail} />
+        )}
         <DetailPanel
           bead={selectedBead}
           open={detailOpen}

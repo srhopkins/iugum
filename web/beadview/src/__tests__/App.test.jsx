@@ -188,6 +188,21 @@ describe('App', () => {
     await waitFor(() => expect(container.querySelector('.detail-panel').className).not.toContain('open'))
   })
 
+  it('the drawer overlays the page: no layout class, backdrop dismisses', async () => {
+    mockApi()
+    const { container } = render(<App />)
+    await screen.findByText('Epic')
+    const main = container.querySelector('.main-content')
+    const before = main.className
+    fireEvent.click(screen.getByText('Epic'))
+    await screen.findByRole('button', { name: 'Close panel' })
+    expect(container.querySelector('.main-content').className).toBe(before)
+    expect(container.querySelector('.main-content').className).not.toContain('with-panel')
+    fireEvent.click(screen.getByTestId('detail-backdrop'))
+    await waitFor(() => expect(container.querySelector('.detail-panel').className).not.toContain('open'))
+    expect(screen.queryByTestId('detail-backdrop')).toBeNull()
+  })
+
   it('applies filters to nested rows but counts every child in the percent', async () => {
     window.history.replaceState(null, '', '/?view=tree&priority=p0&priority=p1')
     mockApi()
