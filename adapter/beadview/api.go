@@ -8,9 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // APIBead is the bead shape the React UI reads. It follows the ayo viewer's
@@ -19,6 +19,9 @@ import (
 // The extra fields (issue_type, blocked_by, blocks, dependency_edges) are
 // additive; the ayo code ignores them.
 type APIBead struct {
+	// Project is the name of the tracker this bead lives in. Bead IDs are
+	// only unique inside one project, so (project, id) is the key.
+	Project     string   `json:"project"`
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
@@ -176,6 +179,15 @@ func (s *server) registerAPI(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix+"/config", s.apiConfig)
 	mux.HandleFunc("GET "+prefix+"/projects", s.apiProjects)
 
+	// Project-qualified forms: /api/bead/{project}/{id}. The plain /api/bead/{id}
+	// forms stay for the single-project UI, which sends ?project= instead.
+	mux.HandleFunc("GET "+prefix+"/bead/{project}/{id}", s.apiGetBead)
+	mux.HandleFunc("GET "+prefix+"/bead/{project}/{id}/comments", s.apiListComments)
+	mux.HandleFunc("PATCH "+prefix+"/bead/{project}/{id}", s.write("update", s.apiUpdateBead))
+	mux.HandleFunc("POST "+prefix+"/bead/{project}/{id}/close", s.write("close", s.apiCloseBead))
+	mux.HandleFunc("POST "+prefix+"/bead/{project}/{id}/reopen", s.write("reopen", s.apiReopenBead))
+	mux.HandleFunc("POST "+prefix+"/bead/{project}/{id}/comments", s.write("comment", s.apiAddComment))
+
 	mux.HandleFunc("POST "+prefix+"/bead", s.write("create", s.apiCreateBead))
 	mux.HandleFunc("PATCH "+prefix+"/bead/{id}", s.write("update", s.apiUpdateBead))
 	mux.HandleFunc("POST "+prefix+"/bead/{id}/close", s.write("close", s.apiCloseBead))
@@ -189,12 +201,28 @@ func (s *server) registerAPI(mux *http.ServeMux, prefix string) {
 }
 
 func (s *server) apiListBeads(w http.ResponseWriter, r *http.Request) {
-	beads, err := s.f.FetchBeads(r.Context())
-	if err != nil {
-		writeUpstreamError(w, err)
+	name := r.URL.Query().Get("project")
+	var sel []Project
+	if s.multi && name != "" {
+		p, ok := s.pick(w, r, "")
+		if !ok {
+			return
+		}
+		sel = []Project{*p}
+	} else if s.multi {
+		sel = s.projects
+	} else {
+		sel = s.projects[:1]
+	}
+	out, failed := s.listProjects(r.Context(), sel)
+	if len(failed) == len(sel) {
+		writeUpstreamError(w, failed[0])
 		return
 	}
-	writeJSON(w, http.StatusOK, ToAPIList(beads))
+	for _, e := range failed {
+		w.Header().Add("X-Beadview-Project-Errors", strings.ReplaceAll(e.Error(), "\n", " "))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) apiGetBead(w http.ResponseWriter, r *http.Request) {
@@ -202,12 +230,16 @@ func (s *server) apiGetBead(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	b, err := s.f.FetchBead(r.Context(), id)
+	p, ok := s.pick(w, r, "")
+	if !ok {
+		return
+	}
+	b, err := p.F.FetchBead(r.Context(), id)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.withReverse(r.Context(), *b))
+	writeJSON(w, http.StatusOK, s.withReverse(r.Context(), p, *b))
 }
 
 // reread fills in what a write's own result leaves out. The JSON that bd
@@ -216,9 +248,9 @@ func (s *server) apiGetBead(w http.ResponseWriter, r *http.Request) {
 // result stays the source for every field it does carry; the edges, the
 // parent and the counters come from a fresh `bd show`. If that read fails,
 // the write's result is returned as it is.
-func (s *server) reread(ctx context.Context, b *Bead) APIBead {
+func (s *server) reread(ctx context.Context, p *Project, b *Bead) APIBead {
 	out := *b
-	if fresh, err := s.f.FetchBead(ctx, b.ID); err == nil && fresh != nil {
+	if fresh, err := p.F.FetchBead(ctx, b.ID); err == nil && fresh != nil {
 		if len(out.Dependencies) == 0 {
 			out.Dependencies = fresh.Dependencies
 			out.DependencyCnt = fresh.DependencyCnt
@@ -233,17 +265,19 @@ func (s *server) reread(ctx context.Context, b *Bead) APIBead {
 			out.CommentCnt = fresh.CommentCnt
 		}
 	}
-	return s.withReverse(ctx, out)
+	return s.withReverse(ctx, p, out)
 }
 
 // withReverse fills Blocks for a single bead. It needs the full list; if
 // that read fails, the bead is still returned with an empty Blocks.
-func (s *server) withReverse(ctx context.Context, b Bead) APIBead {
+func (s *server) withReverse(ctx context.Context, p *Project, b Bead) APIBead {
 	var rev []string
-	if all, err := s.f.FetchBeads(ctx); err == nil {
+	if all, err := p.F.FetchBeads(ctx); err == nil {
 		rev = reverseBlocks(all)[b.ID]
 	}
-	return ToAPI(b, rev)
+	out := ToAPI(b, rev)
+	out.Project = p.Name
+	return out
 }
 
 func (s *server) apiListComments(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +285,11 @@ func (s *server) apiListComments(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	comments, err := s.f.FetchComments(r.Context(), id)
+	p, ok := s.pick(w, r, "")
+	if !ok {
+		return
+	}
+	comments, err := p.F.FetchComments(r.Context(), id)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
@@ -277,7 +315,11 @@ func (s *server) apiMermaid(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid root id")
 		return
 	}
-	text, err := s.f.FetchMermaid(r.Context(), root)
+	p, ok := s.pick(w, r, "")
+	if !ok {
+		return
+	}
+	text, err := p.F.FetchMermaid(r.Context(), root)
 	if err != nil {
 		msg := strings.ReplaceAll(err.Error(), "\n", " ")
 		text = "flowchart TD\n  empty[\"No dependency tree available\"]\n  %% " + msg + "\n"
@@ -291,33 +333,109 @@ type configResponse struct {
 	HasWebsockets bool    `json:"has_websockets"`
 	ReadOnly      bool    `json:"read_only"`
 	Project       string  `json:"project"`
+	// Multi is true when the server was started with --projects.
+	Multi bool `json:"multi"`
 }
 
 func (s *server) apiConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, configResponse{ReadOnly: s.opts.ReadOnly, Project: s.projectSlug()})
+	project := ""
+	if !s.multi {
+		project = s.projects[0].Name
+	}
+	writeJSON(w, http.StatusOK, configResponse{ReadOnly: s.opts.ReadOnly, Project: project, Multi: s.multi})
 }
 
 type projectRow struct {
 	Slug        string `json:"slug"`
+	Name        string `json:"name"`
 	Description string `json:"description"`
+	Path        string `json:"path"`
 	Enabled     bool   `json:"enabled"`
 	Registered  bool   `json:"registered"`
 }
 
-// apiProjects returns the one configured directory as the only project.
-// The UI's project query param and body field are accepted and ignored.
+// apiProjects lists the configured projects. With no --projects file it is
+// the one --dir.
 func (s *server) apiProjects(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"projects": []projectRow{{
-			Slug:        s.projectSlug(),
-			Description: s.f.Dir(),
-			Enabled:     true,
-			Registered:  true,
-		}},
-	})
+	rows := make([]projectRow, 0, len(s.projects))
+	for _, p := range s.projects {
+		rows = append(rows, projectRow{
+			Slug: p.Name, Name: p.Name, Description: p.F.Dir(), Path: p.F.Dir(),
+			Enabled: true, Registered: true,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": rows})
 }
 
-func (s *server) projectSlug() string { return filepath.Base(s.f.Dir()) }
+// pick resolves which project a request is for. The name comes from the
+// {project} path value, then the ?project= query, then bodyProject (the
+// JSON body field). A single-project server ignores the name, as it
+// always has. A multi-project server answers 400 when none is given
+// (unless only one is configured) and 404 for an unknown name.
+func (s *server) pick(w http.ResponseWriter, r *http.Request, bodyProject string) (*Project, bool) {
+	if !s.multi {
+		return &s.projects[0], true
+	}
+	name := r.PathValue("project")
+	if name == "" {
+		name = r.URL.Query().Get("project")
+	}
+	if name == "" {
+		name = bodyProject
+	}
+	if name == "" {
+		if len(s.projects) == 1 {
+			return &s.projects[0], true
+		}
+		writeError(w, http.StatusBadRequest, "project is required (query ?project=, path, or body field)")
+		return nil, false
+	}
+	for i := range s.projects {
+		if s.projects[i].Name == name {
+			return &s.projects[i], true
+		}
+	}
+	writeError(w, http.StatusNotFound, "unknown project: "+name)
+	return nil, false
+}
+
+// listProjects reads every project's beads in parallel and merges them in
+// project order. A project that fails is returned in failed and left out.
+func (s *server) listProjects(ctx context.Context, sel []Project) ([]APIBead, []error) {
+	type res struct {
+		beads []APIBead
+		err   error
+	}
+	results := make([]res, len(sel))
+	var wg sync.WaitGroup
+	for i := range sel {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			beads, err := sel[i].F.FetchBeads(ctx)
+			if err != nil {
+				results[i].err = fmt.Errorf("%s: %w", sel[i].Name, err)
+				return
+			}
+			list := ToAPIList(beads)
+			for j := range list {
+				list[j].Project = sel[i].Name
+			}
+			results[i].beads = list
+		}(i)
+	}
+	wg.Wait()
+	out := make([]APIBead, 0)
+	var failed []error
+	for _, r := range results {
+		if r.err != nil {
+			failed = append(failed, r.err)
+			continue
+		}
+		out = append(out, r.beads...)
+	}
+	return out, failed
+}
 
 // write wraps a write endpoint with every gate, in this order:
 //  1. --read-only: 405, before anything else runs.
@@ -375,6 +493,7 @@ func checkSameOrigin(r *http.Request) error {
 }
 
 type createRequest struct {
+	Project      string     `json:"project"`
 	Title        string     `json:"title"`
 	Description  string     `json:"description"`
 	Type         string     `json:"type"`
@@ -413,6 +532,10 @@ func (s *server) apiCreateBead(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Priority = p
 	}
+	p, ok := s.pick(w, r, req.Project)
+	if !ok {
+		return
+	}
 	var deps []string
 	for _, d := range req.Dependencies {
 		d = strings.TrimSpace(d)
@@ -427,7 +550,7 @@ func (s *server) apiCreateBead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logf("write: create title=%q type=%q priority=%q deps=%v", in.Title, in.Type, in.Priority, deps)
-	b, err := s.f.CreateBead(r.Context(), in)
+	b, err := p.F.CreateBead(r.Context(), in)
 	if err != nil {
 		s.logf("write failed: create: %v", err)
 		writeUpstreamError(w, err)
@@ -436,7 +559,7 @@ func (s *server) apiCreateBead(w http.ResponseWriter, r *http.Request) {
 	s.logf("write ok: create %s", b.ID)
 	resp := createResponse{ID: b.ID}
 	for _, d := range deps {
-		if err := s.f.AddDependency(r.Context(), b.ID, d); err != nil {
+		if err := p.F.AddDependency(r.Context(), b.ID, d); err != nil {
 			s.logf("write failed: dep add %s -> %s: %v", b.ID, d, err)
 			resp.DependencyErrors = append(resp.DependencyErrors, fmt.Sprintf("%s: %v", d, err))
 			continue
@@ -445,15 +568,17 @@ func (s *server) apiCreateBead(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-read so the response carries the new dependency edges.
 	if len(deps) > 0 {
-		if fresh, err := s.f.FetchBead(r.Context(), b.ID); err == nil {
+		if fresh, err := p.F.FetchBead(r.Context(), b.ID); err == nil {
 			b = fresh
 		}
 	}
 	resp.Issue = ToAPI(*b, nil)
+	resp.Issue.Project = p.Name
 	writeJSON(w, http.StatusCreated, resp)
 }
 
 type updateRequest struct {
+	Project     string      `json:"project"`
 	Status      *string     `json:"status"`
 	Priority    *flexString `json:"priority"`
 	Description *string     `json:"description"`
@@ -499,31 +624,37 @@ func (s *server) apiUpdateBead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "no fields to update (status, priority, description, title, type, claim)")
 		return
 	}
+	p, ok := s.pick(w, r, req.Project)
+	if !ok {
+		return
+	}
 	s.logf("write: update %s %s", id, redactDescription(in.Args()))
-	b, err := s.f.UpdateBead(r.Context(), id, in)
+	b, err := p.F.UpdateBead(r.Context(), id, in)
 	if err != nil {
 		s.logf("write failed: update %s: %v", id, err)
 		writeUpstreamError(w, err)
 		return
 	}
 	s.logf("write ok: update %s status=%s", id, b.Status)
-	writeJSON(w, http.StatusOK, s.reread(r.Context(), b))
+	writeJSON(w, http.StatusOK, s.reread(r.Context(), p, b))
 }
 
 type reasonRequest struct {
-	Reason string `json:"reason"`
+	Project string `json:"project"`
+	Reason  string `json:"reason"`
 }
 
 func (s *server) apiCloseBead(w http.ResponseWriter, r *http.Request) {
-	s.closeOrReopen(w, r, "close", s.f.CloseBead)
+	s.closeOrReopen(w, r, "close", func(p *Project) closeFn { return p.F.CloseBead })
 }
 
 func (s *server) apiReopenBead(w http.ResponseWriter, r *http.Request) {
-	s.closeOrReopen(w, r, "reopen", s.f.ReopenBead)
+	s.closeOrReopen(w, r, "reopen", func(p *Project) closeFn { return p.F.ReopenBead })
 }
 
-func (s *server) closeOrReopen(w http.ResponseWriter, r *http.Request, action string,
-	fn func(context.Context, string, string) (*Bead, error)) {
+type closeFn = func(context.Context, string, string) (*Bead, error)
+
+func (s *server) closeOrReopen(w http.ResponseWriter, r *http.Request, action string, pickFn func(*Project) closeFn) {
 	id, ok := pathID(w, r)
 	if !ok {
 		return
@@ -532,6 +663,11 @@ func (s *server) closeOrReopen(w http.ResponseWriter, r *http.Request, action st
 	if !decodeOptionalBody(w, r, &req) {
 		return
 	}
+	p, ok := s.pick(w, r, req.Project)
+	if !ok {
+		return
+	}
+	fn := pickFn(p)
 	s.logf("write: %s %s reason=%q", action, id, req.Reason)
 	b, err := fn(r.Context(), id, strings.TrimSpace(req.Reason))
 	if err != nil {
@@ -540,11 +676,12 @@ func (s *server) closeOrReopen(w http.ResponseWriter, r *http.Request, action st
 		return
 	}
 	s.logf("write ok: %s %s status=%s", action, id, b.Status)
-	writeJSON(w, http.StatusOK, s.reread(r.Context(), b))
+	writeJSON(w, http.StatusOK, s.reread(r.Context(), p, b))
 }
 
 type commentRequest struct {
-	Text string `json:"text"`
+	Project string `json:"project"`
+	Text    string `json:"text"`
 }
 
 func (s *server) apiAddComment(w http.ResponseWriter, r *http.Request) {
@@ -561,8 +698,12 @@ func (s *server) apiAddComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
 	}
+	p, ok := s.pick(w, r, req.Project)
+	if !ok {
+		return
+	}
 	s.logf("write: comment %s (%d bytes)", id, len(text))
-	c, err := s.f.AddComment(r.Context(), id, text)
+	c, err := p.F.AddComment(r.Context(), id, text)
 	if err != nil {
 		s.logf("write failed: comment %s: %v", id, err)
 		writeUpstreamError(w, err)

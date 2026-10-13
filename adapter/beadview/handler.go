@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 )
 
 //go:embed templates/*.html
@@ -40,11 +41,29 @@ type Options struct {
 // html/template viewer; /bead/{id}, /tree and /graph redirect (old
 // bookmarks); everything else is the React build with SPA fallback.
 func NewHandler(f Fetcher, opts Options) http.Handler {
+	return newHandler([]Project{{Name: filepath.Base(f.Dir()), F: f}}, false, opts)
+}
+
+// Project is one tracker the viewer serves.
+type Project struct {
+	Name string
+	F    Fetcher
+}
+
+// NewMultiHandler is NewHandler for several trackers (--projects). The
+// first project is the default for the legacy HTML pages. projects must
+// not be empty. Unlike the single-project handler, it enforces the
+// project name on every API call.
+func NewMultiHandler(projects []Project, opts Options) http.Handler {
+	return newHandler(projects, true, opts)
+}
+
+func newHandler(projects []Project, multi bool, opts Options) http.Handler {
 	if opts.Log == nil {
 		opts.Log = log.New(os.Stderr, "beadview: ", log.LstdFlags)
 	}
 	mux := http.NewServeMux()
-	h := &server{f: f, opts: opts}
+	h := &server{projects: projects, multi: multi, opts: opts}
 
 	h.registerAPI(mux, "/api")
 	h.registerAPI(mux, "/api/bd")
@@ -78,8 +97,22 @@ func NewHandler(f Fetcher, opts Options) http.Handler {
 }
 
 type server struct {
-	f    Fetcher
-	opts Options
+	projects []Project
+	multi    bool
+	opts     Options
+}
+
+// legacy picks the project for a server-rendered page: ?project=, else the
+// first one.
+func (s *server) legacy(r *http.Request) Fetcher {
+	if name := r.URL.Query().Get("project"); name != "" {
+		for _, p := range s.projects {
+			if p.Name == name {
+				return p.F
+			}
+		}
+	}
+	return s.projects[0].F
 }
 
 func (s *server) logf(format string, args ...any) { s.opts.Log.Printf(format, args...) }
@@ -97,7 +130,7 @@ type listPage struct {
 }
 
 func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
-	beads, err := s.f.FetchBeads(r.Context())
+	beads, err := s.legacy(r).FetchBeads(r.Context())
 	if err != nil {
 		s.renderError(w, err)
 		return
@@ -113,7 +146,7 @@ func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
 	page := listPage{
 		Title:         "Tickets",
 		Active:        "list",
-		Dir:           s.f.Dir(),
+		Dir:           s.legacy(r).Dir(),
 		Beads:         filtered,
 		Total:         len(beads),
 		Filter:        filter,
@@ -137,7 +170,7 @@ type treePage struct {
 // expand/collapse tree, unlike handleList's flat table. See the beadview
 // README "What this does not do" for why the table stays flat.
 func (s *server) handleTree(w http.ResponseWriter, r *http.Request) {
-	beads, err := s.f.FetchBeads(r.Context())
+	beads, err := s.legacy(r).FetchBeads(r.Context())
 	if err != nil {
 		s.renderError(w, err)
 		return
@@ -147,7 +180,7 @@ func (s *server) handleTree(w http.ResponseWriter, r *http.Request) {
 	page := treePage{
 		Title:  "Tree",
 		Active: "tree",
-		Dir:    s.f.Dir(),
+		Dir:    s.legacy(r).Dir(),
 		Roots:  roots,
 		Total:  len(beads),
 		Filter: filter,
@@ -165,12 +198,12 @@ type detailPage struct {
 
 func (s *server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	bead, err := s.f.FetchBead(r.Context(), id)
+	bead, err := s.legacy(r).FetchBead(r.Context(), id)
 	if err != nil {
 		s.renderError(w, err)
 		return
 	}
-	comments, err := s.f.FetchComments(r.Context(), id)
+	comments, err := s.legacy(r).FetchComments(r.Context(), id)
 	if err != nil {
 		// Comments are supplementary; a fetch failure should not hide the bead.
 		comments = nil
@@ -178,7 +211,7 @@ func (s *server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	page := detailPage{
 		Title:    bead.ID,
 		Active:   "detail",
-		Dir:      s.f.Dir(),
+		Dir:      s.legacy(r).Dir(),
 		Bead:     bead,
 		Comments: comments,
 	}
@@ -187,7 +220,7 @@ func (s *server) handleDetail(w http.ResponseWriter, r *http.Request) {
 
 // handleGraph serves bd's own self-contained D3 dependency graph verbatim.
 func (s *server) handleGraph(w http.ResponseWriter, r *http.Request) {
-	html, err := s.f.FetchGraphHTML(r.Context())
+	html, err := s.legacy(r).FetchGraphHTML(r.Context())
 	if err != nil {
 		s.renderError(w, err)
 		return
@@ -213,7 +246,7 @@ func (s *server) render(w http.ResponseWriter, contentName, title, active string
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	page := layoutData{Title: title, Active: active, Dir: s.f.Dir(), Body: template.HTML(body.String())}
+	page := layoutData{Title: title, Active: active, Dir: s.projects[0].F.Dir(), Body: template.HTML(body.String())}
 	if err := tmpl.ExecuteTemplate(w, "layout", page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -224,6 +257,6 @@ func (s *server) renderError(w http.ResponseWriter, err error) {
 	_ = tmpl.ExecuteTemplate(&body, "error-content", struct{ Message string }{err.Error()})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
-	page := layoutData{Title: "Error", Active: "", Dir: s.f.Dir(), Body: template.HTML(body.String())}
+	page := layoutData{Title: "Error", Active: "", Dir: s.projects[0].F.Dir(), Body: template.HTML(body.String())}
 	_ = tmpl.ExecuteTemplate(w, "layout", page)
 }
