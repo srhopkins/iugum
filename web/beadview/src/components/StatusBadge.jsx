@@ -1,6 +1,7 @@
 import React from 'react'
 
 const STATUS_LABELS = {
+  deferred: 'Backlog',
   open: 'Open',
   in_progress: 'In Progress',
   blocked: 'Blocked',

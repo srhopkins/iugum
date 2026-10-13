@@ -35,7 +35,7 @@ export function depIds(bead) {
   return raw.map(depRefId).filter(Boolean)
 }
 
-const STATUS_ORDER = { blocked: 0, in_progress: 1, open: 2, closed: 3 }
+const STATUS_ORDER = { blocked: 0, in_progress: 1, open: 2, deferred: 3, closed: 4 }
 
 /** Client-side filter + sort (label filter uses AND, matching `bd --label`). */
 export function filterAndSortBeads(beads, filters) {
@@ -52,6 +52,10 @@ export function filterAndSortBeads(beads, filters) {
         labels.includes(q)
       )
     })
+  }
+
+  if (filters.hiddenProjects && filters.hiddenProjects.length > 0) {
+    result = result.filter((b) => !filters.hiddenProjects.includes(b.project || ''))
   }
 
   if (filters.status && filters.status.length > 0) {
@@ -102,4 +106,20 @@ export function uniqueLabelsFromBeads(beads) {
     }
   }
   return Array.from(set).sort()
+}
+
+/** Distinct project names in first-seen order. */
+export function uniqueProjects(beads) {
+  const seen = []
+  for (const b of beads) {
+    if (b.project && !seen.includes(b.project)) seen.push(b.project)
+  }
+  return seen
+}
+
+/** Stable colour index (0..7) for a project name, so a chip keeps its colour. */
+export function projectColorIndex(name) {
+  let h = 0
+  for (let i = 0; i < (name || '').length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return h % 8
 }

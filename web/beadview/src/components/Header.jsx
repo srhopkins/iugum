@@ -12,6 +12,7 @@ export default function Header({
   projects,
   onProjectChange,
   readOnly = false,
+  allValue = null,
 }) {
   const list = Array.isArray(projects) ? projects : []
 
@@ -40,6 +41,7 @@ export default function Header({
             }}
           >
             {list.length === 0 && <option value={project || ''}>{project || '...'}</option>}
+            {allValue && list.length > 1 && <option value={allValue}>All projects</option>}
             {list.map((p) => (
               <option key={p.slug} value={p.slug} title={p.description || p.slug}>
                 {p.slug}

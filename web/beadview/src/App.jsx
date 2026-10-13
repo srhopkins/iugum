@@ -4,18 +4,24 @@ import StatsRow from './components/StatsRow'
 import FilterBar from './components/FilterBar'
 import TreeView from './components/TreeView'
 import ActivityView from './components/ActivityView'
-import KanbanView from './components/KanbanView'
+import BoardView from './components/BoardView'
+import ListView from './components/ListView'
+import ProjectChips from './components/ProjectChips'
 import DetailPanel from './components/DetailPanel'
 import NewBeadModal from './components/NewBeadModal'
 import HelpOverlay from './components/HelpOverlay'
-import { apiFetch, apiWrite } from './api'
+import { apiFetch, apiWrite, beadPath, hashText } from './api'
 import { resolveMermaidSource } from './mermaidGraph'
-import { filterAndSortBeads, uniqueLabelsFromBeads } from './filters'
+import { filterAndSortBeads, uniqueLabelsFromBeads, uniqueProjects } from './filters'
 
 // Mermaid is most of the bundle. Load it only when the Graph tab opens.
 const MermaidDiagram = lazy(() => import('./components/MermaidDiagram'))
 
-const VIEWS = ['tree', 'activity', 'pipeline', 'graph']
+// 'pipeline' is the board. The key stays so old URLs keep working.
+const VIEWS = ['tree', 'activity', 'pipeline', 'graph', 'list']
+// The project selector value for "all projects".
+const ALL = '__all__'
+const POLL_MS = 3000
 const PROJECT_STORAGE_KEY = 'beadview-project'
 const THEME_STORAGE_KEY = 'beadview-theme'
 
@@ -58,6 +64,7 @@ function getInitialFilters() {
       assignee: [],
       labels: [],
       sort: 'updated',
+      hiddenProjects: [],
     }
   }
   const params = new URLSearchParams(window.location.search)
@@ -68,8 +75,19 @@ function getInitialFilters() {
     type: params.getAll('type'),
     assignee: params.getAll('assignee'),
     labels: params.getAll('label'),
+    hiddenProjects: params.getAll('hide'),
     sort: params.get('sort') || 'updated',
   }
+}
+
+function getInitialLanes() {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('lanes') === '1'
+}
+
+function getInitialBeadProject() {
+  if (typeof window === 'undefined') return ''
+  return new URLSearchParams(window.location.search).get('bproject') || ''
 }
 
 function getInitialView() {
@@ -91,6 +109,8 @@ export default function App() {
   const [project, setProject] = useState(getInitialProject)
   const [projects, setProjects] = useState([])
   const [selectedBeadId, setSelectedBeadId] = useState(getInitialBeadId)
+  const [selectedProject, setSelectedProject] = useState(getInitialBeadProject)
+  const [swimlanes, setSwimlanes] = useState(getInitialLanes)
   const [detailOpen, setDetailOpen] = useState(() => !!getInitialBeadId())
   const [showNewBead, setShowNewBead] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
@@ -104,6 +124,9 @@ export default function App() {
   const wsRef = useRef(null)
   const pollTimerRef = useRef(null)
   const pendingBeadRef = useRef(getInitialBeadId())
+  // Hash of the last /api/beads body. A poll that returns the same body
+  // changes nothing, so nothing re-renders.
+  const beadsHashRef = useRef('')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -113,20 +136,23 @@ export default function App() {
   // Sync filters + project + bead to URL
   useEffect(() => {
     const params = new URLSearchParams()
-    if (project) params.set('project', project)
+    if (project && project !== ALL) params.set('project', project)
     if (filters.search) params.set('q', filters.search)
     filters.status.forEach((s) => params.append('status', s))
     filters.priority.forEach((p) => params.append('priority', p))
     filters.type.forEach((t) => params.append('type', t))
     filters.assignee.forEach((a) => params.append('assignee', a))
     ;(filters.labels || []).forEach((l) => params.append('label', l))
+    ;(filters.hiddenProjects || []).forEach((p) => params.append('hide', p))
+    if (swimlanes) params.set('lanes', '1')
     if (filters.sort !== 'updated') params.set('sort', filters.sort)
     if (activeView !== 'tree') params.set('view', activeView)
     if (selectedBeadId) params.set('bead', selectedBeadId)
+    if (selectedBeadId && selectedProject) params.set('bproject', selectedProject)
     const str = params.toString()
     const newUrl = str ? `?${str}` : window.location.pathname
     window.history.replaceState(null, '', newUrl)
-  }, [filters, activeView, project, selectedBeadId])
+  }, [filters, activeView, project, selectedBeadId, selectedProject, swimlanes])
 
   useEffect(() => {
     if (project) writeStorage(PROJECT_STORAGE_KEY, project)
@@ -148,7 +174,12 @@ export default function App() {
       const list = Array.isArray(data.projects) ? data.projects : []
       setProjects(list)
       if (list.length > 0) {
-        setProject((cur) => (cur && list.some((p) => p.slug === cur) ? cur : list[0].slug))
+        setProject((cur) => {
+          if (cur === ALL && list.length > 1) return cur
+          if (cur && list.some((p) => p.slug === cur)) return cur
+          // With several projects the default is all of them.
+          return list.length > 1 ? ALL : list[0].slug
+        })
       }
     } catch {
       /* keep the current list */
@@ -157,12 +188,24 @@ export default function App() {
 
   const fetchData = useCallback(async () => {
     try {
+      const scope = project === ALL ? '' : project
       const [beadsRes, mermaidRes] = await Promise.all([
-        apiFetch('/api/beads', { project }),
-        apiFetch('/api/mermaid', { project }),
+        apiFetch('/api/beads', { project: scope }),
+        // The server has no single graph for several projects. The Graph
+        // tab builds one from the beads.
+        scope ? apiFetch('/api/mermaid', { project: scope }) : Promise.resolve(null),
       ])
       if (beadsRes.ok) {
-        const data = await beadsRes.json()
+        const text = await beadsRes.text()
+        const hash = hashText(text)
+        if (hash === beadsHashRef.current) {
+          // Same data as the last poll. Keep the current state.
+          setConnected(true)
+          setLoading(false)
+          return
+        }
+        beadsHashRef.current = hash
+        const data = JSON.parse(text)
         if (Array.isArray(data)) {
           setBeads(data)
           setLoadError(null)
@@ -177,11 +220,13 @@ export default function App() {
             }
           }
         } else if (data?.error) {
+          beadsHashRef.current = ''
           setBeads([])
           setLoadError({ kind: 'api', message: String(data.error) })
           setConnected(false)
         }
       } else {
+        beadsHashRef.current = ''
         let message = `Failed to load beads (${beadsRes.status})`
         try {
           const errBody = await beadsRes.json()
@@ -193,11 +238,12 @@ export default function App() {
         setLoadError({ kind: 'api', message })
         setConnected(false)
       }
-      if (mermaidRes.ok) {
+      if (mermaidRes && mermaidRes.ok) {
         const text = await mermaidRes.text()
         setMermaidData(text)
       }
     } catch (err) {
+      beadsHashRef.current = ''
       setConnected(false)
       setBeads([])
       setLoadError({
@@ -274,9 +320,10 @@ export default function App() {
   }, [fetchData])
 
   useEffect(() => {
+    beadsHashRef.current = ''
     setLoading(true)
     fetchData()
-    pollTimerRef.current = setInterval(fetchData, wsConnected ? 30000 : 10000)
+    pollTimerRef.current = setInterval(fetchData, wsConnected ? 30000 : POLL_MS)
     return () => clearInterval(pollTimerRef.current)
   }, [fetchData, wsConnected])
 
@@ -326,6 +373,9 @@ export default function App() {
         case '4':
           setActiveView('graph')
           break
+        case '5':
+          setActiveView('list')
+          break
         case 'j':
         case 'ArrowDown':
           e.preventDefault()
@@ -339,8 +389,7 @@ export default function App() {
         case 'Enter':
           if (focusedIndex >= 0 && focusedIndex < filteredBeads.length) {
             const bead = filteredBeads[focusedIndex]
-            setSelectedBeadId(bead.id)
-            setDetailOpen(true)
+            openDetail(bead.id, bead.project)
           }
           break
       }
@@ -378,14 +427,18 @@ export default function App() {
 
   const allLabels = useMemo(() => uniqueLabelsFromBeads(beads), [beads])
 
-  function openDetail(beadId) {
+  // The project is optional. Tree and graph pass only an id, so the first
+  // bead with that id wins.
+  function openDetail(beadId, beadProject) {
     setSelectedBeadId(beadId)
+    setSelectedProject(beadProject || beads.find((b) => b.id === beadId)?.project || '')
     setDetailOpen(true)
   }
 
   function closeDetail() {
     setDetailOpen(false)
     setSelectedBeadId(null)
+    setSelectedProject('')
   }
 
   function handleProjectChange(next) {
@@ -393,27 +446,31 @@ export default function App() {
     if (!slug || slug === project) return
     setProject(slug)
     setSelectedBeadId(null)
+    setSelectedProject('')
     setDetailOpen(false)
+    beadsHashRef.current = ''
     pendingBeadRef.current = null
     setLoadError(null)
     setLoading(true)
     setBeads([])
   }
 
-  async function handleStatusChange(beadId, newStatus) {
+  // A drag on the board. The write goes to the project the bead lives in.
+  async function handleStatusChange(bead, newStatus) {
     setWriteError(null)
-    const res = await apiWrite(`/api/bead/${beadId}`, {
+    const res = await apiWrite(beadPath(bead.project, bead.id), {
       method: 'PATCH',
-      body: { status: newStatus, project },
-      project,
+      body: { status: newStatus, project: bead.project },
+      project: bead.project,
     })
-    if (!res.ok) setWriteError(`${beadId}: ${res.error}`)
+    if (!res.ok) setWriteError(`${bead.project}/${bead.id}: ${res.error}`)
     fetchData()
   }
 
   async function handleCreateBead(data) {
     setCreateError(null)
-    const res = await apiWrite('/api/bead', { method: 'POST', body: { ...data, project }, project })
+    const target = data.project || project
+    const res = await apiWrite('/api/bead', { method: 'POST', body: { ...data, project: target }, project: target })
     if (!res.ok) {
       setCreateError(res.error)
       return
@@ -425,10 +482,25 @@ export default function App() {
     }
     setShowNewBead(false)
     fetchData()
-    if (res.data?.id) openDetail(res.data.id)
+    if (res.data?.id) openDetail(res.data.id, target)
   }
 
-  const selectedBead = beads.find((b) => b.id === selectedBeadId) || null
+  const selectedBead =
+    beads.find((b) => b.id === selectedBeadId && (!selectedProject || b.project === selectedProject)) ||
+    null
+
+  const projectNames = useMemo(() => {
+    // Chips follow the server's project order, not the order beads arrive in.
+    const fromServer = projects.map((p) => p.slug)
+    return fromServer.length > 1 ? fromServer : uniqueProjects(beads)
+  }, [projects, beads])
+  const projectCounts = useMemo(() => {
+    const c = {}
+    beads.forEach((b) => { c[b.project] = (c[b.project] || 0) + 1 })
+    return c
+  }, [beads])
+  const visibleProjects = projectNames.filter((p) => !(filters.hiddenProjects || []).includes(p))
+  const isAll = project === ALL
 
   let emptyMessage = null
   if (!loading && loadError?.kind === 'api') {
@@ -451,6 +523,7 @@ export default function App() {
         projects={projects}
         onProjectChange={handleProjectChange}
         readOnly={readOnly}
+        allValue={ALL}
       />
 
       <div className="app-main">
@@ -477,8 +550,9 @@ export default function App() {
             {[
               { key: 'tree', label: 'Tree', num: '1' },
               { key: 'activity', label: 'Activity', num: '2' },
-              { key: 'pipeline', label: 'Pipeline', num: '3' },
+              { key: 'pipeline', label: 'Board', num: '3' },
               { key: 'graph', label: 'Graph', num: '4' },
+              { key: 'list', label: 'List', num: '5' },
             ].map((v) => (
               <button
                 key={v.key}
@@ -498,6 +572,15 @@ export default function App() {
                 Dismiss
               </button>
             </div>
+          )}
+
+          {(activeView === 'pipeline' || activeView === 'list') && (
+            <ProjectChips
+              projects={projectNames}
+              hidden={filters.hiddenProjects}
+              counts={projectCounts}
+              onChange={(hiddenProjects) => setFilters((prev) => ({ ...prev, hiddenProjects }))}
+            />
           )}
 
           <FilterBar
@@ -536,11 +619,28 @@ export default function App() {
                 />
               )}
               {activeView === 'pipeline' && (
-                <KanbanView
-                  beads={filteredBeads}
-                  onSelect={openDetail}
-                  onStatusChange={readOnly ? undefined : handleStatusChange}
-                />
+                <>
+                  {projectNames.length > 1 && (
+                    <label className="lane-toggle">
+                      <input
+                        type="checkbox"
+                        checked={swimlanes}
+                        onChange={(e) => setSwimlanes(e.target.checked)}
+                      />{' '}
+                      Swimlanes (one row per project)
+                    </label>
+                  )}
+                  <BoardView
+                    beads={filteredBeads}
+                    projects={visibleProjects}
+                    swimlanes={swimlanes}
+                    onSelect={openDetail}
+                    onStatusChange={readOnly ? undefined : handleStatusChange}
+                  />
+                </>
+              )}
+              {activeView === 'list' && (
+                <ListView beads={filteredBeads} onSelect={openDetail} showProject={projectNames.length > 1} />
               )}
               {activeView === 'graph' && (
                 <Suspense fallback={<div className="loading">Loading graph...</div>}>
@@ -563,7 +663,7 @@ export default function App() {
           onRefresh={fetchData}
           allBeads={beads}
           onSelectBead={openDetail}
-          project={project}
+          project={isAll ? selectedBead?.project : project}
           readOnly={readOnly}
         />
       </div>
@@ -575,6 +675,8 @@ export default function App() {
           onCreate={handleCreateBead}
           allBeads={beads}
           project={project}
+          projects={projects}
+          allValue={ALL}
         />
       )}
 

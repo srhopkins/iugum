@@ -30,7 +30,7 @@ function mockApi({ readOnly = false, writes = {} } = {}) {
     if (path === '/api/mermaid') return new Response('')
     if (path === '/api/config') return json({ ws_port: null, read_only: readOnly, project: 'demo' })
     if (path === '/api/projects') return json({ projects: [{ slug: 'demo', description: '/tmp/demo' }] })
-    if (/^\/api\/bead\/[^/]+\/comments$/.test(path)) return json([])
+    if (/^\/api\/bead\/[^/]+(\/[^/]+)?\/comments$/.test(path)) return json([])
     return new Response('{"error":"no"}', { status: 404 })
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -61,7 +61,7 @@ describe('App', () => {
     for (const label of ['Total', 'Open', 'In Progress', 'Blocked', 'Closed', 'Completion']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0)
     }
-    for (const tab of ['Tree', 'Activity', 'Pipeline', 'Graph']) {
+    for (const tab of ['Tree', 'Activity', 'Board', 'Graph', 'List']) {
       expect(screen.getByRole('button', { name: new RegExp(`^${tab}`) })).toBeTruthy()
     }
     for (const f of ['Status', 'Priority', 'Type', 'Labels', 'Assignee']) {
@@ -132,7 +132,7 @@ describe('App', () => {
   it('shows the server error when a close is refused (409 open blockers)', async () => {
     const calls = mockApi({
       writes: {
-        'POST /api/bead/demo-1/close': { status: 409, body: { error: 'cannot close demo-1: 1 open blocker' } },
+        'POST /api/bead/demo/demo-1/close': { status: 409, body: { error: 'cannot close demo-1: 1 open blocker' } },
       },
     })
     render(<App />)
@@ -141,7 +141,7 @@ describe('App', () => {
     const close = await screen.findByRole('button', { name: 'Close' })
     fireEvent.click(close)
     expect((await screen.findByRole('alert')).textContent).toContain('cannot close demo-1: 1 open blocker')
-    const req = calls.find((c) => c.method === 'POST' && c.url.startsWith('/api/bead/demo-1/close'))
+    const req = calls.find((c) => c.method === 'POST' && c.url.startsWith('/api/bead/demo/demo-1/close'))
     expect(req.contentType).toBe('application/json')
     expect(JSON.parse(req.body)).toEqual({ project: 'demo' })
   })

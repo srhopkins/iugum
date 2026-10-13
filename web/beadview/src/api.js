@@ -77,3 +77,25 @@ export async function apiWrite(path, { method = 'POST', body = {}, project } = {
   const error = (data && data.error) || `${method} ${path} failed (${resp.status})`
   return { ok: false, status: resp.status, data, error: String(error) }
 }
+
+/** `/api/bead/{project}/{id}` with both parts escaped. Without a project: `/api/bead/{id}`. */
+export function beadPath(project, id) {
+  return project
+    ? `/api/bead/${encodeURIComponent(project)}/${encodeURIComponent(id)}`
+    : `/api/bead/${encodeURIComponent(id)}`
+}
+
+/** Full-page ticket URL: `/bead/{project}/{id}`. */
+export function ticketHref(project, id) {
+  return `/bead/${encodeURIComponent(project || '_')}/${encodeURIComponent(id)}`
+}
+
+/** Small string hash (FNV-1a). The poller compares these to skip re-renders. */
+export function hashText(text) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16) + ':' + text.length
+}

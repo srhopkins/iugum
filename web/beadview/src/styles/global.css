@@ -1150,3 +1150,120 @@ button.bead-id-copy:hover {
   font-size: 13px;
   white-space: pre-wrap;
 }
+
+/* ===== All-projects board, list, project chips ===== */
+.badge-deferred { background: rgba(188, 140, 255, 0.15); color: var(--accent-purple); }
+
+.project-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+/* Eight stable hues. A project keeps its colour everywhere it is shown. */
+.project-c0 { --pc: #58a6ff; }
+.project-c1 { --pc: #3fb950; }
+.project-c2 { --pc: #d29922; }
+.project-c3 { --pc: #bc8cff; }
+.project-c4 { --pc: #f85149; }
+.project-c5 { --pc: #39c5cf; }
+.project-c6 { --pc: #db6d28; }
+.project-c7 { --pc: #ec6cb9; }
+
+.project-chip {
+  font: inherit;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--pc);
+  cursor: pointer;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--pc) 22%, transparent);
+}
+.project-chip.off {
+  background: transparent;
+  color: var(--text-muted);
+  border-style: dashed;
+  opacity: 0.7;
+}
+.project-chip-count { font-size: 11px; color: var(--text-secondary); }
+
+.project-tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 7px;
+  border-radius: 10px;
+  border: 1px solid var(--pc);
+  background: color-mix(in srgb, var(--pc) 22%, transparent);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.lane-toggle { display: inline-block; font-size: 13px; color: var(--text-secondary); margin-bottom: 10px; }
+
+.board { overflow-x: auto; }
+.board-head,
+.board-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(210px, 1fr));
+  gap: 12px;
+}
+.board-head { position: sticky; top: 0; z-index: 2; margin-bottom: 8px; }
+.board-head .kanban-column-header {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.board-lane { margin-bottom: 14px; }
+.board-lane-title { margin: 6px 0; }
+.board .kanban-column { min-height: 120px; }
+.board:not(.board-lanes) .kanban-column { min-height: 360px; }
+.kanban-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+.kanban-card-top .badge { margin-left: auto; }
+
+.list-wrap { overflow-x: auto; }
+.list-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.list-th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.list-th:hover { color: var(--text-primary); }
+.list-row { cursor: pointer; }
+.list-row:hover { background: var(--bg-secondary); }
+.list-row td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.list-title { min-width: 260px; }
+.list-date { white-space: nowrap; color: var(--text-secondary); }
+
+/* ===== Full-page ticket ===== */
+.ticket-page { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; color: var(--text-primary); background: var(--bg-primary); min-height: 100vh; }
+.ticket-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 13px; }
+.ticket-nav a { color: var(--accent-blue); text-decoration: none; }
+.ticket-title { font-size: 22px; margin: 0 0 16px; }
+.ticket-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 28px; }
+@media (max-width: 800px) { .ticket-grid { grid-template-columns: 1fr; } }
+.ticket-main h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 22px 0 8px; }
+.ticket-main h3:first-child { margin-top: 0; }
+.ticket-side { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; align-self: start; }
+.ticket-side dl { margin: 0; }
+.ticket-field { margin-bottom: 12px; }
+.ticket-field dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 3px; }
+.ticket-field dd { margin: 0; font-size: 13px; }
+.ticket-links, .ticket-links ul { list-style: none; margin: 0; padding: 0; }
+.ticket-link-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+.ticket-link-row a { text-decoration: none; }
+.ticket-link-title { color: var(--text-secondary); }
+.ticket-dep-kind { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-top: 6px; }
+.ticket-dep-kind ul { text-transform: none; }
+.label-badge { background: var(--bg-tertiary); color: var(--text-secondary); margin-right: 4px; }
+.muted { color: var(--text-muted); font-style: italic; }

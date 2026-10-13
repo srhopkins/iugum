@@ -91,7 +91,7 @@ export default function FilterBar({
 
         <MultiSelect
           label="Status"
-          options={['open', 'in_progress', 'blocked', 'closed']}
+          options={['deferred', 'open', 'in_progress', 'blocked', 'closed']}
           selected={filters.status}
           onChange={v => setField('status', v)}
         />

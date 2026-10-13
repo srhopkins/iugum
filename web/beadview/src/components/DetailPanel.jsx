@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import StatusBadge from './StatusBadge'
 import PriorityBadge from './PriorityBadge'
-import { apiFetch, apiWrite } from '../api'
+import { apiFetch, apiWrite, beadPath, ticketHref } from '../api'
 import { PRIORITIES, depIds, normalizePriority } from '../filters'
 
 function DepRow({ depId, allBeads, onSelectBead }) {
@@ -36,9 +36,12 @@ export default function DetailPanel({
   onRefresh,
   allBeads,
   onSelectBead,
-  project,
+  project: viewProject,
   readOnly = false,
 }) {
+  // A bead knows its own project. In the all-projects view the selector
+  // value is not one.
+  const project = bead?.project || viewProject
   const [editing, setEditing] = useState(false)
   const [editDesc, setEditDesc] = useState('')
   const [editStatus, setEditStatus] = useState('')
@@ -98,9 +101,7 @@ export default function DetailPanel({
   const fetchComments = useCallback(
     async (beadId) => {
       try {
-        const resp = await apiFetch(`/api/bead/${beadId}/comments`, {
-          project,
-        })
+        const resp = await apiFetch(`${beadPath(project, beadId)}/comments`, { project })
         if (resp.ok) {
           const data = await resp.json()
           setComments(Array.isArray(data) ? data : [])
@@ -134,7 +135,7 @@ export default function DetailPanel({
       }
 
       if (Object.keys(payload).length > 1) {
-        const ok = await write(`/api/bead/${bead.id}`, 'PATCH', payload)
+        const ok = await write(beadPath(project, bead.id), 'PATCH', payload)
         onRefresh()
         if (!ok) return
       }
@@ -146,25 +147,25 @@ export default function DetailPanel({
 
   async function handleClaim() {
     if (!bead) return
-    await write(`/api/bead/${bead.id}`, 'PATCH', { claim: true })
+    await write(beadPath(project, bead.id), 'PATCH', { claim: true })
     onRefresh()
   }
 
   async function handleClose() {
     if (!bead) return
-    await write(`/api/bead/${bead.id}/close`, 'POST', {})
+    await write(`${beadPath(project, bead.id)}/close`, 'POST', {})
     onRefresh()
   }
 
   async function handleReopen() {
     if (!bead) return
-    await write(`/api/bead/${bead.id}/reopen`, 'POST', {})
+    await write(`${beadPath(project, bead.id)}/reopen`, 'POST', {})
     onRefresh()
   }
 
   async function handleAddComment() {
     if (!bead || !newComment.trim()) return
-    const ok = await write(`/api/bead/${bead.id}/comments`, 'POST', { text: newComment })
+    const ok = await write(`${beadPath(project, bead.id)}/comments`, 'POST', { text: newComment })
     if (ok) setNewComment('')
     fetchComments(bead.id)
   }
@@ -189,6 +190,9 @@ export default function DetailPanel({
               {bead.title}
             </h2>
             <div className="detail-panel-header-actions">
+              <a className="btn btn-sm" href={ticketHref(project, bead.id)} title="Open the full page">
+                Full page
+              </a>
               <button
                 type="button"
                 className="btn btn-sm detail-copy-btn"
@@ -213,6 +217,7 @@ export default function DetailPanel({
               {editing ? (
                 <div className="detail-field">
                   <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+                    <option value="deferred">Backlog</option>
                     <option value="open">Open</option>
                     <option value="in_progress">In Progress</option>
                     <option value="blocked">Blocked</option>

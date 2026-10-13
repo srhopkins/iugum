@@ -3,7 +3,12 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import PriorityBadge from './PriorityBadge'
 
-export default function NewBeadModal({ onClose, onCreate, allBeads, project, error }) {
+export default function NewBeadModal({ onClose, onCreate, allBeads: everyBead, project: viewProject, error, projects = [], allValue = null }) {
+  // In the all-projects view the form asks which project gets the bead.
+  const choosing = allValue !== null && viewProject === allValue
+  const [chosen, setChosen] = useState(projects[0]?.slug || '')
+  const project = choosing ? chosen : viewProject
+  const allBeads = choosing ? everyBead.filter((b) => b.project === chosen) : everyBead
   const [title, setTitle] = useState('')
   const [priority, setPriority] = useState('')
   const [type, setType] = useState('')
@@ -40,10 +45,21 @@ export default function NewBeadModal({ onClose, onCreate, allBeads, project, err
 
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
-            {project && (
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
-                Creating in <strong>{project}</strong>
-              </p>
+            {choosing ? (
+              <div className="detail-field">
+                <label>Project *</label>
+                <select aria-label="Project" value={chosen} onChange={(e) => { setChosen(e.target.value); setDependencies([]) }}>
+                  {projects.map((p) => (
+                    <option key={p.slug} value={p.slug}>{p.slug}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              project && (
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
+                  Creating in <strong>{project}</strong>
+                </p>
+              )
             )}
             <div className="detail-field">
               <label>Title *</label>
