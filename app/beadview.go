@@ -39,6 +39,9 @@ type BeadViewExtras struct {
 	// UI is the embedded React build (index.html at its root). Nil serves
 	// a placeholder page at /.
 	UI fs.FS
+	// ProjectsFile is the --projects YAML file. When set, dir is ignored and
+	// the viewer serves every project in it.
+	ProjectsFile string
 }
 
 // ServeBeadViewWith is ServeBeadView plus the read-only flag and the UI
@@ -53,6 +56,9 @@ func (a *App) ServeBeadViewWith(ctx context.Context, port int, host, dir string,
 	}
 	if host == "" {
 		host = "127.0.0.1"
+	}
+	if extras.ProjectsFile != "" {
+		return a.serveBeadViewProjects(ctx, port, host, extras)
 	}
 	if dir == "" {
 		var err error
@@ -93,6 +99,55 @@ func (a *App) ServeBeadViewWith(ctx context.Context, port int, host, dir string,
 	go func() {
 		errCh <- srv.ListenAndServe()
 	}()
+	select {
+	case <-ctx.Done():
+		_ = srv.Shutdown(context.Background())
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil
+		}
+		return ctx.Err()
+	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	}
+}
+
+// serveBeadViewProjects is the --projects mode: one viewer over every
+// tracker in the file. Each project gets its own exec fetcher, so each one
+// keeps its own child-process lock.
+func (a *App) serveBeadViewProjects(ctx context.Context, port int, host string, extras BeadViewExtras) error {
+	cfgs, err := beadview.LoadProjects(extras.ProjectsFile)
+	if err != nil {
+		return err
+	}
+	exe, err := osExecutable()
+	if err != nil {
+		return fmt.Errorf("beadview: resolving own executable: %w", err)
+	}
+	projects := make([]beadview.Project, 0, len(cfgs))
+	for _, c := range cfgs {
+		projects = append(projects, beadview.Project{Name: c.Name, F: beadview.NewExecFetcher(exe, c.Path)})
+	}
+	handler := beadview.NewMultiHandler(projects, beadview.Options{
+		ReadOnly: extras.ReadOnly,
+		UI:       extras.UI,
+		AuthorizeWrite: func(ctx context.Context, action string) error {
+			return a.Check(ctx, "beadview", "write")
+		},
+	})
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	srv := &http.Server{Addr: addr, Handler: handler}
+	fmt.Fprintf(os.Stdout, "iugum beadview: http://%s\n", addr)
+	for _, c := range cfgs {
+		fmt.Fprintf(os.Stdout, "iugum beadview project %s: %s\n", c.Name, c.Path)
+	}
+	if extras.ReadOnly {
+		fmt.Fprintln(os.Stdout, "iugum beadview: read-only (write endpoints return 405)")
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
 	select {
 	case <-ctx.Done():
 		_ = srv.Shutdown(context.Background())

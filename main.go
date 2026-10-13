@@ -125,7 +125,7 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum agent tui|acp <name> [--dry-run]
   iugum agent checkpoint <name>
   iugum beads [bd args...]
-  iugum beadview [--port N] [--hostname ADDR] [--dir DIR] [--read-only]
+  iugum beadview [--port N] [--hostname ADDR] [--dir DIR | --projects FILE] [--read-only]
   iugum wiki [--port N] [--hostname ADDR] [--addons FILE] [space-dir]
   iugum check-wiki-assets [repo-dir]
   iugum observe [--port N] [--hostname ADDR]
@@ -194,13 +194,22 @@ func run(args []string) int {
 		}
 		return 0
 	case "beadview":
-		port, host, dir, readOnly, code, ok := parseBeadViewArgs(args[1:])
+		bvArgs, projectsFile, perr := extractProjectsFlag(args[1:])
+		if perr != nil {
+			fmt.Fprintln(os.Stderr, perr)
+			return 2
+		}
+		port, host, dir, readOnly, code, ok := parseBeadViewArgs(bvArgs)
 		if !ok {
 			return code
 		}
 		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		extras := app.BeadViewExtras{ReadOnly: readOnly, UI: beadviewUI()}
+		extras := app.BeadViewExtras{ReadOnly: readOnly, UI: beadviewUI(), ProjectsFile: projectsFile}
+		if projectsFile != "" && dir != "" {
+			fmt.Fprintln(os.Stderr, "beadview: --projects and --dir cannot be used together")
+			return 2
+		}
 		if err := a.ServeBeadViewWith(ctx, port, host, dir, extras); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
 			return 1
@@ -537,6 +546,31 @@ func parseWikiArgs(args []string) (port int, host, space string, code int, ok bo
 		}
 	}
 	return port, host, space, 0, true
+}
+
+// extractProjectsFlag pulls --projects FILE out of the beadview args and
+// returns the rest. It is separate from parseBeadViewArgs so that function
+// keeps its shape.
+func extractProjectsFlag(args []string) (rest []string, file string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--projects":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return nil, "", fmt.Errorf("beadview: --projects requires a file")
+			}
+			i++
+			file = args[i]
+		case strings.HasPrefix(a, "--projects="):
+			file = strings.TrimPrefix(a, "--projects=")
+			if file == "" {
+				return nil, "", fmt.Errorf("beadview: --projects requires a file")
+			}
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return rest, file, nil
 }
 
 func parseBeadViewArgs(args []string) (port int, host, dir string, readOnly bool, code int, ok bool) {
