@@ -699,22 +699,33 @@ button.stat-card-clickable.active {
 
 .detail-panel-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 20px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-.detail-panel-header h2 {
-  font-size: 16px;
-  font-weight: 600;
+.detail-panel-header-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-panel-ident {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  flex: 1;
+}
+
+.detail-panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .detail-panel-header-actions {
@@ -723,6 +734,29 @@ button.stat-card-clickable.active {
   gap: 8px;
   flex-shrink: 0;
 }
+
+.detail-dismiss {
+  font-size: 16px;
+  padding: 6px 9px;
+}
+
+.confirm-close {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.confirm-close-text {
+  flex: 1 1 100%;
+  font-size: 13px;
+}
+
+.ticket-ident { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 
 button.bead-id-copy {
   white-space: nowrap;
@@ -1250,6 +1284,7 @@ button.bead-id-copy:hover {
 .ticket-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 13px; }
 .ticket-nav a { color: var(--accent-blue); text-decoration: none; }
 .ticket-title { font-size: 22px; margin: 0 0 16px; }
+.ticket-page .confirm-close { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; padding: 12px; }
 .ticket-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 28px; }
 @media (max-width: 800px) { .ticket-grid { grid-template-columns: 1fr; } }
 .ticket-main h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin: 22px 0 8px; }

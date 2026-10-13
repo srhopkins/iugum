@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import ConfirmClose from './ConfirmClose'
 import StatusBadge from './StatusBadge'
 import PriorityBadge from './PriorityBadge'
 import { apiFetch, apiWrite, beadPath, ticketHref } from '../api'
 import { PRIORITIES, depIds, normalizePriority } from '../filters'
+import { ProjectTag } from './ProjectChips'
 
 function DepRow({ depId, allBeads, onSelectBead }) {
   const depBead = allBeads.find((b) => b.id === depId)
@@ -51,6 +53,7 @@ export default function DetailPanel({
   const [saving, setSaving] = useState(false)
   const [copyState, setCopyState] = useState('idle') // idle | copied | error
   const [writeError, setWriteError] = useState(null)
+  const [confirmingClose, setConfirmingClose] = useState(false)
 
   useEffect(() => {
     if (bead) {
@@ -61,6 +64,7 @@ export default function DetailPanel({
       setNewComment('')
       setCopyState('idle')
       setWriteError(null)
+      setConfirmingClose(false)
       fetchComments(bead.id)
     }
   }, [bead?.id, project])
@@ -153,6 +157,7 @@ export default function DetailPanel({
 
   async function handleClose() {
     if (!bead) return
+    setConfirmingClose(false)
     await write(`${beadPath(project, bead.id)}/close`, 'POST', {})
     onRefresh()
   }
@@ -178,37 +183,50 @@ export default function DetailPanel({
       {bead && (
         <>
           <div className="detail-panel-header">
-            <h2>
-              <button
-                type="button"
-                className="bead-id bead-id-copy"
-                onClick={handleCopyUrl}
-                title="Copy ticket URL"
-              >
-                {bead.id}
-              </button>
-              {bead.title}
-            </h2>
-            <div className="detail-panel-header-actions">
-              <a className="btn btn-sm" href={ticketHref(project, bead.id)} title="Open the full page">
-                Full page
-              </a>
-              <button
-                type="button"
-                className="btn btn-sm detail-copy-btn"
-                onClick={handleCopyUrl}
-                title="Copy ticket URL"
-              >
-                {copyState === 'copied'
-                  ? 'Copied'
-                  : copyState === 'error'
-                    ? 'Copy failed'
-                    : 'Copy link'}
-              </button>
-              <button className="btn-icon" onClick={onClose} title="Close (Esc)">
-                &#x2715;
-              </button>
+            <div className="detail-panel-header-row">
+              <div className="detail-panel-ident">
+                <button
+                  type="button"
+                  className="bead-id bead-id-copy"
+                  onClick={handleCopyUrl}
+                  title="Copy ticket URL"
+                >
+                  {bead.id}
+                </button>
+                <ProjectTag project={project} />
+              </div>
+              <div className="detail-panel-header-actions">
+                <a
+                  className="btn btn-sm btn-primary"
+                  href={ticketHref(project, bead.id)}
+                  title="Open the full page"
+                >
+                  Full page
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-sm detail-copy-btn"
+                  onClick={handleCopyUrl}
+                  title="Copy ticket URL"
+                >
+                  {copyState === 'copied'
+                    ? 'Copied'
+                    : copyState === 'error'
+                      ? 'Copy failed'
+                      : 'Copy link'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon detail-dismiss"
+                  onClick={onClose}
+                  aria-label="Close panel"
+                  title="Close panel (Esc)"
+                >
+                  &#x2715;
+                </button>
+              </div>
             </div>
+            <h2 className="detail-panel-title">{bead.title}</h2>
           </div>
 
           <div className="detail-panel-body">
@@ -397,6 +415,14 @@ export default function DetailPanel({
             </div>
           )}
 
+          {!readOnly && confirmingClose && (
+            <ConfirmClose
+              id={bead.id}
+              onConfirm={handleClose}
+              onCancel={() => setConfirmingClose(false)}
+            />
+          )}
+
           {!readOnly && (
           <div className="detail-actions">
             {editing ? (
@@ -425,8 +451,11 @@ export default function DetailPanel({
                     Reopen
                   </button>
                 ) : (
-                  <button className="btn btn-sm btn-success" onClick={handleClose}>
-                    Close
+                  <button
+                    className="btn btn-sm btn-success"
+                    onClick={() => setConfirmingClose(true)}
+                  >
+                    Close ticket
                   </button>
                 )}
               </>

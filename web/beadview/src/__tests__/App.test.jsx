@@ -1,6 +1,6 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 vi.mock('mermaid', () => ({
   default: { initialize: vi.fn(), render: vi.fn().mockResolvedValue({ svg: '<svg></svg>' }) },
@@ -148,12 +148,44 @@ describe('App', () => {
     render(<App />)
     await screen.findByText('Epic')
     fireEvent.click(screen.getByText('Epic'))
-    const close = await screen.findByRole('button', { name: 'Close' })
+    const close = await screen.findByRole('button', { name: 'Close ticket' })
     fireEvent.click(close)
+    // One click only opens the confirm step. Nothing is sent yet.
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Close ticket' }))
     expect((await screen.findByRole('alert')).textContent).toContain('cannot close demo-1: 1 open blocker')
     const req = calls.find((c) => c.method === 'POST' && c.url.startsWith('/api/bead/demo/demo-1/close'))
     expect(req.contentType).toBe('application/json')
     expect(JSON.parse(req.body)).toEqual({ project: 'demo' })
+  })
+
+  it('closing needs the confirm step and Cancel sends nothing', async () => {
+    const calls = mockApi()
+    render(<App />)
+    await screen.findByText('Epic')
+    fireEvent.click(screen.getByText('Epic'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Close ticket' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.textContent).toContain('Close demo-1? This marks the ticket closed.')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it('the drawer has a labelled dismiss button and Escape dismisses it', async () => {
+    mockApi()
+    const { container } = render(<App />)
+    await screen.findByText('Epic')
+    fireEvent.click(screen.getByText('Epic'))
+    const x = await screen.findByRole('button', { name: 'Close panel' })
+    expect(x.getAttribute('title')).toContain('Close panel')
+    const panel = container.querySelector('.detail-panel')
+    expect(panel.className).toContain('open')
+    expect(panel.querySelector('.detail-panel-title').textContent).toBe('Epic')
+    act(() => {
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+    })
+    await waitFor(() => expect(container.querySelector('.detail-panel').className).not.toContain('open'))
   })
 
   it('applies filters to nested rows but counts every child in the percent', async () => {

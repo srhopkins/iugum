@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import ConfirmClose from './ConfirmClose'
 import StatusBadge from './StatusBadge'
 import PriorityBadge from './PriorityBadge'
 import { ProjectTag } from './ProjectChips'
@@ -55,6 +56,7 @@ export default function TicketPage({ project, id }) {
   const [writeError, setWriteError] = useState(null)
   const [readOnly, setReadOnly] = useState(true)
   const [newComment, setNewComment] = useState('')
+  const [confirmingClose, setConfirmingClose] = useState(false)
   const hashes = useRef({})
 
   const load = useCallback(async () => {
@@ -151,9 +153,21 @@ export default function TicketPage({ project, id }) {
       {!bead && !error && <div className="loading">Loading...</div>}
       {bead && (
         <>
-          <h1 className="ticket-title">
-            <span className="bead-id">{bead.id}</span> {bead.title}
-          </h1>
+          <div className="ticket-ident">
+            <span className="bead-id">{bead.id}</span>
+            <ProjectTag project={project} />
+          </div>
+          <h1 className="ticket-title">{bead.title}</h1>
+          {confirmingClose && (
+            <ConfirmClose
+              id={bead.id}
+              onCancel={() => setConfirmingClose(false)}
+              onConfirm={() => {
+                setConfirmingClose(false)
+                patch({ status: 'closed' })
+              }}
+            />
+          )}
           {writeError && (
             <div className="write-error" role="alert">
               {writeError}
@@ -255,7 +269,11 @@ export default function TicketPage({ project, id }) {
                     <select
                       aria-label="Status"
                       value={bead.status}
-                      onChange={(e) => patch({ status: e.target.value })}
+                      onChange={(e) =>
+                        e.target.value === 'closed'
+                          ? setConfirmingClose(true)
+                          : patch({ status: e.target.value })
+                      }
                     >
                       {STATUSES.map(([v, l]) => (
                         <option key={v} value={v}>
