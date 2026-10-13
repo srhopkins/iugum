@@ -19,7 +19,7 @@ Example: schema 54 code reads `issues.lease_expires_at`; schema 55 moved that co
 
 ## Local patches
 
-The vendored tree has five changes from upstream. Everything else is upstream form.
+The vendored tree has these changes from upstream. Everything else is upstream form.
 
 1. **Package rename.** Every `beads/cmd/bd/*.go` file says `package bdcmd` instead of `package main`.
    Reason: iugum imports the CLI as a library. Only the top-level `cmd/bd` directory changes. Sub-packages (`doctor`, `protocol`, `setup`) stay as they are.
@@ -35,6 +35,11 @@ The vendored tree has five changes from upstream. Everything else is upstream fo
    iugum sets the hook to its SQLite memory store.
 4. **Prime memory hook** (`scripts/vendor/beads-patches/prime.patch`).
    `formatMemoriesForPrime` in `beads/cmd/bd/prime.go` reads memories from the hook when one is set.
+
+5. **External server hint** (`scripts/vendor/beads-patches/dolt-store.patch`, `doltserver.patch`).
+   These two files are under `beads/internal/`, not `beads/cmd/bd/`.
+   When the Dolt server is unreachable and it is remote or externally managed, the error says `The shared Dolt server at <host>:<port> is unreachable. Check the server. Do not run bd dolt start here.` Upstream says `Try: bd dolt start`, which starts an empty local server on the same port.
+   `doltserver.patch` also stops the `dolt_server_port ... is deprecated` warning when metadata.json is in server mode with its own host. `bd init --server` writes that key on purpose, and `ResolveServerMode` reads it to detect an external server. Removing the key would make bd auto-start a local server.
 
 `beads/go.mod` is unchanged. Root `go.mod` carries the upstream version string on its `require` line.
 
@@ -53,7 +58,7 @@ The script does these steps:
 1. `go mod download` the version (a bare commit hash also works).
 2. Copy the module tree over `beads/` with write permission.
 3. Rename `package main` to `package bdcmd` in `beads/cmd/bd/*.go`.
-4. Apply `scripts/vendor/beads-patches/*.patch` with `patch -p1`.
+4. Apply `scripts/vendor/beads-patches/*.patch` with `patch -p1` (run inside `beads/`).
 5. Update the `require` line in root `go.mod`, run `go mod tidy`, `gofmt`, and a `CGO_ENABLED=0` build.
 
 Then update the table above with the new commit and schema version.

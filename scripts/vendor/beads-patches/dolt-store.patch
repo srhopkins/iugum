@@ -1,0 +1,42 @@
+--- a/internal/storage/dolt/store.go
++++ b/internal/storage/dolt/store.go
+@@ -1171,6 +1171,11 @@
+ 					"  dolt sql-server --socket %s\n"+
+ 					"Auto-start is not supported in socket mode.",
+ 					cfg.ServerSocket, cfg.ServerSocket)
++			} else if isExternalServer(cfg, resolvedBeadsDir) {
++				// A remote or externally managed server must never be
++				// replaced by a local empty one, so do not suggest
++				// `bd dolt start`.
++				hint = ExternalServerHint(cfg.ServerHost, cfg.ServerPort)
+ 			} else if !cfg.AutoStart && doltserver.IsAutoStartDisabled() {
+ 				hint = "Dolt server auto-start is disabled (dolt.auto-start: false).\n" +
+ 					"Start the server manually:\n  bd dolt start"
+@@ -1361,8 +1366,27 @@
+ 				expectedID, dbID)
+ 	}
+ 	return nil
++}
++
++// ExternalServerHint is the message shown when an externally managed Dolt
++// server is unreachable. It deliberately does not mention `bd dolt start`.
++func ExternalServerHint(host string, port int) string {
++	if host == "" {
++		host = "127.0.0.1"
++	}
++	return fmt.Sprintf("The shared Dolt server at %s:%d is unreachable. Check the server. Do not run bd dolt start here.", host, port)
+ }
+ 
++// isExternalServer reports whether the configured server is managed outside
++// bd: a non-local host, or external mode (explicit port, --external).
++// Shared-server mode is excluded because bd starts that server itself.
++func isExternalServer(cfg *Config, beadsDir string) bool {
++	if !isLocalHost(cfg.ServerHost) {
++		return true
++	}
++	return doltserver.ResolveServerMode(beadsDir) == doltserver.ServerModeExternal && !doltserver.IsSharedServerMode()
++}
++
+ // isLocalHost returns true if the host refers to the local machine.
+ func isLocalHost(host string) bool {
+ 	switch host {
