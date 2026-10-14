@@ -75,6 +75,17 @@ func RegisterMemory(name string, f MemoryFactory) {
 	memories[name] = f
 }
 
+// CheckMemory reports whether a memory backend is registered, without opening it.
+func CheckMemory(name string) error {
+	mu.RLock()
+	_, ok := memories[name]
+	mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("iugum: unknown memory %q (compile it in, or use memory: exec)", name)
+	}
+	return nil
+}
+
 func NewMemory(name string, cfg map[string]string) (contract.Memory, error) {
 	mu.RLock()
 	f, ok := memories[name]
