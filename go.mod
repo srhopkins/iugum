@@ -245,4 +245,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/steveyegge/beads => github.com/srhopkins/beads-iugum v0.0.0-20261014005118-15174d028a10
+replace github.com/steveyegge/beads => github.com/srhopkins/beads-iugum v0.0.0-20261014033926-3dbd3320be59

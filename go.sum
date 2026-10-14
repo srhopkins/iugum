@@ -998,8 +998,8 @@ github.com/spiffe/go-spiffe/v2 v2.6.0 h1:l+DolpxNWYgruGQVV0xsfeya3CsC7m8iBzDnMps
 github.com/spiffe/go-spiffe/v2 v2.6.0/go.mod h1:gm2SeUoMZEtpnzPNs2Csc0D/gX33k1xIx7lEzqblHEs=
 github.com/srhopkins/atomdown v0.1.0 h1:5JOqEs+hh5VAkbgZ1F2xxmzU7AiIzxC3a82sGY0PVZY=
 github.com/srhopkins/atomdown v0.1.0/go.mod h1:9WjU6yNGeTyTXwh/sWfgkrqD9zJrtUf2YGPOcMjKxXA=
-github.com/srhopkins/beads-iugum v0.0.0-20261014005118-15174d028a10 h1:BoFB8DcxS4B0Jb8OllLtvbM1VXV7ZB+U79jpzyKtpPI=
-github.com/srhopkins/beads-iugum v0.0.0-20261014005118-15174d028a10/go.mod h1:bf73x5gx6BpMsYFtFrPj1EwFSKdcFfADJ1dAnQh+QHo=
+github.com/srhopkins/beads-iugum v0.0.0-20261014033926-3dbd3320be59 h1:2bOw6ZUtyNrKUCC7nAx4iCHf5AGoYE4MXQSkv6Ip2EY=
+github.com/srhopkins/beads-iugum v0.0.0-20261014033926-3dbd3320be59/go.mod h1:bf73x5gx6BpMsYFtFrPj1EwFSKdcFfADJ1dAnQh+QHo=
 github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 h1:uOfcYT+3QungH6tIGSVCR/Y3KJmgJiHcojJbMTPDZAI=
 github.com/standard-webhooks/standard-webhooks/libraries v0.0.1/go.mod h1:L1MQhA6x4dn9r007T033lsaZMv9EmBAdXyU/+EF40fo=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
