@@ -140,7 +140,7 @@ After clone, run `scripts/install-hooks.sh`. The hook blocks secrets ([gitleaks]
 ## Repo status
 
 Install: copy `iugum` onto your `PATH`.
-Vendored upstream trees: `beads/`, `silverbullet/`.
-`beads/` carries a small patch set (package rename, `Execute` export, memory hook). See `docs/beads-vendor.md`. Re-vendor with `scripts/vendor-beads.sh <version>`.
+Vendored upstream tree: `silverbullet/`.
+Beads comes from the private fork `github.com/srhopkins/beads-iugum` (package rename, `Execute` export, memory hook, `bd web` viewer). See `docs/beads-fork.md`.
 `silverbullet/` is a git subtree of `srhopkins/silverbullet`, pinned to the upstream `2.10.0` tag and unpatched. See `docs/silverbullet-vendor.md`.
 Feature beads live in this repo (prefix `iugum`).

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/srhopkins/iugum/adapter/beadview"
+	"github.com/steveyegge/beads/beadview"
 )
 
 type Record struct {

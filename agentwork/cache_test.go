@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/srhopkins/iugum/adapter/beadview"
+	"github.com/steveyegge/beads/beadview"
 	"path/filepath"
 	"strings"
 	"testing"

@@ -205,7 +205,7 @@ func run(args []string) int {
 		}
 		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		extras := app.BeadViewExtras{ReadOnly: readOnly, UI: beadviewUI(), ProjectsFile: projectsFile}
+		extras := app.BeadViewExtras{ReadOnly: readOnly, ProjectsFile: projectsFile}
 		if projectsFile != "" && dir != "" {
 			fmt.Fprintln(os.Stderr, "beadview: --projects and --dir cannot be used together")
 			return 2

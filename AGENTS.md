@@ -67,8 +67,8 @@ instead of silently, the way it went undetected for weeks before. Verify with
 
 ## Boundaries
 
-- **Edit:** `main.go`, docs, root `go.mod`, and `beads/cmd/bd` only when exporting `Execute` for in-process beads
-- **Do not edit:** the rest of `beads/`, or `silverbullet/` (upstream trees). The `beads/` patch set and re-vendor command live in `docs/beads-vendor.md` (`scripts/vendor-beads.sh <version>`). `silverbullet/` carries exactly one patch, the editor decoration seam (`docs/silverbullet-decoration-seam.md`); extend that seam instead of adding a second patch
+- **Edit:** `main.go`, docs, root `go.mod`, and `adapter/tracker/beadsadapt`
+- **Do not edit:** `silverbullet/` (upstream trees). Beads is a private fork (`docs/beads-fork.md`); change it in its own repo, not here. `silverbullet/` carries exactly one patch, the editor decoration seam (`docs/silverbullet-decoration-seam.md`); extend that seam instead of adding a second patch
 - **Beads live here** — prefix `iugum`. Feature work stays in this tracker, not `~/projects`.
 - **Remote** `srhopkins/iugum` (private). Push only when Steve says so.
 

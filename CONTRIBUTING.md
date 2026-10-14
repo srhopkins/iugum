@@ -66,7 +66,7 @@ Those plugins break a single static program.
    New functions take a `sub, obj, act` and go through the App gate.
 
 6. **Vendored trees stay in the upstream form.**
-   Edit `beads/cmd/bd` only to export `Execute` and to keep the memory hook. The patch set is in `scripts/vendor/beads-patches/`; re-vendor with `scripts/vendor-beads.sh <version>` (see `docs/beads-vendor.md`).
+   Beads is a private fork, not a vendored tree: change it in its own repo (see `docs/beads-fork.md`).
    `silverbullet/` is a git subtree of `srhopkins/silverbullet`, pinned to the upstream `2.10.0` tag. The pin, the remotes, the `git subtree pull` command, and the run-from-source switch are in `docs/silverbullet-vendor.md` (machine-readable pin: `scripts/vendor/silverbullet.pin`).
    It carries one patch: the editor decoration seam (`docs/silverbullet-decoration-seam.md`). Extend that seam rather than adding a second patch. Feature logic belongs in a plug and in `space-style`, not in the client.
    Adapter wiring lives under `adapter/`, `app/`, and `main.go`.
