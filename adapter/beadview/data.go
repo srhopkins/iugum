@@ -21,6 +21,21 @@ type Dependency struct {
 	IssueID     string `json:"issue_id"`
 	DependsOnID string `json:"depends_on_id"`
 	Type        string `json:"type"`
+	// Title and Status are set only for the `bd show` shape, which embeds
+	// the depended-on issue. They let the ticket page label a link without
+	// fetching the whole bead list.
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+// Related is a dependent issue as `bd show --include-dependents` reports
+// it: the issue that points at this bead, with the edge type.
+type Related struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	Status         string `json:"status"`
+	IssueType      string `json:"issue_type"`
+	DependencyType string `json:"dependency_type"`
 }
 
 // UnmarshalJSON accepts both dependency shapes bd emits. `bd list --json`
@@ -34,6 +49,8 @@ func (d *Dependency) UnmarshalJSON(b []byte) error {
 		Type           string `json:"type"`
 		ID             string `json:"id"`
 		DependencyType string `json:"dependency_type"`
+		Title          string `json:"title"`
+		Status         string `json:"status"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
@@ -42,6 +59,7 @@ func (d *Dependency) UnmarshalJSON(b []byte) error {
 	if d.DependsOnID == "" && raw.ID != "" {
 		d.DependsOnID = raw.ID
 		d.Type = raw.DependencyType
+		d.Title, d.Status = raw.Title, raw.Status
 	}
 	return nil
 }
@@ -70,6 +88,14 @@ type Bead struct {
 	DependencyCnt int          `json:"dependency_count"`
 	DependentCnt  int          `json:"dependent_count"`
 	CommentCnt    int          `json:"comment_count"`
+
+	// Comments and Dependents come from `bd show --include-comments
+	// --include-dependents` (FetchBead). They are empty for list results.
+	Comments   []Comment `json:"comments"`
+	Dependents []Related `json:"dependents"`
+	// DetailLoaded is true when Dependents is authoritative, so the handler
+	// can skip reading the whole bead list to compute reverse edges.
+	DetailLoaded bool `json:"-"`
 }
 
 // PriorityLabel renders "p0".."p4" (or the raw value if it is not an int).
@@ -188,6 +214,36 @@ type execFetcher struct {
 	// store). Other iugum processes on the host can still hold the
 	// startup store; runStdin retries that case.
 	mu sync.Mutex
+
+	// The list cache. listMu makes concurrent FetchBeads callers share one
+	// child process. stateMu guards cached, cachedAt and gen. A write bumps
+	// gen, so a list read that started before the write is not stored.
+	listMu   sync.Mutex
+	stateMu  sync.Mutex
+	cached   []Bead
+	cachedAt time.Time
+	gen      uint64
+}
+
+// listTTL is how long a bead list is reused. It is short because beads can
+// also change from the bd CLI and from agents, which the viewer cannot see.
+const listTTL = 2500 * time.Millisecond
+
+func (f *execFetcher) cachedList() ([]Bead, uint64, bool) {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	if f.cached != nil && time.Since(f.cachedAt) < listTTL {
+		return f.cached, f.gen, true
+	}
+	return nil, f.gen, false
+}
+
+// invalidate drops the cached list. Every write method calls it.
+func (f *execFetcher) invalidate() {
+	f.stateMu.Lock()
+	f.cached = nil
+	f.gen++
+	f.stateMu.Unlock()
 }
 
 // NewExecFetcher builds the production Fetcher. exe is the path to the
@@ -259,6 +315,28 @@ func (f *execFetcher) once(ctx context.Context, input string, args []string) ([]
 }
 
 func (f *execFetcher) FetchBeads(ctx context.Context) ([]Bead, error) {
+	if b, _, ok := f.cachedList(); ok {
+		return b, nil
+	}
+	f.listMu.Lock()
+	defer f.listMu.Unlock()
+	b, gen, ok := f.cachedList() // another caller may have filled it while we waited
+	if ok {
+		return b, nil
+	}
+	beads, err := f.fetchBeads(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.stateMu.Lock()
+	if f.gen == gen {
+		f.cached, f.cachedAt = beads, time.Now()
+	}
+	f.stateMu.Unlock()
+	return beads, nil
+}
+
+func (f *execFetcher) fetchBeads(ctx context.Context) ([]Bead, error) {
 	out, err := f.run(ctx, "list", "--json", "--all", "--limit", "0")
 	if err != nil {
 		return nil, err
@@ -271,7 +349,8 @@ func (f *execFetcher) FetchBeads(ctx context.Context) ([]Bead, error) {
 }
 
 func (f *execFetcher) FetchBead(ctx context.Context, id string) (*Bead, error) {
-	out, err := f.run(ctx, "show", "--json", "--", id)
+	// One child process returns the bead, its comments and its dependents.
+	out, err := f.run(ctx, "show", "--json", "--include-comments", "--include-dependents", "--", id)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +361,7 @@ func (f *execFetcher) FetchBead(ctx context.Context, id string) (*Bead, error) {
 	if len(beads) == 0 {
 		return nil, fmt.Errorf("bead %s not found", id)
 	}
+	beads[0].DetailLoaded = true
 	return &beads[0], nil
 }
 
@@ -350,6 +430,7 @@ func parseOne(out []byte, what string) (*Bead, error) {
 }
 
 func (f *execFetcher) CreateBead(ctx context.Context, in CreateInput) (*Bead, error) {
+	defer f.invalidate()
 	args := []string{"create", "--json", "--title=" + in.Title}
 	if in.Description != "" {
 		args = append(args, "--description="+in.Description)
@@ -368,11 +449,13 @@ func (f *execFetcher) CreateBead(ctx context.Context, in CreateInput) (*Bead, er
 }
 
 func (f *execFetcher) AddDependency(ctx context.Context, id, dependsOn string) error {
+	defer f.invalidate()
 	_, err := f.run(ctx, "dep", "add", "--json", "--depends-on="+dependsOn, "--", id)
 	return err
 }
 
 func (f *execFetcher) UpdateBead(ctx context.Context, id string, in UpdateInput) (*Bead, error) {
+	defer f.invalidate()
 	args := append([]string{"update", "--json"}, in.Args()...)
 	out, err := f.run(ctx, append(args, "--", id)...)
 	if err != nil {
@@ -382,6 +465,7 @@ func (f *execFetcher) UpdateBead(ctx context.Context, id string, in UpdateInput)
 }
 
 func (f *execFetcher) CloseBead(ctx context.Context, id, reason string) (*Bead, error) {
+	defer f.invalidate()
 	args := []string{"close", "--json"}
 	if reason != "" {
 		args = append(args, "--reason="+reason)
@@ -394,6 +478,7 @@ func (f *execFetcher) CloseBead(ctx context.Context, id, reason string) (*Bead, 
 }
 
 func (f *execFetcher) ReopenBead(ctx context.Context, id, reason string) (*Bead, error) {
+	defer f.invalidate()
 	args := []string{"reopen", "--json"}
 	if reason != "" {
 		args = append(args, "--reason="+reason)
@@ -408,6 +493,7 @@ func (f *execFetcher) ReopenBead(ctx context.Context, id, reason string) (*Bead,
 // AddComment passes the text on stdin, never as an argument, so any text
 // (including a leading "-") is stored as written.
 func (f *execFetcher) AddComment(ctx context.Context, id, text string) (*Comment, error) {
+	defer f.invalidate()
 	out, err := f.runStdin(ctx, text, "comment", "--json", "--stdin", "--", id)
 	if err != nil {
 		return nil, err

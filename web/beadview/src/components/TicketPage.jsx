@@ -50,8 +50,6 @@ function Field({ label, children }) {
  */
 export default function TicketPage({ project, id }) {
   const [bead, setBead] = useState(null)
-  const [all, setAll] = useState([])
-  const [comments, setComments] = useState([])
   const [error, setError] = useState(null)
   const [writeError, setWriteError] = useState(null)
   const [readOnly, setReadOnly] = useState(true)
@@ -61,11 +59,9 @@ export default function TicketPage({ project, id }) {
 
   const load = useCallback(async () => {
     try {
-      const [b, list, c] = await Promise.all([
-        apiFetch(beadPath(project, id)),
-        apiFetch('/api/beads', { project }),
-        apiFetch(`${beadPath(project, id)}/comments`),
-      ])
+      // One request: the bead response carries its comments, dependents
+      // and the titles of what it links to.
+      const b = await apiFetch(beadPath(project, id))
       if (!b.ok) {
         let msg = `Could not load ${project}/${id} (${b.status})`
         try {
@@ -77,20 +73,11 @@ export default function TicketPage({ project, id }) {
         return
       }
       setError(null)
-      const parts = [
-        ['bead', await b.text()],
-        ['all', list.ok ? await list.text() : '[]'],
-        ['comments', c.ok ? await c.text() : '[]'],
-      ]
-      for (const [key, text] of parts) {
-        const h = hashText(text)
-        if (hashes.current[key] === h) continue
-        hashes.current[key] = h
-        const v = JSON.parse(text)
-        if (key === 'bead') setBead(v)
-        else if (key === 'all') setAll(Array.isArray(v) ? v : [])
-        else setComments(Array.isArray(v) ? v : [])
-      }
+      const text = await b.text()
+      const h = hashText(text)
+      if (hashes.current.bead === h) return
+      hashes.current.bead = h
+      setBead(JSON.parse(text))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -132,8 +119,14 @@ export default function TicketPage({ project, id }) {
     load()
   }
 
-  const byId = new Map(all.map((b) => [b.id, b]))
-  const children = bead ? all.filter((b) => b.parent === bead.id) : []
+  // Titles and statuses for linked beads come from the bead response itself.
+  const comments = bead?.comments || []
+  const byId = new Map()
+  for (const e of bead?.dependency_edges || []) {
+    if (e.depends_on_id) byId.set(e.depends_on_id, { id: e.depends_on_id, title: e.title, status: e.status })
+  }
+  for (const d of bead?.dependents || []) byId.set(d.id, d)
+  const children = (bead?.dependents || []).filter((d) => d.dependency_type === 'parent-child')
   const parent = bead?.parent ? byId.get(bead.parent) || { id: bead.parent } : null
   const blockedBy = bead ? bead.blocked_by || [] : []
   const blocks = bead ? bead.blocks || [] : []

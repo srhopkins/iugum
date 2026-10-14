@@ -54,6 +54,12 @@ type APIBead struct {
 	DependencyCnt   int          `json:"dependency_count"`
 	DependentCnt    int          `json:"dependent_count"`
 	CommentCnt      int          `json:"comment_count"`
+	// Comments and Dependents are filled only by GET /api/bead/{id}, which
+	// reads them with the bead in one bd call. Dependents holds the beads
+	// that point at this one (children, blockees), so the ticket page needs
+	// no bead list.
+	Comments   []Comment `json:"comments"`
+	Dependents []Related `json:"dependents"`
 }
 
 // ToAPI maps one bd bead to the UI shape. blocks is the reverse "blocks"
@@ -96,7 +102,23 @@ func ToAPI(b Bead, blocks []string) APIBead {
 		DependencyCnt:   b.DependencyCnt,
 		DependentCnt:    b.DependentCnt,
 		CommentCnt:      b.CommentCnt,
+		Comments:        nonNilComments(b.Comments),
+		Dependents:      nonNilRelated(b.Dependents),
 	}
+}
+
+func nonNilComments(c []Comment) []Comment {
+	if c == nil {
+		return []Comment{}
+	}
+	return c
+}
+
+func nonNilRelated(r []Related) []Related {
+	if r == nil {
+		return []Related{}
+	}
+	return r
 }
 
 // ToAPIList maps a whole list and fills each bead's reverse Blocks index.
@@ -261,6 +283,7 @@ func (s *server) reread(ctx context.Context, p *Project, b *Bead) APIBead {
 		if out.DependentCnt == 0 {
 			out.DependentCnt = fresh.DependentCnt
 		}
+		out.Comments, out.Dependents, out.DetailLoaded = fresh.Comments, fresh.Dependents, fresh.DetailLoaded
 		if out.CommentCnt == 0 {
 			out.CommentCnt = fresh.CommentCnt
 		}
@@ -272,7 +295,14 @@ func (s *server) reread(ctx context.Context, p *Project, b *Bead) APIBead {
 // that read fails, the bead is still returned with an empty Blocks.
 func (s *server) withReverse(ctx context.Context, p *Project, b Bead) APIBead {
 	var rev []string
-	if all, err := p.F.FetchBeads(ctx); err == nil {
+	if b.DetailLoaded {
+		// bd show already listed the dependents; no list read needed.
+		for _, d := range b.Dependents {
+			if d.DependencyType == "blocks" {
+				rev = append(rev, d.ID)
+			}
+		}
+	} else if all, err := p.F.FetchBeads(ctx); err == nil {
 		rev = reverseBlocks(all)[b.ID]
 	}
 	out := ToAPI(b, rev)
