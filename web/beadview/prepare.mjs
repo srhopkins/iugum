@@ -47,3 +47,6 @@ patch('main.tsx',"import App from './App'","import App from './App'\nimport { Vi
 patch('main.tsx',': <App />',': <ViewerShell><App /></ViewerShell>')
 
 cpSync(path.join(import.meta.dirname,'prs/Details.tsx'),path.join(target,'src/components/iugum-pr-details.tsx'))
+
+// Iugum's locked dependency overlay adds safe PR comment HTML rendering.
+for(const name of ['package.json','package-lock.json'])cpSync(path.join(import.meta.dirname,name),path.join(target,name))

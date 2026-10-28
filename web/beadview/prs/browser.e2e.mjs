@@ -24,7 +24,7 @@ try{
    else if(u.pathname.endsWith('/reviews'))body={items:[{id:1,author:'reviewer',body:'Looks good',state:'APPROVED'}],has_next:false}
    else if(u.pathname.endsWith('/checks'))body={items:[{id:1,name:'Unit tests',state:'FAILURE',body:'A test failed',url:'https://github.com/alpha/api/actions/runs/1'}],has_next:false,head:'abc'}
    else if(u.pathname.endsWith('/code-comments'))body={items:[{id:3,author:'sam',body:'Please simplify this',path:'main.go'}],has_next:false}
-   else if(u.pathname.endsWith('/comments'))body={items:[{id:2,author:'build[bot]',bot:true,body:'Automation report\n'+('Detail line\n'.repeat(100))}],has_next:false}
+   else if(u.pathname.endsWith('/comments'))body={items:[{id:2,author:'build[bot]',bot:true,body:'**Automation report** ✅ [Run link](https://github.com/alpha/api/actions/runs/1)\n\n<details><summary>Run properties</summary><table><tr><th>Result</th></tr><tr><td>Passed</td></tr></table></details><script>window.badComment=true</script><img src=x onerror=window.badComment=true><a href=javascript:alert(1)>Unsafe</a>\n\n'+('Detail line\n\n'.repeat(100))}],has_next:false}
    else if(u.pathname==='/api/projects')body={projects:[{slug:'fixture',name:'fixture'}]}
    else if(u.pathname==='/api/config')body={read_only:true,multi:false,ws_port:null}
    else if(u.pathname==='/api/beads')body=[]
@@ -38,12 +38,19 @@ try{
   await page.getByLabel('Quick PR state',{exact:true}).selectOption('open')
   await page.getByRole('button',{name:'Remove Open filter',exact:true}).waitFor()
   const reviews=page.getByRole('button',{name:'Reviews for Fix paging: Approved',exact:true})
+  await reviews.waitFor()
+  assert.equal(await reviews.locator('svg').count(),1)
   await reviews.click();await page.getByText('Looks good',{exact:true}).waitFor();await page.keyboard.press('Escape')
   assert.equal(await reviews.evaluate(e=>document.activeElement===e),true)
   await page.getByRole('button',{name:'Checks for Fix paging: ✕ 2/4',exact:true}).click()
   await page.getByText('Unit tests',{exact:true}).waitFor();await page.keyboard.press('Escape')
   await page.getByRole('button',{name:'Comments for Fix paging: 2',exact:true}).click()
   await page.getByText('Bot',{exact:true}).waitFor()
+  await page.getByRole('link',{name:'Run link',exact:true}).waitFor()
+  await page.getByText('Run properties',{exact:true}).click()
+  await page.getByRole('cell',{name:'Passed',exact:true}).waitFor()
+  assert.equal(await page.locator('.pr-comment-body script,.pr-comment-body [onerror],.pr-comment-body a[href^="javascript:"]').count(),0)
+
   assert.ok(await page.locator('.pr-detail-scroll').evaluate(e=>e.scrollHeight>e.clientHeight),'comments must scroll inside the dialog')
   await page.getByRole('button',{name:'Code comments',exact:true}).click();await page.getByText('Please simplify this',{exact:true}).waitFor()
   await page.keyboard.press('Escape')

@@ -173,6 +173,8 @@ Source: Steve's supplied `github-pr-dashboard-prd.md`. The standalone packaging,
 
 Reviews, Checks, Comments, Assignees, and Stacked PRs have labeled columns and clickable controls with hover descriptions. Each opens a scrollable dialog with Escape dismissal and focus returned to its trigger. Batched summaries avoid per-row API requests; detailed history loads only when opened.
 
-Checks show passing/total plus a state indicator, with failing, pending, and skipped counts explained inside. Pages stay tied to the same head revision. Comments default to conversation comments, label bots, and provide a separate code-comments tab. Review history does not override GitHub's current review decision. Comment bodies are displayed as plain text to preserve content without executing HTML.
+Checks show passing/total plus a state indicator, with failing, pending, and skipped counts explained inside. Pages stay tied to the same head revision. Comments default to conversation comments, label bots, and provide a separate code-comments tab. Review history does not override GitHub's current review decision. Comment bodies render GitHub-flavored Markdown and sanitized HTML, including tables and expandable details. Scripts, event handlers, unsafe URLs and inline styles are removed.
 
 Empty assignees read **Unassigned**. Empty registered stack membership reads **Not in stack**, with an explanation that unregistered dependencies can still exist. API errors display **Unavailable**, never a successful or empty state.
+
+Review and check states use icons plus text: green approval/success, amber waiting/review required, and red changes requested/failure. Comments, assignees, and stack use neutral icons. Shared semantic status CSS variables provide light/dark colors; this extends the viewer theme because it has no success/warning tokens.
