@@ -39,3 +39,9 @@ patch('__tests__/board.test.tsx',"import { render, screen, waitFor, within } fro
 patch('views/BoardView.tsx',"          <div key={project} data-lane={project} className='flex flex-col gap-2'>\n            <div>\n              <ProjectTag project={project} />\n            </div>\n            <Lane columns={columns} parents={parents} beads={own} showProject={false} onSelect={onSelect} onMove={safeMove} counts={laneCounts} laneLabel={project} />\n          </div>","          <ProjectSwimlane key={project} project={project} count={own.length}>\n            <Lane columns={columns} parents={parents} beads={own} showProject={false} onSelect={onSelect} onMove={safeMove} counts={laneCounts} laneLabel={project} />\n          </ProjectSwimlane>")
 const deps=path.join(import.meta.dirname,'node_modules')
 if(existsSync(deps))symlinkSync(deps,path.join(target,'node_modules'),'dir')
+
+// PR navigation and API-backed table share the fork's existing providers.
+cpSync(path.join(import.meta.dirname,'prs/PullRequests.tsx'),path.join(target,'src/components/iugum-prs.tsx'))
+cpSync(path.join(import.meta.dirname,'prs/prs.css'),path.join(target,'src/components/iugum-prs.css'))
+patch('main.tsx',"import App from './App'","import App from './App'\nimport { ViewerShell } from './components/iugum-prs'")
+patch('main.tsx',': <App />',': <ViewerShell><App /></ViewerShell>')

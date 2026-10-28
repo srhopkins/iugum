@@ -6,7 +6,7 @@ This program is a harness. It is one static Go file. Slots are replaceable. Defa
 
 Current defaults:
 
-- **Tracker — Beads.** Issue graph and CLI. Same commands as `bd`.
+- **Tracker — Beads.** Issue graph and CLI. Same commands as `bd`. `iugum beadview` includes a read-only GitHub Pull requests section with quick filters and a local agent API. See [PR viewer usage and API](docs/github-pr-api.md).
 - **Wiki — SilverBullet.** Markdown wiki server, embedded in this file.
 - **Metrics — observe.** `iugum observe` serves sqlite + uPlot. PromQL is the query language. Config `observe: memory` stays for tests.
 - **Logs — observe.** Separate sqlite file (`observe-logs.db`). LogQL is the query language. FTS5 word search.

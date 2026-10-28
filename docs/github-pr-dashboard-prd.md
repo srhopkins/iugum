@@ -1,6 +1,6 @@
 # Product Requirements Document: Pull Requests in Iugum Beadview
 
-**Status:** Adapted draft; navigation and filter presentation are recommendations
+**Status:** First pass implemented; usage and remaining limits are in [github-pr-api.md](github-pr-api.md)
 **Version:** 1.0 (MVP)
 **Product:** Iugum Beads viewer — Pull requests section
 **Primary audience:** Individual developer, with read-only access for local AI agents
@@ -162,7 +162,7 @@ Read and follow `docs/wiki-ui-contract.md` for shared interaction rules. Beadvie
 
 ## 12. Validation and scope
 
-This document specifies a feature; it does not itself authorize implementation or deployment. Navigation and the filter drawer remain recommendations for Steve to review.
+This document specifies a feature; it does not itself authorize implementation or deployment. Steve authorized the first pass with primary sections and the filter drawer. Review/CI enrichment and complete discovery remain deferred.
 
 Implementation validation must cover query construction, normalized records, credential redaction, stale-request handling, unsupported combinations, pagination limits, and error isolation. Use isolated fixtures without real tokens for automated tests. Smoke-test the embedded viewer and existing Beads routes. Obtain independent review of the implemented code before closing implementation work.
 

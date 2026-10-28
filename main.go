@@ -91,7 +91,7 @@ const usage = `Usage: iugum <up|container|agent|net|beads|bead-activity|beadview
   beads        work-graph slot (default: beads)
   bead-activity report owner activity (working, paused, completed) with bounded expiry
   bead-hook-audit append a lifecycle hook input to a private audit log
-  beadview     beads viewer: React UI + JSON API at /api, legacy HTML pages at /legacy
+  beadview     Beads + GitHub PR viewer; ticket API /api, read-only PR API /api/v1
   wiki         notes-server slot (default: SilverBullet)
   observe      metrics+logs store and graph UI (sqlite + uPlot)
   net          network policy: plan | apply [--dry-run] | show (iptables or nftables)

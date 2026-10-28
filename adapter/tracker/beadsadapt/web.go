@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/srhopkins/iugum/prview"
 	activityui "github.com/srhopkins/iugum/web/beadview"
 	"github.com/steveyegge/beads/beadview"
 )
@@ -96,6 +97,7 @@ func ServeWeb(ctx context.Context, o WebOptions) error {
 		return cmd.Output()
 	}
 	handler = activityHandler(handler, activityProjects, run, time.Now)
+	handler = prview.Handler(handler, prview.New())
 	address := net.JoinHostPort(o.Host, fmt.Sprint(o.Port))
 	srv := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	fmt.Fprintf(os.Stdout, "iugum beadview: http://%s\n", address)
