@@ -83,13 +83,15 @@ func init() {
 	})
 }
 
-const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|run|job|prepare-pr|skill|version>
+const usage = `Usage: iugum <up|container|agent|net|beads|bead-activity|beadview|wiki|observe|run|job|prepare-pr|skill|version>
 
-  up           start wiki, observe, jobs/hooks/watch, code-server, browser, and ttyd in one process
+  up           start wiki, observe, jobs/hooks/watch, code-server, T3, browser, and ttyd in one process
   container    build or stop the iugum image (docker or podman)
   agent        scaffold and manage per-agent homes
   beads        work-graph slot (default: beads)
-  beadview     beads viewer: React UI + JSON API at /api, legacy HTML pages at /legacy
+  bead-activity report owner activity (working, paused, completed) with bounded expiry
+  bead-hook-audit append a lifecycle hook input to a private audit log
+  beadview     Beads + GitHub PR viewer; ticket API /api, read-only PR API /api/v1
   wiki         notes-server slot (default: SilverBullet)
   observe      metrics+logs store and graph UI (sqlite + uPlot)
   net          network policy: plan | apply [--dry-run] | show (iptables or nftables)
@@ -108,13 +110,15 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
                sources in the tree. Exit 1 when one is behind. Silent about a
                tree it cannot find.
 
-  iugum up [--wiki-port N] [--observe-port N] [--code-server-port N] [--browser-port N] [--ttyd-port N]
-  iugum up [--no-code-server] [--no-browser] [--no-ttyd]
+  iugum up [--wiki-port N] [--observe-port N] [--code-server-port N] [--t3-port N] [--browser-port N] [--ttyd-port N]
+  iugum up [--no-code-server] [--no-t3] [--no-browser] [--no-ttyd]
   iugum up --container [--image IMG] [--engine docker|podman|auto] [--name N] [--detach] [--dry-run]
   iugum container build [--with LIST] [--code-server 1|0] [--browser 1|0] [--tag T] [--engine E] [--dry-run]
   iugum container stop [--name N] [--engine E] [--dry-run]
   iugum agent init <name>
   iugum agent run --config FILE [--listen 127.0.0.1:3850]
+    Native pools with discover_models: true load endpoint models at startup.
+    PNG tools require MCP allow_images and an explicit vision-capable model profile.
   iugum agent up <name> [--engine E] [--dry-run] [--kind K] [--image IMG]
     [--label K=V]... [--volume SPEC]... [--network NAME] [--shm-size SIZE]
     [--env K=V]... [--user USER] [--mem SIZE] [--cpus N] [--port SPEC]...
@@ -124,8 +128,12 @@ const usage = `Usage: iugum <up|container|agent|net|beads|beadview|wiki|observe|
   iugum agent ls
   iugum agent tui|acp <name> [--dry-run]
   iugum agent checkpoint <name>
+  iugum agent speech-relay --upstream URL [--listen 127.0.0.1:8766]
+  iugum agent sessions serve [--listen 127.0.0.1:3853] [--data-dir DIR]
+    Shared sessions with authenticated, guarded selection, model and approval controls.
+    Optional --host-tools --browser-grants enables policy-gated paired browser protocol; off by default.
   iugum beads [bd args...]
-  iugum beadview [--port N] [--hostname ADDR] [--dir DIR] [--read-only]
+  iugum beadview [--port N] [--hostname ADDR] [--dir DIR | --projects FILE] [--read-only] [--viewer-config FILE]
   iugum wiki [--port N] [--hostname ADDR] [--addons FILE] [space-dir]
   iugum check-wiki-assets [repo-dir]
   iugum observe [--port N] [--hostname ADDR]
@@ -154,6 +162,9 @@ func run(args []string) int {
 	}
 	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
 		return runVersion(os.Stdout)
+	}
+	if args[0] == "bead-hook-audit" {
+		return runBeadHookAudit(args[1:])
 	}
 
 	cfg, err := config.Load()
@@ -193,14 +204,30 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "bead-activity":
+		return runBeadActivity(ctx, a, args[1:])
 	case "beadview":
-		port, host, dir, readOnly, code, ok := parseBeadViewArgs(args[1:])
+		viewerArgs, viewerConfig, verr := extractViewerConfigFlag(args[1:])
+		if verr != nil {
+			fmt.Fprintln(os.Stderr, verr)
+			return 2
+		}
+		bvArgs, projectsFile, perr := extractProjectsFlag(viewerArgs)
+		if perr != nil {
+			fmt.Fprintln(os.Stderr, perr)
+			return 2
+		}
+		port, host, dir, readOnly, code, ok := parseBeadViewArgs(bvArgs)
 		if !ok {
 			return code
 		}
 		ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		extras := app.BeadViewExtras{ReadOnly: readOnly, UI: beadviewUI()}
+		extras := app.BeadViewExtras{ReadOnly: readOnly, ProjectsFile: projectsFile, ViewerConfig: viewerConfig}
+		if projectsFile != "" && dir != "" {
+			fmt.Fprintln(os.Stderr, "beadview: --projects and --dir cannot be used together")
+			return 2
+		}
 		if err := a.ServeBeadViewWith(ctx, port, host, dir, extras); err != nil {
 			fmt.Fprintln(os.Stderr, app.DenyMessage(err))
 			return 1
@@ -539,6 +566,31 @@ func parseWikiArgs(args []string) (port int, host, space string, code int, ok bo
 	return port, host, space, 0, true
 }
 
+// extractProjectsFlag pulls --projects FILE out of the beadview args and
+// returns the rest. It is separate from parseBeadViewArgs so that function
+// keeps its shape.
+func extractProjectsFlag(args []string) (rest []string, file string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--projects":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return nil, "", fmt.Errorf("beadview: --projects requires a file")
+			}
+			i++
+			file = args[i]
+		case strings.HasPrefix(a, "--projects="):
+			file = strings.TrimPrefix(a, "--projects=")
+			if file == "" {
+				return nil, "", fmt.Errorf("beadview: --projects requires a file")
+			}
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return rest, file, nil
+}
+
 func parseBeadViewArgs(args []string) (port int, host, dir string, readOnly bool, code int, ok bool) {
 	port = 3849
 	host = "127.0.0.1"
@@ -656,4 +708,26 @@ func parseObserveArgs(args []string) (port int, host string, code int, ok bool) 
 		}
 	}
 	return port, host, 0, true
+}
+
+// extractViewerConfigFlag reads the optional shared lane defaults file.
+func extractViewerConfigFlag(args []string) (rest []string, file string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--viewer-config" {
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "--") {
+				return nil, "", fmt.Errorf("beadview: --viewer-config requires a file")
+			}
+			i++
+			file = args[i]
+		} else if strings.HasPrefix(arg, "--viewer-config=") {
+			file = strings.TrimPrefix(arg, "--viewer-config=")
+			if file == "" {
+				return nil, "", fmt.Errorf("beadview: --viewer-config requires a file")
+			}
+		} else {
+			rest = append(rest, arg)
+		}
+	}
+	return rest, file, nil
 }

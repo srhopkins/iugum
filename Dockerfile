@@ -4,7 +4,7 @@
 #
 # Build args:
 #   WITH                comma list of: claude, codex, opencode, cursor,
-#                       code-server, browser. "all" (default) installs every
+#                       code-server, t3, browser. "all" (default) installs every
 #                       item including browser. "none" installs none.
 #   CODE_SERVER         overlay on WITH: 1 adds code-server, 0 removes it,
 #                       empty follows WITH.
@@ -34,15 +34,16 @@
 ARG GO_VERSION=1.26.5
 ARG CODE_SERVER_VERSION=4.134.0
 ARG OPENCODE_VERSION=1.18.23
-ARG CLAUDE_VERSION=2.1.248
-ARG CODEX_VERSION=0.150.1
+ARG CLAUDE_VERSION=2.1.302
+ARG CODEX_VERSION=0.163.0
 ARG CURSOR_AGENT_VERSION=2026.08.25-3e8eec8
 ARG SILVERBULLET_VERSION=2.10.0
 ARG KASMVNC_VERSION=1.5.0
 ARG TTYD_VERSION=1.7.7
+ARG T3_VERSION=0.1.0
 
 # --- silverbullet -----------------------------------------------------------
-# main.go embeds silverbullet/silverbullet (the SilverBullet wiki server).
+# main.go embeds wikiblob/silverbullet (the SilverBullet wiki server).
 # That file is a build artifact and is not in git. Fetch the upstream static
 # musl release for the target CPU. The vendored silverbullet/ tree is the
 # same version (see silverbullet/package.json).
@@ -79,13 +80,21 @@ RUN set -eux; \
 
 # go.mod has local replace directives (./beads, ...), so the whole tree is
 # needed before go mod download. Module and build caches keep rebuilds fast.
+ARG SOURCE_REVISION=unknown
+ARG BUILD_DATE=unknown
 WORKDIR /src
 COPY . .
-COPY --from=silverbullet /out/silverbullet silverbullet/silverbullet
+COPY --from=silverbullet /out/silverbullet wikiblob/silverbullet
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/iugum . \
+    --mount=type=secret,id=github_netrc,target=/root/.netrc \
+    set -eu; build_cgo=off; if [ "$CGO_ENABLED" = 1 ]; then build_cgo=on; fi; \
+    GOPRIVATE=github.com/srhopkins/* go build -trimpath -ldflags="-s -w -X main.buildCommit=${SOURCE_REVISION} -X main.buildDate=${BUILD_DATE} -X main.buildCGO=${build_cgo}" -o /out/iugum . \
     && /out/iugum --help >/dev/null
+
+# Export just the source-built binary without building or replacing a runtime.
+FROM scratch AS binary-export
+COPY --from=builder /out/iugum /iugum
 
 # --- runtime ----------------------------------------------------------------
 FROM debian:13-slim
@@ -100,6 +109,7 @@ ARG CODEX_VERSION
 ARG CURSOR_AGENT_VERSION
 ARG KASMVNC_VERSION
 ARG TTYD_VERSION
+ARG T3_VERSION
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -126,7 +136,7 @@ RUN set -eux; \
 
 # Resolve WITH into /etc/iugum-with (one item per line). Unknown item = fail.
 RUN set -eu; \
-    known="claude codex opencode cursor code-server browser"; \
+    known="claude codex opencode cursor code-server t3 browser"; \
     case "$WITH" in \
       all)     items="$known" ;; \
       none|"") items="" ;; \
@@ -198,6 +208,12 @@ RUN set -eu; \
       cursor-agent --version; \
     fi
 
+# T3 is a standalone binary; no Node installation is needed for this item.
+COPY agentbox/runtime.sh /usr/local/lib/iugum/t3-install.sh
+RUN if grep -qx t3 /etc/iugum-with; then \
+      T3_VERSION="$T3_VERSION" bash /usr/local/lib/iugum/t3-install.sh install-t3; \
+    fi
+
 # code-server: official installer, pinned release. Extensions dir is shared
 # and owned by uid 1000. Binds 0.0.0.0:8080 by default.
 RUN set -eu; \
@@ -258,10 +274,12 @@ LABEL org.opencontainers.image.source="https://github.com/srhopkins/iugum" \
 
 ENV IUGUM_DATA=/data \
     HOME=/home/iugum \
+    T3CODE_HOME=/data/t3 \
+    IUGUM_T3_HOST=0.0.0.0 \
     PATH=/home/iugum/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 USER 1000
 WORKDIR /workspace
-EXPOSE 8080 6080 7681
+EXPOSE 8080 6080 7681 3773
 ENTRYPOINT ["iugum"]
 CMD ["up"]

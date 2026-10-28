@@ -11,7 +11,7 @@ require (
 	modernc.org/sqlite v1.57.0
 )
 
-require github.com/coder/acp-go-sdk v0.13.5 // indirect
+require github.com/coder/acp-go-sdk v0.13.5
 
 require (
 	cel.dev/expr v0.25.1 // indirect
@@ -123,7 +123,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/gocraft/dbr/v2 v2.7.6 // indirect
-	github.com/gofrs/flock v0.8.1 // indirect
+	github.com/gofrs/flock v0.8.1
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
@@ -184,7 +184,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.21.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
-	github.com/srhopkins/atomdown v0.1.0 // indirect
+	github.com/srhopkins/atomdown v0.1.0
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tealeg/xlsx v1.0.5 // indirect
@@ -245,4 +245,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/steveyegge/beads => ./beads
+replace github.com/steveyegge/beads => github.com/srhopkins/beads-iugum v0.0.0-20261015101231-4c8f385341a9

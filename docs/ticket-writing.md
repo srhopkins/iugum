@@ -2,7 +2,7 @@
 
 A ticket declares one outcome that someone can finish and verify. Its title and first two sentences must explain the work without requiring a meeting or another document.
 
-Use the shared template in `examples/chief/ticket-template.md` for wiki work, Beads, and Jira-ready drafts. The content contract is independent of any ticket service. Publishing is a separate authorized action; a draft is not a created Jira ticket.
+Use the shared template in `examples/agent/ticket-template.md` for wiki work, Beads, and Jira-ready drafts. The content contract is independent of any ticket service. Publishing is a separate authorized action; a draft is not a created Jira ticket.
 
 ## Titles and opening text
 
@@ -22,7 +22,7 @@ Each acceptance statement should describe a result a reviewer can observe. “Wo
 
 Separate required delivery from optional improvements. Save unrelated ideas as separate work instead of expanding the active ticket silently. A parent ticket explains the combined outcome; child tickets each produce a distinct, verifiable part. State which result a dependency supplies instead of listing unexplained IDs.
 
-The user owns commitments and deadlines. Chief may propose scope, priority, or dates, but must label proposals clearly until the user adopts them. Describe blockers and unknowns plainly without turning guesses into requirements.
+The user owns commitments and deadlines. Iugum Agent may propose scope, priority, or dates, but must label proposals clearly until the user adopts them. Describe blockers and unknowns plainly without turning guesses into requirements.
 
 ## One working document
 

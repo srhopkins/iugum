@@ -33,6 +33,8 @@ type upOpts struct {
 	ObservePort    int
 	CodeServerPort int
 	NoCodeServer   bool
+	T3Port         int
+	NoT3           bool
 	BrowserPort    int
 	NoBrowser      bool
 	TtydPort       int
@@ -53,10 +55,10 @@ type containerOpts struct {
 	With       string
 	CodeServer string // "1", "0", or empty = follow WITH
 	Browser    string // "1", "0", or empty = follow WITH
-	Tag    string
-	Engine string
-	Name   string
-	DryRun bool
+	Tag        string
+	Engine     string
+	Name       string
+	DryRun     bool
 }
 
 func runUp(ctx context.Context, a *app.App, cfg config.File, args []string) int {
@@ -112,6 +114,13 @@ func containerRunArgv(engine string, c config.Container, o upOpts, cwd, data str
 	ports := c.Ports
 	if len(ports) == 0 {
 		ports = []string{"3000:3000", "3848:3848", "8080:8080", "7681:7681"}
+		if !o.NoT3 {
+			p := o.T3Port
+			if p == 0 {
+				p = 3773
+			}
+			ports = append(ports, fmt.Sprintf("127.0.0.1:%d:%d", p, p))
+		}
 	}
 	for _, p := range ports {
 		argv = append(argv, "-p", p)
@@ -121,6 +130,12 @@ func containerRunArgv(engine string, c config.Container, o upOpts, cwd, data str
 		argv = append(argv, "-e", e)
 	}
 	argv = append(argv, "-w", "/workspace", image, "up")
+	if o.NoT3 {
+		argv = append(argv, "--no-t3")
+	}
+	if o.T3Port != 0 && o.T3Port != 3773 {
+		argv = append(argv, "--t3-port", strconv.Itoa(o.T3Port))
+	}
 	return argv
 }
 
@@ -255,6 +270,21 @@ func runUpHost(ctx context.Context, a *app.App, cfg config.File, o upOpts) int {
 			return 1
 		}
 	}
+	t3Host := firstOf(os.Getenv("IUGUM_T3_HOST"), host)
+	t3Bin := ""
+	if !o.NoT3 {
+		if p, err := lookPath("t3"); err == nil {
+			t3Bin = p
+		}
+	}
+	t3Port := 0
+	if t3Bin != "" {
+		t3Port, err = pickPort(t3Host, o.T3Port)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "up: t3: %v\n", err)
+			return 1
+		}
+	}
 	browserBin := ""
 	if !o.NoBrowser {
 		if p, err := lookPath("iugum-browser"); err == nil {
@@ -327,6 +357,12 @@ func runUpHost(ctx context.Context, a *app.App, cfg config.File, o upOpts) int {
 		fmt.Fprintf(os.Stdout, "code-server http://%s\n", net.JoinHostPort(host, strconv.Itoa(codePort)))
 	} else {
 		fmt.Fprintln(os.Stdout, "code-server off")
+	}
+	if t3Bin != "" {
+		start("t3", func(c context.Context) error { return a.RunT3(c, t3Bin, t3Host, t3Port) })
+		fmt.Fprintf(os.Stdout, "t3 http://%s/\n", net.JoinHostPort(t3Host, strconv.Itoa(t3Port)))
+	} else {
+		fmt.Fprintln(os.Stdout, "t3 off")
 	}
 	if browserBin != "" {
 		start("browser", func(c context.Context) error {
@@ -413,6 +449,7 @@ func pickPort(host string, port int) (int, error) {
 
 func parseUpArgs(args []string) (o upOpts, code int, ok bool) {
 	o.WikiPort, o.ObservePort, o.CodeServerPort, o.BrowserPort, o.TtydPort = 3000, 3848, 8080, 6080, 7681
+	o.T3Port = 3773
 	o.Host = "127.0.0.1"
 	o.Space = "./wiki"
 	for i := 0; i < len(args); i++ {
@@ -461,6 +498,12 @@ func parseUpArgs(args []string) (o upOpts, code int, ok bool) {
 			o.DryRun = true
 		case "--no-code-server":
 			o.NoCodeServer = true
+		case "--no-t3":
+			o.NoT3 = true
+		case "--t3-port":
+			if !port(&o.T3Port) {
+				return o, 2, false
+			}
 		case "--no-browser":
 			o.NoBrowser = true
 		case "--no-ttyd":

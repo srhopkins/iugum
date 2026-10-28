@@ -18,7 +18,7 @@ import (
 	"github.com/srhopkins/iugum/agentdesk"
 	"github.com/srhopkins/iugum/app"
 	"github.com/srhopkins/iugum/contract"
-	chiefui "github.com/srhopkins/iugum/plugs/chief"
+	agentchat "github.com/srhopkins/iugum/plugs/agentchat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -122,7 +122,7 @@ func runWikiAddons(ctx context.Context, a *app.App, opts contract.WikiOpts, path
 	if !c.Chat && (len(c.Agents) > 0 || len(c.Homes) > 0) {
 		return fail(fmt.Errorf("wiki: agents configured but chat is disabled"))
 	}
-	if err = chiefui.InstallFeatures(opts.Space, c.Chat, c.Search); err != nil {
+	if err = agentchat.InstallFeatures(opts.Space, c.Chat, c.Search); err != nil {
 		return fail(err)
 	}
 	if !c.Chat && !c.Search {

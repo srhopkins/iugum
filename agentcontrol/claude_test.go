@@ -47,6 +47,15 @@ func TestClaudeProcessHelper(t *testing.T) {
 			emit(map[string]any{"type": "control_response", "response": map[string]any{"request_id": id, "subtype": "success", "response": map[string]any{}}})
 			continue
 		}
+		var message struct {
+			Content string `json:"content"`
+		}
+		_ = json.Unmarshal(in["message"], &message)
+		if strings.Contains(message.Content, "cancel-permission") {
+			emit(map[string]any{"type": "control_request", "request_id": "native-1", "request": map[string]any{"subtype": "can_use_tool", "tool_name": "Bash", "input": map[string]any{}}})
+			emit(map[string]any{"type": "control_cancel_request", "request_id": "native-1"})
+			continue
+		}
 		emit(map[string]any{"type": "system", "subtype": "init", "session_id": "saved-session"})
 		go func() {
 			time.Sleep(150 * time.Millisecond)
@@ -141,5 +150,53 @@ func TestPolicyDenialAndUnmanaged(t *testing.T) {
 	_, err = m.Send(context.Background(), "chief", "unknown", "go")
 	if !errors.Is(err, ErrUnmanaged) {
 		t.Fatal(err)
+	}
+}
+
+func TestClaudeExplicitNewIdentityValidation(t *testing.T) {
+	m, r := setup(t)
+	r.NewSessionID = "bad"
+	if _, e := m.Start(context.Background(), r); e == nil {
+		t.Fatal("bad native identity accepted")
+	}
+	r.NewSessionID = "11111111-1111-4111-8111-111111111111"
+	r.ResumeSessionID = "saved"
+	if _, e := m.Start(context.Background(), r); e == nil {
+		t.Fatal("new and resume accepted")
+	}
+}
+
+type cancelPermissionObserver struct {
+	seen     chan struct{}
+	canceled chan struct{}
+}
+
+func (o cancelPermissionObserver) Event(string, string) {}
+func (o cancelPermissionObserver) Request(ctx context.Context, _ contract.AgentSessionRequest) (json.RawMessage, error) {
+	close(o.seen)
+	<-ctx.Done()
+	close(o.canceled)
+	return nil, ctx.Err()
+}
+func TestClaudeNativePermissionCancellation(t *testing.T) {
+	m, r := setup(t)
+	o := cancelPermissionObserver{make(chan struct{}), make(chan struct{})}
+	r.Observer = o
+	if _, e := m.Start(context.Background(), r); e != nil {
+		t.Fatal(e)
+	}
+	defer m.Stop(context.Background(), r.Actor, r.ID)
+	if _, e := m.Send(context.Background(), r.Actor, r.ID, "cancel-permission"); e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case <-o.seen:
+	case <-time.After(time.Second):
+		t.Fatal("native permission not surfaced")
+	}
+	select {
+	case <-o.canceled:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("native canceled permission remained actionable")
 	}
 }

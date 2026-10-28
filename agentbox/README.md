@@ -151,3 +151,14 @@ This opt-in test uses Docker's selected context. It creates and removes its own
 container and volume, checks startup and saved settings across recreation, and
 records the shared stream with local narration. It checks the recording's
 duration, decoded video frame, and non-silent audio. It needs no provider login.
+
+## Optional T3 server
+
+Build with `docker build -f agentbox/Dockerfile --build-arg T3=1 -t agentbox:t3 .`.
+`T3_VERSION` pins the official release (default `0.1.0`). The download is checked
+against the release checksum file. T3 runs as `abc`, under s6, on port 3773.
+Its pairing, projects, and conversation state stay in `/config/.t3`.
+Publish `127.0.0.1:3773:3773` or configure your HTTPS reverse proxy.
+No Electron app, systemd, or Selkies connection is needed for the web interface.
+See [existing-agent installation](../docs/t3-agent-servers.md) for a live install
+that preserves running agent sessions.

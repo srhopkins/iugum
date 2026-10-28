@@ -85,3 +85,42 @@ func TestSeparateConversationHistory(t *testing.T) {
 		t.Fatal("conversation did not survive restart")
 	}
 }
+
+func TestConversationApprovalDecisionStaysInChild(t *testing.T) {
+	s, err := New(Config{DataDir: t.TempDir(), SeparateConversations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "http://127.0.0.1:3850/api/conversations", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	var created map[string]string
+	json.Unmarshal(w.Body.Bytes(), &created)
+	child, err := s.conversationServer(created["id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := child.RequestApproval(context.Background(), ApprovalRequest{Title: "child action", Action: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"decision": "reject", "digest": a.Digest})
+	r = httptest.NewRequest("POST", "http://127.0.0.1:3850/api/approvals/"+a.ID+"?conversation="+created["id"], strings.NewReader(string(body)))
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("child decision went to main: %d %s", w.Code, w.Body.String())
+	}
+	child.mu.Lock()
+	items, err := child.approvalsLocked()
+	child.mu.Unlock()
+	if err != nil || len(items) != 1 || items[0].Status != "rejected" {
+		t.Fatal("child not resolved")
+	}
+	s.mu.Lock()
+	main, _ := s.approvalsLocked()
+	s.mu.Unlock()
+	if len(main) != 0 {
+		t.Fatal("main modified")
+	}
+}

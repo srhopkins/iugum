@@ -4,7 +4,63 @@
 set -euo pipefail
 command_name="$(basename "$0")"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/defaults/native}"
+# Reuse this integration file for the optional image installer and service.
+if [ "${1:-}" = install-t3 ]; then command_name=agentbox-t3-install; shift; fi
+if [ "${1:-}" = serve-t3 ]; then command_name=agentbox-t3-server; shift; fi
 case "$command_name" in
+  69-t3.sh)
+    # Existing desktops opt in without recreation; the marker lives in their volume.
+    [ -f /config/.t3/enabled ] || exit 0
+    # Refresh the older Claude bundled in existing images, without downgrading newer installs.
+    if claude --version 2>/dev/null | grep -q '^2.1.248 '; then
+      npm install -g @anthropic-ai/claude-code@2.1.302
+    fi
+    version="${T3_VERSION:-0.1.0}"
+    if ! command -v t3 >/dev/null || [ "$(t3 --version)" != "t3 v$version" ]; then
+      T3_VERSION="$version" bash "$0" install-t3
+    fi
+    mkdir -p /custom-services.d /usr/local/lib/agentbox
+    install -m 755 "$0" /usr/local/lib/agentbox/t3-runtime.sh
+    printf '#!/bin/sh\nexec s6-setuidgid abc /usr/local/lib/agentbox/t3-runtime.sh serve-t3\n' > /custom-services.d/t3-server
+    chmod 755 /custom-services.d/t3-server
+    # s6 registers custom services before init hooks run. On a first live install
+    # or recreation, use tmux; a subsequent restart picks up the saved service.
+    if [ ! -d /run/service/custom-svc-t3-server ]; then
+      if ! command -v tmux >/dev/null; then
+        apt-get update && apt-get install -y --no-install-recommends tmux
+      fi
+      if ! su abc -s /bin/bash -c 'tmux has-session -t t3-server 2>/dev/null'; then
+        su abc -s /bin/bash -c 'tmux new-session -d -s t3-server /usr/local/lib/agentbox/t3-runtime.sh serve-t3'
+      fi
+    fi
+    ;;
+  agentbox-t3-install)
+    version="${T3_VERSION:-0.1.0}"
+    case "$(uname -m)" in x86_64) arch=x64;; aarch64|arm64) arch=arm64;; *) echo 'Unsupported T3 architecture' >&2; exit 1;; esac
+    archive="t3-${version}-linux-${arch}.tar.gz"
+    base="https://github.com/pingdotgg/t3code/releases/download/v${version}"
+    stage="$(mktemp -d)"
+    trap 'rm -rf "$stage"' EXIT
+    curl -fsSL --retry 3 "$base/$archive" -o "$stage/$archive"
+    curl -fsSL --retry 3 "$base/SHA256SUMS" -o "$stage/SHA256SUMS"
+    (cd "$stage"; grep "  $archive$" SHA256SUMS > checksum; test -s checksum; sha256sum -c checksum)
+    tar -xzf "$stage/$archive" -C "$stage"
+    install -d /opt/t3 /usr/local/bin
+    # Keep the native terminal modules and other bundled assets beside the binary.
+    release="$(mktemp -d /opt/t3/release-${version}.XXXXXX)"
+    cp -a "$stage/t3-${version}-linux-${arch}/." "$release/"
+    chmod 755 "$release" "$release/t3"
+    ln -sfn "$release/t3" /usr/local/bin/t3
+    t3 --version
+    ;;
+  agentbox-t3-server)
+    # Pairing remains enabled. Logs contain one-time tokens, so keep them private.
+    umask 077
+    export HOME=/config T3CODE_HOME=/config/.t3
+    mkdir -p "$T3CODE_HOME"
+    cd /config
+    exec /usr/local/bin/t3 serve --host 0.0.0.0 --port "${T3_PORT:-3773}" >> "$T3CODE_HOME/server.log" 2>&1
+    ;;
   bd) exec /usr/local/bin/iugum beads "$@" ;;
   playwriter-mcp)
     export PLAYWRITER_DIRECT="${PLAYWRITER_DIRECT:-1}"
@@ -78,7 +134,7 @@ auth: none
 cert: false
 EOF
     seed "$config_root/.local/share/code-server/User/settings.json" <<'EOF'
-{"editor.fontSize":16,"terminal.integrated.fontSize":16,"workbench.startupEditor":"none","terminal.integrated.defaultProfile.linux":"bash"}
+{"editor.fontSize":16,"terminal.integrated.fontSize":16,"workbench.startupEditor":"none","terminal.integrated.defaultProfile.linux":"bash","window.autoDetectColorScheme":true}
 EOF
     # Merge MCP entries only when absent; invalid JSON stops init rather than
     # replacing the user's settings. jq writes a temp file before rename.
@@ -109,7 +165,9 @@ For browser control, code walkthroughs, screenshots, recordings, or spoken
 narration, read /usr/local/share/agentbox/WORKFLOW.md before acting.
 EOF
     seed "$config_root/.profile" <<'EOF'
-[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+if [ -n "${BASH_VERSION:-}" ] && [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+fi
 EOF
     touch "$config_root/.bashrc"
     if ! grep -q '# iugum agentbox' "$config_root/.bashrc"; then

@@ -19,7 +19,7 @@ func TestChiefCurrentTaskListEvaluation(t *testing.T) {
 	if model == "" {
 		t.Skip("set IUGUM_CHIEF_EVAL_MODEL to run the isolated subscription evaluation")
 	}
-	instructions, err := os.ReadFile("examples/chief/soul.md")
+	instructions, err := os.ReadFile("examples/agent/soul.md")
 	if err != nil {
 		t.Fatal(err)
 	}

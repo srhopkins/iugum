@@ -37,7 +37,7 @@ Choose an installed model and authenticated ACP executable. The wiki uses its co
 
 The managed plugs are `_plug/iugum-agent-chat.plug.js` and `_plug/iugum-search.plug.js`. Setting a feature false retires its plug to `.disabled` and disables its backend route. Removing a plug removes that interface on reload; set the configuration false to disable its backend too. Upgraded plug copies are preserved as `.previous`.
 
-The add-ons currently require loopback binding. The front URL proxies one internal SilverBullet server; there is one notes space. No Chief configuration or model is needed for search. The public agent-home lifecycle design is tracked separately in iugum-01r.
+The add-ons currently require loopback binding. The front URL proxies one internal SilverBullet server; there is one notes space. No Iugum Agent configuration or model is needed for search. The public agent-home lifecycle design is tracked separately in iugum-01r.
 
 ## Attach a running managed home
 

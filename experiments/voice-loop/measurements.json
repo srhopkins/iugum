@@ -1,0 +1,24 @@
+{
+  "native": {
+    "prepare_ms": 9672,
+    "release_ms": 3,
+    "normal_ms": 8779,
+    "conversation_unchanged_before_release": true,
+    "duplicate_status": 409,
+    "usage_before": 0,
+    "usage_prepared": 1,
+    "usage_released": 1,
+    "comparison_note": "normal comparison follows prepared turn; context differs; not an acoustic or human PTT measurement"
+  },
+  "audio": {
+    "mode": "controlled synthetic pipeline; preparation awaited before logical release",
+    "fixture_tts_ms": 1399,
+    "stt_ms": 494,
+    "prepare_ms": 7453,
+    "release_ms": 3,
+    "reply_tts_first_bytes_ms": 632,
+    "release_after_final_transcript_to_first_pcm_ms": 635,
+    "reply_pcm_bytes": 128400,
+    "reply": "The orange notebook is ready."
+  }
+}

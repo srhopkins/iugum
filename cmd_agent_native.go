@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,7 +26,7 @@ import (
 	"github.com/srhopkins/iugum/app"
 	"github.com/srhopkins/iugum/config"
 	"github.com/srhopkins/iugum/contract"
-	chiefui "github.com/srhopkins/iugum/plugs/chief"
+	agentchat "github.com/srhopkins/iugum/plugs/agentchat"
 	"github.com/srhopkins/iugum/policy"
 	"gopkg.in/yaml.v3"
 	"regexp"
@@ -48,6 +49,7 @@ type nativeAgentConfig struct {
 	Name                 string                     `yaml:"name"`
 	Runtime              string                     `yaml:"runtime"`
 	ChatTransport        string                     `yaml:"chat_transport"`
+	PTTDrafts            bool                       `yaml:"ptt_drafts"`
 	SubscriptionProfiles map[string]string          `yaml:"subscription_profiles"`
 	SubscriptionModel    string                     `yaml:"subscription_model"`
 	DataDir              string                     `yaml:"data_dir"`
@@ -237,7 +239,7 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 			fmt.Fprintln(errout, e)
 			return 1
 		}
-		if e = chiefui.Install(c.WikiDir); e != nil {
+		if e = agentchat.Install(c.WikiDir); e != nil {
 			fmt.Fprintln(errout, e)
 			return 1
 		}
@@ -427,6 +429,10 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 	}
 	var runtime *agentcore.Runtime
 	if c.Models.DefaultProfile != "" {
+		if e = agentcore.DiscoverProfiles(ctx, &c.Models); e != nil {
+			fmt.Fprintln(errout, e)
+			return 1
+		}
 		runtime, e = agentcore.New(c.Models, c.UsagePath, gate)
 		if e != nil {
 			fmt.Fprintln(errout, e)
@@ -475,7 +481,15 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 	}
 	chat := func(ctx context.Context, text string) (string, error) {
 		chatMu.Lock()
-		defer chatMu.Unlock()
+		locked := true
+		defer func() {
+			if locked {
+				chatMu.Unlock()
+			}
+		}()
+		if agentdesk.Preparing(ctx) && (!c.PTTDrafts || c.ChatTransport == "codex-subscription" || strings.HasPrefix(text, "/")) {
+			return "", fmt.Errorf("native API drafts are not enabled for this request")
+		}
 		historyPath := filepath.Join(c.DataDir, "context.json")
 		if id := agentdesk.ConversationID(ctx); id != "main" {
 			historyPath = filepath.Join(c.DataDir, "conversations", id, "context.json")
@@ -645,42 +659,107 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 					return fmt.Errorf("command is required")
 				}
 				return check(ctx, "agent/shell", "execute")
-			}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			}, ExecuteResult: func(ctx context.Context, raw json.RawMessage) (agentcore.ToolResult, error) {
 				var q struct{ Command string }
 				if e := json.Unmarshal(raw, &q); e != nil {
-					return "", e
+					return agentcore.ToolResult{}, e
 				}
-				return shell.Run(ctx, q.Command)
+				result, err := shell.RunDetailed(ctx, q.Command)
+				var outcome *agentcore.ToolOutcome
+				if result.Category != "" {
+					outcome = &agentcore.ToolOutcome{Category: result.Category, ExitCode: result.ExitCode}
+				}
+				return agentcore.ToolResult{Text: result.Text, Outcome: outcome}, err
 			}})
 		}
 		tools = append(tools, nativeRoutingToolsWithSubscription(runtime, c, &selectedProfile, &selectedSubscription, routingPath, check)...)
 		tools = append(tools, nativeCommitmentTools(desk, text)...)
 		tools = append(tools, extraTools...)
 		history = append(history, agentcore.Message{Role: "user", Content: text})
-		// Recent context is bounded; full conversation remains in the workspace ledger.
-		recent := history
-		if len(recent) > 24 {
-			recent = recent[len(recent)-24:]
-		}
 		runctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
+		var pinned []agentcore.Message
 		if desk != nil {
-			recent = append([]agentcore.Message{{Role: "system", Content: agentdesk.ConversationSnapshot(ctx)}}, recent...)
+			pinned = []agentcore.Message{{Role: "system", Content: agentdesk.ConversationSnapshot(ctx)}}
 		}
+		var contextState agentcore.ContextState
+		contextPath := historyPath + ".summary.json"
+		if raw, err := os.ReadFile(contextPath); err == nil {
+			// A summary is a derived cache. A corrupt cache is rebuilt from full history.
+			_ = json.Unmarshal(raw, &contextState)
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		var recent []agentcore.Message
+		var compacted agentcore.ContextState
+		var compactErr error
+		if c.ChatTransport == "codex-subscription" || c.Models.Compaction.Disabled {
+			// Keep the legacy recent-message policy for subscription transport
+			// and explicit compaction opt-out.
+			recent = history
+			if len(recent) > 24 {
+				recent = recent[len(recent)-24:]
+			}
+			compacted = contextState
+		} else {
+			recent, compacted, compactErr = runtime.CompactContext(runctx, agentcore.RunRequest{Actor: actor, Profile: selectedProfile, RunID: fmt.Sprint(time.Now().UnixNano()), Messages: pinned}, tools, history, contextState)
+			if compactErr != nil {
+				return "", compactErr
+			}
+		}
+		recent = append(pinned, recent...)
 		var r agentcore.RunResult
 		request := agentcore.RunRequest{Actor: actor, Profile: selectedProfile, RunID: fmt.Sprint(time.Now().UnixNano()), Messages: recent}
+		if agentdesk.Preparing(ctx) {
+			currentRuntime := runtime
+			chatMu.Unlock()
+			locked = false
+			prepared, err := currentRuntime.Prepare(runctx, request, tools)
+			if err != nil {
+				return "", err
+			}
+			if err = agentdesk.SetPreparedValue(ctx, &nativePreparedTurn{decision: prepared, snapshot: agentdesk.ConversationSnapshot(ctx)}); err != nil {
+				return "", err
+			}
+			return "", nil
+		}
 		if c.ChatTransport == "codex-subscription" {
 			r, e = runtime.RunSubscriptionTools(runctx, request, "codex", selectedSubscriptionModel(c, selectedSubscription), tools)
 		} else {
-			r, e = runtime.Run(runctx, request, tools)
+			if prepared, ok := agentdesk.PreparedValue(ctx).(*nativePreparedTurn); ok {
+				original := request.Messages
+				request.Messages = append([]agentcore.Message(nil), original...)
+				if len(request.Messages) > 0 && request.Messages[0].Role == "system" {
+					request.Messages[0].Content = prepared.snapshot
+				}
+				r, e = runtime.RunPrepared(runctx, request, tools, prepared.decision)
+				if errors.Is(e, agentcore.ErrStalePrepared) {
+					request.Messages = original
+					r, e = runtime.Run(runctx, request, tools)
+				}
+			} else {
+				r, e = runtime.Run(runctx, request, tools)
+			}
+		}
+		if c.ChatTransport != "codex-subscription" {
+			recordNativeEditorTurn(runtime, request, r, tools, c.DataDir, e, errout)
 		}
 		if e != nil {
-			return "", e
+			return nativeFailedTurn(r, request, tools, e, c.ChatTransport == "codex-subscription")
 		}
 		history = append(history, agentcore.Message{Role: "assistant", Content: r.Text})
 		b, _ := json.Marshal(history)
 		if e = writeAgentState(historyPath, b); e != nil {
 			return "", e
+		}
+		if c.ChatTransport != "codex-subscription" {
+			b, marshalErr := json.Marshal(compacted)
+			if marshalErr != nil {
+				return "", marshalErr
+			}
+			if e = writeAgentState(contextPath, b); e != nil {
+				return "", e
+			}
 		}
 		return r.Text, nil
 	}
@@ -791,7 +870,7 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 		}
 		chatAgents[id] = child
 	}
-	desk, e = agentdesk.New(agentdesk.Config{Settings: func(ctx context.Context, id string, value *string) (agentdesk.SettingsState, error) {
+	desk, e = agentdesk.New(agentdesk.Config{ModelSetup: nativeModelSetupControl(c.ConfigPath, check, &chatMu), Settings: func(ctx context.Context, id string, value *string) (agentdesk.SettingsState, error) {
 		chatMu.Lock()
 		defer chatMu.Unlock()
 		return nativeSettingsControl(ctx, c, check, id, value)
@@ -804,7 +883,7 @@ func runNativeAgent(ctx context.Context, a *app.App, args []string, out, errout 
 			return "", fmt.Errorf("approval execution is not ready")
 		}
 		return approvalExecutor(ctx, approval)
-	}, Name: c.Name, DataDir: c.DataDir, WikiURL: c.WikiURL, Listen: c.Listen, Metadata: map[string]string{"transport": c.ChatTransport, "model": c.SubscriptionModel, "open_mode": fmt.Sprint(*openRun)}, SeparateConversations: true, Chat: chat, Search: search, Status: statusWork, Check: check})
+	}, Name: c.Name, DataDir: c.DataDir, WikiURL: c.WikiURL, Listen: c.Listen, Metadata: map[string]string{"transport": c.ChatTransport, "model": c.SubscriptionModel, "open_mode": fmt.Sprint(*openRun), "ptt_drafts": fmt.Sprint(c.PTTDrafts && c.ChatTransport != "codex-subscription")}, AllowPTTDrafts: c.PTTDrafts && c.ChatTransport != "codex-subscription", SeparateConversations: true, Chat: chat, Search: search, Status: statusWork, Check: check})
 	if e != nil {
 		fmt.Fprintln(errout, e)
 		return 1
@@ -1062,6 +1141,7 @@ func nativeRoutingToolsWithSubscription(runtime *agentcore.Runtime, c nativeAgen
 			*selected = q.Profile
 			return "Saved native profile " + q.Profile + " for the next turn; current soft-target route is " + decision.SelectedProfile + ".", nil
 		}},
+		nativeUsageTool(runtime, check),
 	}
 }
 
@@ -1082,4 +1162,28 @@ func selectedSubscriptionModel(c nativeAgentConfig, selected string) string {
 		return model
 	}
 	return c.SubscriptionModel
+}
+
+// nativeFailedTurn keeps model-authored partial prose separate from runtime
+// failures. Messages contain the original request prefix; only this run's new
+// assistant content may be shown. Provider reasoning fields are not Message
+// content. Subscription assistant entries are internal JSON decisions, not prose.
+func nativeFailedTurn(result agentcore.RunResult, request agentcore.RunRequest, tools []agentcore.Tool, cause error, subscription bool) (string, error) {
+	var turnMessages []agentcore.Message
+	if len(result.Messages) > len(request.Messages) {
+		turnMessages = result.Messages[len(request.Messages):]
+	}
+	partial := result.Text
+	if !subscription {
+		var prose []string
+		for _, message := range turnMessages {
+			if message.Role == "assistant" && message.ToolCallID == "" && strings.TrimSpace(message.Content) != "" {
+				prose = append(prose, message.Content)
+			}
+		}
+		if len(prose) > 0 {
+			partial = strings.Join(prose, "\n\n")
+		}
+	}
+	return partial, agentdesk.NewRuntimeTurnError(cause, agentcore.FailedToolLoopSummary(turnMessages, tools))
 }

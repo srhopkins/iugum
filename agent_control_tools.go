@@ -102,6 +102,22 @@ func (b *agentControlBridge) state(ctx context.Context, id string, write bool) (
 	}
 	return s, b.scope(ctx, s, write)
 }
+
+// Missing-destination correction is limited to proven prequeue failures.
+// Never include a chosen ID, prompt, path, or account in this fixed guidance.
+func invalidControlDestination() error {
+	return &agentcore.InvalidToolArguments{Message: "Select a managed session ID returned by claude_sessions. Unrelated tmux, provider, and transcript IDs are not destinations. If the list is empty, choose another already-authorized supported route or request explicit approval to start a managed session. Do not automatically start or reconnect a session."}
+}
+func (b *agentControlBridge) sendState(ctx context.Context, id string) (agentcontrol.State, error) {
+	s, err := b.manager.SnapshotForSend(ctx, b.actor, id)
+	if agentcontrol.IsPrequeueDestinationError(err, agentcontrol.ErrSessionNotFound) {
+		return s, invalidControlDestination()
+	}
+	if err != nil {
+		return s, err
+	}
+	return s, b.scope(ctx, s, true)
+}
 func (b *agentControlBridge) validateStart(ctx context.Context, p *agentControlStartPayload) error {
 	if b.manager == nil {
 		return errors.New("Claude session manager unavailable")
@@ -149,7 +165,7 @@ func (b *agentControlBridge) validateStart(ctx context.Context, p *agentControlS
 func (b *agentControlBridge) Tools() []agentcore.Tool {
 	stringField := map[string]string{"type": "string"}
 	idSchema := map[string]any{"type": "object", "properties": map[string]any{"id": stringField}, "required": []string{"id"}, "additionalProperties": false}
-	tools := []agentcore.Tool{{Name: "claude_sessions", Description: "List authorized Claude sessions managed by Chief. This does not claim control of unrelated terminal sessions. Inspect status before steering.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+	tools := []agentcore.Tool{{Name: "claude_sessions", Description: "List authorized Claude sessions managed by Iugum Agent. This does not claim control of unrelated terminal sessions. Inspect status before steering.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 		if err := b.allowed(ctx, "agent/session", "list"); err != nil {
 			return "", err
 		}
@@ -181,7 +197,13 @@ func (b *agentControlBridge) Tools() []agentcore.Tool {
 				return "", err
 			}
 			write := action != "status" && action != "events"
-			s, err := b.state(ctx, q.ID, write)
+			var s agentcontrol.State
+			var err error
+			if action == "send" {
+				s, err = b.sendState(ctx, q.ID)
+			} else {
+				s, err = b.state(ctx, q.ID, write)
+			}
 			if err != nil {
 				return "", err
 			}
@@ -193,6 +215,10 @@ func (b *agentControlBridge) Tools() []agentcore.Tool {
 				return controlJSON(v, err)
 			case "send":
 				v, err := b.manager.Send(ctx, b.actor, q.ID, q.Prompt)
+				// Send returns ErrUnmanaged only before journaling or queue mutation.
+				if agentcontrol.IsPrequeueDestinationError(err, agentcontrol.ErrUnmanaged) {
+					return "", invalidControlDestination()
+				}
 				return controlJSON(v, err)
 			case "interrupt":
 				err := b.manager.Interrupt(ctx, b.actor, q.ID)

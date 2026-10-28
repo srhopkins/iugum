@@ -18,12 +18,29 @@ type Shell struct {
 	MaxOutput int
 }
 
+type ShellResult struct {
+	Text     string
+	Category string
+	ExitCode int
+}
+
+// Run preserves the original text and error contract.
 func (s Shell) Run(ctx context.Context, command string) (string, error) {
+	result, err := s.run(ctx, command, false)
+	return result.Text, err
+}
+
+// RunDetailed reports process outcome without interpreting command output.
+func (s Shell) RunDetailed(ctx context.Context, command string) (ShellResult, error) {
+	return s.run(ctx, command, true)
+}
+
+func (s Shell) run(ctx context.Context, command string, detailed bool) (ShellResult, error) {
 	if strings.TrimSpace(command) == "" {
-		return "", fmt.Errorf("command is required")
+		return ShellResult{}, fmt.Errorf("command is required")
 	}
 	if s.Dir == "" {
-		return "", fmt.Errorf("shell working directory is not configured")
+		return ShellResult{}, fmt.Errorf("shell working directory is not configured")
 	}
 	if s.Timeout <= 0 {
 		s.Timeout = 30 * time.Second
@@ -41,7 +58,10 @@ func (s Shell) Run(ctx context.Context, command string) (string, error) {
 	err := cmd.Run()
 	result := output.String()
 	if ctx.Err() == context.DeadlineExceeded {
-		return result, fmt.Errorf("command timed out after %s", s.Timeout)
+		return ShellResult{Text: result, Category: "timeout"}, fmt.Errorf("command timed out after %s", s.Timeout)
+	}
+	if detailed && ctx.Err() == context.Canceled {
+		return ShellResult{Text: result, Category: "canceled"}, ctx.Err()
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -49,11 +69,11 @@ func (s Shell) Run(ctx context.Context, command string) (string, error) {
 			if result != "" {
 				result += "\n"
 			}
-			return fmt.Sprintf("%s[exit status %d]", result, exitErr.ExitCode()), nil
+			return ShellResult{Text: fmt.Sprintf("%s[exit status %d]", result, exitErr.ExitCode()), Category: "exit", ExitCode: exitErr.ExitCode()}, nil
 		}
-		return result, fmt.Errorf("command failed: %w", err)
+		return ShellResult{Text: result, Category: "launch_error"}, fmt.Errorf("command failed: %w", err)
 	}
-	return result, nil
+	return ShellResult{Text: result, Category: "exit", ExitCode: 0}, nil
 }
 
 type limitedOutput struct {

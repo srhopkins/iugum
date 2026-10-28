@@ -19,7 +19,7 @@ func TestNativeWikiIsTopLevelAndAPISeparate(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, tc := range []struct{ path, want string }{{"/.proxy/iugum/assets/ui-styles.js", "export const panelCSS"}, {"/.proxy/iugum/assets/ui-controls.js", "export function actionMenu"}, {"/", "Native wiki /"}, {"/Commitments", "Native wiki /Commitments"}, {"/.fs/Commitments.md", "Native wiki /.fs/Commitments.md"}, {"/.proxy/iugum/api/status", `"name":"test"`}, {"/api/status", `"name":"test"`}} {
+	for _, tc := range []struct{ path, want string }{{"/.proxy/iugum/assets/agentchat.js", "export function searchCards"}, {"/.proxy/iugum/assets/agent-chat.js", "export function searchCards"}, {"/.proxy/iugum/assets/chief.js", "export function searchCards"}, {"/.proxy/iugum/assets/ui-styles.js", "export const panelCSS"}, {"/.proxy/iugum/assets/ui-controls.js", "export function actionMenu"}, {"/", "Native wiki /"}, {"/Commitments", "Native wiki /Commitments"}, {"/.fs/Commitments.md", "Native wiki /.fs/Commitments.md"}, {"/.proxy/iugum/api/status", `"name":"test"`}, {"/api/status", `"name":"test"`}} {
 		req := httptest.NewRequest("GET", "http://127.0.0.1:3850"+tc.path, nil)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)

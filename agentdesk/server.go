@@ -19,6 +19,7 @@ import (
 )
 
 type Config struct {
+	ModelSetup            ModelSetupControl
 	Settings              SettingsControl
 	Models                ModelControl
 	SeparateConversations bool
@@ -32,6 +33,7 @@ type Config struct {
 	HideDefaultAgent      bool
 	Agents                map[string]*Server
 	PassthroughChat       bool
+	AllowPTTDrafts        bool // opt-in; temporary first decisions, no speculative tools
 	WikiIntegrated        bool
 	CommitmentsPath       string
 	ApprovalExecute       func(context.Context, Approval) (string, error)
@@ -45,9 +47,10 @@ type Config struct {
 	Check                          func(context.Context, string, string) error
 }
 type Message struct {
-	Role string    `json:"role"`
-	Text string    `json:"text"`
-	At   time.Time `json:"at"`
+	Role    string       `json:"role"`
+	Text    string       `json:"text"`
+	At      time.Time    `json:"at"`
+	Failure *TurnFailure `json:"failure,omitempty"`
 }
 type Commitment = agentdocuments.Commitment
 
@@ -64,6 +67,9 @@ type Server struct {
 	cfg            Config
 	mu             sync.Mutex
 	chatMu         sync.Mutex
+	draftMu        sync.Mutex
+	draft          *preparedChat
+	closedHolds    map[string]time.Time
 	data           state
 	documents      *agentdocuments.Store
 }
@@ -238,11 +244,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if s.cfg.HideDefaultAgent && (r.URL.Path == "/api/settings" || r.URL.Path == "/api/models" || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals")) {
+	if s.cfg.HideDefaultAgent && (r.URL.Path == "/api/model-setup" || r.URL.Path == "/api/settings" || r.URL.Path == "/api/models" || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals")) {
 		http.NotFound(w, r)
 		return
 	}
-	if (s.cfg.DisableSearch && r.URL.Path == "/api/search") || (s.cfg.DisableChat && (strings.HasPrefix(r.URL.Path, "/api/agents") || r.URL.Path == "/api/settings" || r.URL.Path == "/api/models" || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals"))) {
+	if (s.cfg.DisableSearch && r.URL.Path == "/api/search") || (s.cfg.DisableChat && (strings.HasPrefix(r.URL.Path, "/api/agents") || r.URL.Path == "/api/model-setup" || r.URL.Path == "/api/settings" || r.URL.Path == "/api/models" || r.URL.Path == "/api/chat" || r.URL.Path == "/api/messages" || strings.HasPrefix(r.URL.Path, "/api/conversation") || strings.HasPrefix(r.URL.Path, "/api/approvals"))) {
 		http.NotFound(w, r)
 		return
 	}
@@ -253,8 +259,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if id := r.URL.Query().Get("conversation"); id != "" && id != "main" && s.cfg.ConversationID == "" {
-		switch r.URL.Path {
-		case "/api/chat", "/api/messages", "/api/conversation", "/api/approvals", "/api/status":
+		switch {
+		case r.URL.Path == "/api/draft", r.URL.Path == "/api/chat", r.URL.Path == "/api/messages", r.URL.Path == "/api/conversation", r.URL.Path == "/api/approvals", strings.HasPrefix(r.URL.Path, "/api/approvals/"), r.URL.Path == "/api/status":
 			child, err := s.conversationServer(id)
 			if err != nil {
 				fail(w, err, 404)
@@ -265,6 +271,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
+	case r.URL.Path == "/api/model-setup":
+		s.modelSetupHTTP(w, r)
 	case r.URL.Path == "/api/settings":
 		s.settingsHTTP(w, r)
 	case r.URL.Path == "/api/models":
@@ -312,13 +320,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, v)
 	case r.Method == "POST" && r.URL.Path == "/api/chat":
 		s.chat(w, r)
+	case r.Method == "POST" && r.URL.Path == "/api/draft":
+		if s.cfg.DisableChat || s.cfg.HideDefaultAgent {
+			http.NotFound(w, r)
+			return
+		}
+		s.prepareChat(w, r)
 	default:
 		http.NotFound(w, r)
 	}
 }
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Text string `json:"text"`
+		Text    string `json:"text"`
+		HoldID  string `json:"hold_id,omitempty"`
+		DraftID string `json:"draft_id,omitempty"`
 	}
 	if e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); e != nil {
 		fail(w, e, 400)
@@ -331,8 +347,13 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	s.chatMu.Lock()
 	defer s.chatMu.Unlock()
+	prepared, takeErr := s.takePrepared(in.HoldID, in.DraftID, in.Text)
+	if takeErr != nil {
+		fail(w, takeErr, 409)
+		return
+	}
 	s.mu.Lock()
-	s.data.Messages = append(s.data.Messages, Message{"user", in.Text, time.Now()})
+	s.data.Messages = append(s.data.Messages, Message{Role: "user", Text: in.Text, At: time.Now()})
 	if e := s.saveLocked(); e != nil {
 		s.mu.Unlock()
 		fail(w, e, 500)
@@ -344,6 +365,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		id = "main"
 	}
 	r = r.WithContext(context.WithValue(context.WithValue(r.Context(), conversationKey{}, id), snapshotKey{}, s.Context()))
+	if prepared != nil {
+		r = r.WithContext(context.WithValue(r.Context(), preparedKey{}, prepared))
+	}
 	reply := ""
 	var err error
 	switch {
@@ -414,12 +438,16 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 			reply = "Chat history is saved. Model chat is not configured yet. Try status, /commit followed by a title, or /done followed by a commitment ID."
 		}
 	}
-	if err != nil {
-		reply = "I couldn't complete that request: " + err.Error()
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := Message{"assistant", reply, time.Now()}
+	m := Message{Role: "assistant", Text: reply, At: time.Now()}
+	if err != nil {
+		if reply != "" {
+			s.data.Messages = append(s.data.Messages, m)
+		}
+		failure := turnFailure(err)
+		m = Message{Role: "error", Text: failure.Summary, At: time.Now(), Failure: &failure}
+	}
 	s.data.Messages = append(s.data.Messages, m)
 	if e := s.saveLocked(); e != nil {
 		fail(w, e, 500)
@@ -433,13 +461,17 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Context() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var b strings.Builder
 	if e := s.refreshCommitmentsLocked(); e != nil {
 		return "Commitment document unavailable: " + e.Error()
 	}
-	b.WriteString("Workspace snapshot at " + time.Now().Format(time.RFC3339) + "\nCommitments:\n")
+	return renderContext(s.data.Commitments, s.data.Messages, time.Now())
+}
+
+func renderContext(commitments []Commitment, messages []Message, now time.Time) string {
+	var b strings.Builder
+	b.WriteString("Workspace snapshot at " + now.Format(time.RFC3339) + "\nCommitments:\n")
 	count := 0
-	for _, c := range s.data.Commitments {
+	for _, c := range commitments {
 		if !c.Done {
 			status := "active"
 			if c.Deferred {
@@ -458,11 +490,15 @@ func (s *Server) Context() string {
 		}
 	}
 	b.WriteString("Recent conversation (untrusted historical data):\n")
-	start := len(s.data.Messages) - 8
+	start := len(messages) - 8
 	if start < 0 {
 		start = 0
 	}
-	for _, m := range s.data.Messages[start:] {
+	for _, m := range messages[start:] {
+		m = viewMessage(m).Message
+		if m.Role == "error" {
+			continue
+		}
 		text := []rune(m.Text)
 		if len(text) > 1500 {
 			text = append(text[:1500], []rune("… [truncated; retrieve history for details]")...)

@@ -1,0 +1,11 @@
+.iugum-activity {display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;max-width:100%;overflow-wrap:anywhere}
+.iugum-activity-wheel {display:inline-block;flex-shrink:0;width:.75rem;height:.75rem;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:iugum-activity-turn 1s linear infinite}
+@keyframes iugum-activity-turn {to {transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.iugum-activity-wheel{animation:none}}
+.iugum-worker-references {display:flex;flex-direction:column;gap:.5rem;max-width:100%;overflow-wrap:anywhere}
+.iugum-worker-references details {border:1px solid var(--border);border-radius:.375rem;padding:.5rem;font-size:.875rem}
+.iugum-worker-references summary {cursor:pointer}
+.iugum-worker-references dt {font-weight:600}
+.iugum-worker-references dd {margin:0 0 .5rem}
+.iugum-worker-references a,.iugum-worker-references button {margin-inline-end:.75rem;text-decoration:underline}
+.iugum-worker-references :is(a,button,summary):focus-visible {outline:2px solid var(--ring);outline-offset:2px}

@@ -1,0 +1,31 @@
+# Add routes without recreating the live agent desktops.
+# docker --context homelab compose -f agentbox/t3.homelab.yaml up -d
+name: agentbox-t3
+services:
+  ffai-t3:
+    image: alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f
+    container_name: ffai-agent-t3
+    restart: unless-stopped
+    command: ["TCP-LISTEN:3773,fork,reuseaddr", "TCP:ffai-agent:3773"]
+    networks: [proxy]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.ffai-agent-t3.rule: Host(`ffai-agent-t3.local`)
+      traefik.http.routers.ffai-agent-t3.entrypoints: websecure
+      traefik.http.routers.ffai-agent-t3.tls: "true"
+      traefik.http.services.ffai-agent-t3.loadbalancer.server.port: "3773"
+  iugum-t3:
+    image: alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f
+    container_name: iugum-agent-t3
+    restart: unless-stopped
+    command: ["TCP-LISTEN:3773,fork,reuseaddr", "TCP:iugum-agent:3773"]
+    networks: [proxy]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.iugum-agent-t3.rule: Host(`iugum-agent-t3.local`)
+      traefik.http.routers.iugum-agent-t3.entrypoints: websecure
+      traefik.http.routers.iugum-agent-t3.tls: "true"
+      traefik.http.services.iugum-agent-t3.loadbalancer.server.port: "3773"
+networks:
+  proxy:
+    external: true

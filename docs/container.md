@@ -12,13 +12,14 @@ The agentbox image has three tiers of tools.
 | Tier | What | How you choose it |
 |------|------|-------------------|
 | Core | Always present: Selkies desktop, Google Chrome (amd64; the default browser, profile in `/config/.chrome-profile`, CDP port 9222), code-server, Claude Code, Codex, OpenCode, Cursor Agent, Playwriter, Playwright Chromium, iugum and `bd`, git, gh, ffmpeg, sox, uv. | Nothing to choose. |
-| Optional | A different desktop base. | Build args, set at `docker build`. |
+| Optional | A different desktop base and the T3 web server. | Build args, set at `docker build`. |
 | Custom | Your own tools, installed when the container starts. | Mount a folder at `/opt/agentbox/install.d`. |
 
 ### Optional: build args
 
 | Arg | Default | Meaning |
 |-----|---------|---------|
+| `T3` / `T3_VERSION` | `0` / `0.1.0` | Set `T3=1` to install the headless T3 server and start it with s6 on port 3773. |
 | `BASE` | `chromium` | `chromium` uses the Chromium-only Selkies base (`lscr.io/linuxserver/chrome`). `kde` uses the full KDE desktop (`lscr.io/linuxserver/webtop:ubuntu-kde`). |
 | `CHROME_IMAGE` / `KDE_IMAGE` | pinned by digest | Override the base image for that `BASE`. |
 
@@ -91,16 +92,17 @@ docker build --build-arg WITH=none --build-arg CGO_ENABLED=0 -t iugum:slim .
 
 | Arg | Default | Meaning |
 |-----|---------|---------|
-| `WITH` | `all` | Comma list: `claude`, `codex`, `opencode`, `cursor`, `code-server`, `browser`. `all` installs every item, including Chromium + KasmVNC. `none` installs no item. An unknown item stops the build. |
+| `WITH` | `all` | Comma list: `claude`, `codex`, `opencode`, `cursor`, `code-server`, `t3`, `browser`. `all` installs every item, including Chromium + KasmVNC. `none` installs no item. An unknown item stops the build. |
 | `CODE_SERVER` | (empty) | Overlay on `WITH`. `1` adds code-server. `0` removes it. Empty follows `WITH`. |
 | `BROWSER` | (empty) | Overlay on `WITH`. `1` adds Chromium + KasmVNC. `0` opts out even when `WITH=all`. Empty follows `WITH`. |
 | `KASMVNC_VERSION` | `1.5.0` | KasmVNC deb when `WITH` has `browser`. |
 | `CGO_ENABLED` | `1` | `1` links the embedded Dolt database (the storage for `iugum beads`). `0` makes a static program with no C libraries. A static program cannot open the embedded Dolt database. |
 | `GO_VERSION` | `1.26.5` | Go toolchain tag for the builder stage. |
+| `T3_VERSION` | `0.1.0` | T3 official Linux release when `WITH` includes `t3`. Archive checksum is verified. |
 | `CODE_SERVER_VERSION` | `4.134.0` | code-server release to install when `WITH` has `code-server`. |
 | `OPENCODE_VERSION` | `1.18.23` | `opencode-ai` npm version when `WITH` has `opencode`. |
-| `CLAUDE_VERSION` | `2.1.248` | `@anthropic-ai/claude-code` npm version when `WITH` has `claude`. |
-| `CODEX_VERSION` | `0.150.1` | `@openai/codex` npm version when `WITH` has `codex`. |
+| `CLAUDE_VERSION` | `2.1.302` | `@anthropic-ai/claude-code` npm version when `WITH` has `claude`. |
+| `CODEX_VERSION` | `0.163.0` | `@openai/codex` npm version when `WITH` has `codex`. |
 | `CURSOR_AGENT_VERSION` | `2026.08.25-3e8eec8` | Cursor Agent lab build when `WITH` has `cursor`. Binary names: `agent` and `cursor-agent`. |
 | `SILVERBULLET_VERSION` | `2.10.0` | SilverBullet (the wiki server that iugum embeds) release to fetch. |
 
@@ -113,6 +115,7 @@ docker build --build-arg WITH=none --build-arg CGO_ENABLED=0 -t iugum:slim .
 | `opencode` | `opencode` | `npm i -g opencode-ai@OPENCODE_VERSION` |
 | `cursor` | `agent` / `cursor-agent` | Pinned tarball from `downloads.cursor.com/lab/CURSOR_AGENT_VERSION` |
 | `code-server` | `code-server` | Official install script, pinned to `CODE_SERVER_VERSION` |
+| `t3` | `t3` | Official Linux release bundle with native terminal modules; SHA256SUMS verified |
 | `browser` | `iugum-browser` | Debian Chromium + KasmVNC. Open `/` on port 6080. Chrome/Edge on the host get seamless clipboard. |
 
 Node 22 is installed only when `WITH` has `claude`, `codex`, or `opencode`.
@@ -192,3 +195,32 @@ Both run the same program.
 | Embedded Dolt | Needs a CGO build on the host | `CGO_ENABLED=1` (default) |
 
 Use the host build for daily work on this machine. Use the container to give an agent a clean, repeatable toolset, or to run iugum on a machine without Go.
+
+## Optional T3 web server
+
+The service image accepts `iugum container build --with codex,claude,t3`.
+`WITH=all` includes T3. `WITH=none` excludes it. T3 uses its own runtime;
+it does not require a desktop or Selkies.
+
+When `t3` is on PATH, `iugum up` starts it on port 3773 with pairing enabled.
+Use `--no-t3` to skip it or `--t3-port N` to change its port.
+Host mode binds localhost by default. The service image sets `IUGUM_T3_HOST=0.0.0.0`
+so T3 listens on the container network. The default host port mapping exposes
+T3 only on the Docker host's loopback address. This does not change other services' binds.
+Custom `container.ports` replaces the default mappings, including T3.
+The service image stores T3 state under `/data/t3`; preserve the `/data` volume.
+
+For Selkies, build with `--build-arg T3=1 -f agentbox/Dockerfile`.
+State and private startup logs are under `/config/.t3`. Publish container port
+3773 through a trusted HTTPS reverse proxy or a loopback port mapping.
+The [T3 deployment guide](t3-agent-servers.md) covers the existing homelab agents.
+
+## Private build dependency
+
+The Go build downloads the private `srhopkins/beads-iugum` module. Provide a
+BuildKit secret named `github_netrc` containing a GitHub `.netrc` entry with
+read access to that repository. Pass `--secret id=github_netrc,src=<private-file>`
+to either Dockerfile build. The secret is mounted only during compilation and
+is not copied into an image layer. Keep the source file private and delete it
+after the build. CI must provide a credential that can read the dependency;
+the current repository's default token does not automatically grant that access.

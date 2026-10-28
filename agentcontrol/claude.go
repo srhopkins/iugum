@@ -20,19 +20,49 @@ import (
 	"github.com/srhopkins/iugum/contract"
 )
 
+// ErrSessionNotFound is returned only after authorization and before any action.
+var ErrSessionNotFound = errors.New("managed session destination not found")
+
 var ErrUnmanaged = errors.New("session is not managed by this process; reconnect its saved session or start a managed session")
+
+// prequeueDestinationError records the exact manager-owned failure branch.
+// Its fixed reason stays available to errors.Is without exposing filesystem data.
+type prequeueDestinationError struct{ reason error }
+
+func (e *prequeueDestinationError) Error() string { return e.reason.Error() }
+func (e *prequeueDestinationError) Unwrap() error { return e.reason }
+
+// IsPrequeueDestinationError checks only the immediate manager-owned marker.
+// Callers must use ErrSessionNotFound only for their preflight Snapshot and
+// ErrUnmanaged only for Send. A missing postqueue Snapshot is not recoverable.
+// Never traverse arbitrary policy-error chains to infer branch provenance.
+func IsPrequeueDestinationError(err, reason error) bool {
+	known, ok := err.(*prequeueDestinationError)
+	return ok && known.reason == reason
+}
+
+type sessionAuthorizationError struct{ cause error }
+
+func (e *sessionAuthorizationError) Error() string { return e.cause.Error() }
+func (e *sessionAuthorizationError) Unwrap() error { return e.cause }
+
+var nativeSessionID = regexp.MustCompile(`(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+
 var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 type StartRequest struct {
-	Actor           string        `json:"actor"`
-	ID              string        `json:"id"`
-	ResumeSessionID string        `json:"resume_session_id,omitempty"`
-	Project         string        `json:"project"`
-	Account         string        `json:"account"`
-	ConfigDir       string        `json:"config_dir"`
-	Model           string        `json:"model,omitempty"`
-	AllowedTools    []string      `json:"allowed_tools,omitempty"`
-	MaxDuration     time.Duration `json:"max_duration,omitempty"`
+	NewSessionID    string                        `json:"new_session_id,omitempty"`
+	Observer        contract.AgentSessionObserver `json:"-"`
+	StrictResume    bool                          `json:"-"`
+	Actor           string                        `json:"actor"`
+	ID              string                        `json:"id"`
+	ResumeSessionID string                        `json:"resume_session_id,omitempty"`
+	Project         string                        `json:"project"`
+	Account         string                        `json:"account"`
+	ConfigDir       string                        `json:"config_dir"`
+	Model           string                        `json:"model,omitempty"`
+	AllowedTools    []string                      `json:"allowed_tools,omitempty"`
+	MaxDuration     time.Duration                 `json:"max_duration,omitempty"`
 }
 type Pending struct {
 	ID       string    `json:"id"`
@@ -58,13 +88,15 @@ type Event struct {
 	Data      json.RawMessage `json:"data"`
 }
 type process struct {
-	state   State
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	cancel  context.CancelFunc
-	done    chan struct{}
-	writeMu sync.Mutex
-	acks    map[string]chan error
+	state       State
+	ctx         context.Context
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	cancel      context.CancelFunc
+	done        chan struct{}
+	writeMu     sync.Mutex
+	acks        map[string]chan error
+	permissions map[string]context.CancelFunc
 }
 type Manager struct {
 	// VerifyAccount is an injection seam for tests or stricter host identity checks. Nil uses Claude auth status.
@@ -101,7 +133,11 @@ func (m *Manager) authorize(ctx context.Context, actor, id, action string) error
 	if actor == "" || !validID.MatchString(id) {
 		return errors.New("agentcontrol: valid actor and session ID required")
 	}
-	return m.gate.Enforce(ctx, contract.Request{Sub: actor, Obj: "agent/session/" + id, Act: action})
+	if err := m.gate.Enforce(ctx, contract.Request{Sub: actor, Obj: "agent/session/" + id, Act: action}); err != nil {
+		// Policy may wrap any cause. It cannot establish destination provenance.
+		return &sessionAuthorizationError{cause: err}
+	}
+	return nil
 }
 func (m *Manager) path(id, suffix string) string { return filepath.Join(m.root, id+suffix) }
 func (m *Manager) save(p *process) error {
@@ -152,6 +188,9 @@ func (m *Manager) Start(ctx context.Context, r StartRequest) (State, error) {
 	if err := m.authorize(ctx, r.Actor, r.ID, "start"); err != nil {
 		return State{}, err
 	}
+	if r.NewSessionID != "" && (r.ResumeSessionID != "" || !nativeSessionID.MatchString(r.NewSessionID)) {
+		return State{}, errors.New("agentcontrol: invalid or conflicting new session ID")
+	}
 	if r.ResumeSessionID != "" && !validID.MatchString(r.ResumeSessionID) {
 		return State{}, errors.New("agentcontrol: invalid resume session ID")
 	}
@@ -187,9 +226,12 @@ func (m *Manager) Start(ctx context.Context, r StartRequest) (State, error) {
 	if err := verify(ctx, binary, r); err != nil {
 		return State{}, err
 	}
-	args := []string{"--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--permission-mode", "manual", "--permission-prompts", "none"}
+	args := []string{"--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages", "--permission-mode", "default", "--permission-prompt-tool", "stdio", "--include-partial-messages"}
 	if r.ResumeSessionID != "" {
 		args = append(args, "--resume", r.ResumeSessionID)
+	}
+	if r.NewSessionID != "" {
+		args = append(args, "--session-id", r.NewSessionID)
 	}
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
@@ -213,7 +255,10 @@ func (m *Manager) Start(ctx context.Context, r StartRequest) (State, error) {
 		cancel()
 		return State{}, err
 	}
-	p := &process{state: State{ID: r.ID, SessionID: r.ResumeSessionID, Status: "starting", Request: r}, cmd: cmd, stdin: stdin, cancel: cancel, done: make(chan struct{}), acks: map[string]chan error{}}
+	p := &process{ctx: runCtx, state: State{ID: r.ID, SessionID: r.ResumeSessionID, Status: "starting", Request: r}, cmd: cmd, stdin: stdin, cancel: cancel, done: make(chan struct{}), acks: map[string]chan error{}}
+	if r.NewSessionID != "" {
+		p.state.SessionID = r.NewSessionID
+	}
 	m.mu.Lock()
 	if _, exists := m.processes[r.ID]; exists {
 		m.mu.Unlock()
@@ -295,6 +340,7 @@ func (m *Manager) read(p *process, stdout io.Reader) {
 		b := append([]byte{}, scanner.Bytes()...)
 		var ev struct {
 			Type      string `json:"type"`
+			RequestID string `json:"request_id"`
 			SessionID string `json:"session_id"`
 			Result    string `json:"result"`
 			IsError   bool   `json:"is_error"`
@@ -312,6 +358,12 @@ func (m *Manager) read(p *process, stdout io.Reader) {
 		m.mu.Lock()
 		if err := m.event(p, "output", b); err != nil {
 			readErr = err
+			p.cancel()
+			m.mu.Unlock()
+			break
+		}
+		if ev.SessionID != "" && (p.state.Request.StrictResume && ev.SessionID != p.state.Request.ResumeSessionID || p.state.Request.NewSessionID != "" && ev.SessionID != p.state.Request.NewSessionID) {
+			readErr = errors.New("agentcontrol: Claude returned a different session; refusing replacement")
 			p.cancel()
 			m.mu.Unlock()
 			break
@@ -343,8 +395,24 @@ func (m *Manager) read(p *process, stdout io.Reader) {
 			readErr = err
 			p.cancel()
 		}
+		if ev.Type == "control_cancel_request" {
+			if cancel := p.permissions[ev.RequestID]; cancel != nil {
+				cancel()
+			}
+		}
+		if ev.Type == "result" {
+			for _, cancel := range p.permissions {
+				cancel()
+			}
+		}
 		drain := ev.Type == "result"
 		m.mu.Unlock()
+		if p.state.Request.Observer != nil {
+			p.state.Request.Observer.Event("claude_frame", string(b))
+		}
+		if ev.Type == "control_request" {
+			m.dispatchPermission(p, b)
+		}
 		if drain {
 			m.deliver(p)
 		}
@@ -414,7 +482,7 @@ func (m *Manager) Send(ctx context.Context, actor, id, prompt string) (State, er
 	p := m.processes[id]
 	if p == nil {
 		m.mu.Unlock()
-		return State{}, ErrUnmanaged
+		return State{}, &prequeueDestinationError{reason: ErrUnmanaged}
 	}
 	if len(p.state.Pending) >= 100 {
 		m.mu.Unlock()
@@ -470,6 +538,16 @@ func (m *Manager) Stop(ctx context.Context, actor, id string) error {
 		return ctx.Err()
 	}
 }
+
+// SnapshotForSend checks the existing session-specific send authorization before
+// reading destination state. It never queues, starts, or reconnects a process.
+func (m *Manager) SnapshotForSend(ctx context.Context, actor, id string) (State, error) {
+	if err := m.authorize(ctx, actor, id, "send"); err != nil {
+		return State{}, err
+	}
+	return m.Snapshot(ctx, actor, id)
+}
+
 func (m *Manager) Snapshot(ctx context.Context, actor, id string) (State, error) {
 	if err := m.authorize(ctx, actor, id, "read"); err != nil {
 		return State{}, err
@@ -481,6 +559,9 @@ func (m *Manager) Snapshot(ctx context.Context, actor, id string) (State, error)
 	}
 	b, err := os.ReadFile(m.path(id, ".json"))
 	var state State
+	if os.IsNotExist(err) {
+		return state, &prequeueDestinationError{reason: ErrSessionNotFound}
+	}
 	if err != nil {
 		return state, err
 	}
@@ -548,6 +629,7 @@ func (m *Manager) Reconnect(ctx context.Context, actor, id string) (State, error
 	}
 	r := old.Request
 	r.Actor = actor
+	r.NewSessionID = ""
 	r.ResumeSessionID = old.SessionID
 	state, err := m.Start(ctx, r)
 	if err != nil {

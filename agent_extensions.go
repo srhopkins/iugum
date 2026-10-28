@@ -110,18 +110,7 @@ func buildAgentExtensions(lifetime context.Context, c nativeAgentConfig, gate co
 		}
 		return p, nil
 	})
-	add("clone_read", "Read a relative file from the named candidate source. Symlinks and parent paths are refused.", schema(map[string]any{"name": str, "path": str}, "name", "path"), func(ctx context.Context, b json.RawMessage) (string, error) {
-		var q struct{ Name, Path string }
-		if e := json.Unmarshal(b, &q); e != nil {
-			return "", e
-		}
-		dest, e := candidate(q.Name)
-		if e != nil {
-			return "", e
-		}
-		v, e := agentclones.Read(filepath.Join(dest, "source"), q.Path)
-		return string(v), e
-	})
+	add("clone_read", "Read a relative file from an existing named candidate source. This is not a general workspace or installed-skill file reader. name is the candidate identifier, not a path or plugin/skill identifier. Symlinks and parent paths are refused.", schema(map[string]any{"name": map[string]any{"type": "string", "pattern": nativeCloneNamePattern, "description": "Existing candidate name: 1–64 ASCII letters, digits, underscores or hyphens; first character must be a letter or digit."}, "path": str}, "name", "path"), cloneReadExecution(candidate))
 	add("clone_write", "Write a complete source file in a named candidate only. This invalidates any previous evaluation.", schema(map[string]any{"name": str, "path": str, "content": str}, "name", "path", "content"), func(ctx context.Context, b json.RawMessage) (string, error) {
 		var q struct{ Name, Path, Content string }
 		if e := json.Unmarshal(b, &q); e != nil {

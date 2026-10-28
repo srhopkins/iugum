@@ -91,3 +91,8 @@ func (a *App) RunBrowser(ctx context.Context, bin, host string, port int) error 
 func (a *App) RunTtyd(ctx context.Context, bin, host string, port int, dir string) error {
 	return runChild(ctx, "ttyd", bin, "-W", "-i", host, "-p", strconv.Itoa(port), "-w", dir, "bash")
 }
+
+// RunT3 starts the optional T3 web server with its own pairing authentication.
+func (a *App) RunT3(ctx context.Context, bin, host string, port int) error {
+	return runChild(ctx, "t3", bin, "serve", "--host", host, "--port", strconv.Itoa(port))
+}
