@@ -36,7 +36,8 @@ Use three complementary controls above the table:
 
 1. **Quick toggles:** persistent chips for pinned organizations and repositories. Clicking toggles selection; clicking again clears it. Unselected chips remain visible. Include an accessible pressed state, not color alone.
 2. **Searchable dropdowns:** Organization, Repository, and Author open multi-select lists with checkboxes. They serve the full available choices without filling the toolbar with chips.
-3. **All filters:** open a dedicated filter drawer beside the table for state, draft, and less-used controls. Keep results visible. A separate full-page filter screen is not recommended for the first version.
+3. **Visible state selector:** keep Open, Closed, and All states beside the active chips so removing a state chip is reversible without hunting through the drawer.
+4. **All filters:** open a dedicated filter drawer beside the table for state, draft, and less-used controls. Keep results visible. A separate full-page filter screen is not recommended for the first version.
 
 Show removable active-filter chips separately from pinned quick toggles. Removing an active chip clears the matching dropdown selection and quick toggle. Clear all resets selections to open PRs; it does not remove pinned shortcuts. Store shortcut preferences per browser; put applied filters in the URL. No database is needed.
 
@@ -162,8 +163,16 @@ Read and follow `docs/wiki-ui-contract.md` for shared interaction rules. Beadvie
 
 ## 12. Validation and scope
 
-This document specifies a feature; it does not itself authorize implementation or deployment. Steve authorized the first pass with primary sections and the filter drawer. Review/CI enrichment and complete discovery remain deferred.
+This document specifies a feature; it does not itself authorize implementation or deployment. Steve authorized the first pass with primary sections and the filter drawer. Steve subsequently authorized clickable review, check, comment, assignee, and stack details. Complete repository discovery remains deferred.
 
 Implementation validation must cover query construction, normalized records, credential redaction, stale-request handling, unsupported combinations, pagination limits, and error isolation. Use isolated fixtures without real tokens for automated tests. Smoke-test the embedded viewer and existing Beads routes. Obtain independent review of the implemented code before closing implementation work.
 
 Source: Steve's supplied `github-pr-dashboard-prd.md`. The standalone packaging, project layout, and new-application instructions are superseded by this integration design. GitHub API limits and supported query combinations require verification against official documentation during implementation.
+
+## Read-only row details
+
+Reviews, Checks, Comments, Assignees, and Stacked PRs have labeled columns and clickable controls with hover descriptions. Each opens a scrollable dialog with Escape dismissal and focus returned to its trigger. Batched summaries avoid per-row API requests; detailed history loads only when opened.
+
+Checks show passing/total plus a state indicator, with failing, pending, and skipped counts explained inside. Pages stay tied to the same head revision. Comments default to conversation comments, label bots, and provide a separate code-comments tab. Review history does not override GitHub's current review decision. Comment bodies are displayed as plain text to preserve content without executing HTML.
+
+Empty assignees read **Unassigned**. Empty registered stack membership reads **Not in stack**, with an explanation that unregistered dependencies can still exist. API errors display **Unavailable**, never a successful or empty state.

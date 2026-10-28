@@ -45,3 +45,5 @@ cpSync(path.join(import.meta.dirname,'prs/PullRequests.tsx'),path.join(target,'s
 cpSync(path.join(import.meta.dirname,'prs/prs.css'),path.join(target,'src/components/iugum-prs.css'))
 patch('main.tsx',"import App from './App'","import App from './App'\nimport { ViewerShell } from './components/iugum-prs'")
 patch('main.tsx',': <App />',': <ViewerShell><App /></ViewerShell>')
+
+cpSync(path.join(import.meta.dirname,'prs/Details.tsx'),path.join(target,'src/components/iugum-pr-details.tsx'))

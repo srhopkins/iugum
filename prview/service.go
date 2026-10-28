@@ -2,6 +2,7 @@
 package prview
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -209,6 +210,9 @@ func credentials(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 func (s *Service) get(ctx context.Context, path string, v url.Values, out any) error {
+	return s.request(ctx, http.MethodGet, path+"?"+v.Encode(), nil, out)
+}
+func (s *Service) request(ctx context.Context, method, path string, body []byte, out any, headers ...*http.Header) error {
 	s.mu.Lock()
 	if s.token == "" {
 		token, err := s.resolve(ctx)
@@ -220,10 +224,11 @@ func (s *Service) get(ctx context.Context, path string, v url.Values, out any) e
 	}
 	token := s.token
 	s.mu.Unlock()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.base+path+"?"+v.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, s.base+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
@@ -233,6 +238,9 @@ func (s *Service) get(ctx context.Context, path string, v url.Values, out any) e
 		return &APIError{Status: 502, Code: "github_unavailable", Message: "GitHub could not be reached. Try Refresh."}
 	}
 	defer r.Body.Close()
+	if len(headers) > 0 {
+		*headers[0] = r.Header.Clone()
+	}
 	if r.StatusCode != 200 {
 		e := &APIError{Status: 502, Code: "github_error", Message: "GitHub could not complete the request"}
 		switch r.StatusCode {

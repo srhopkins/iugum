@@ -20,7 +20,12 @@ try{
     if(mode==='error')return route.fulfill({status:429,contentType:'application/json',body:JSON.stringify({error:{code:'rate_limited',message:'GitHub rate limit reached. Wait before refreshing.'}})})
     const pageNumber=Number(u.searchParams.get('page')||1)
     body={items:mode==='empty'?[]:[{number:pageNumber===1?7:8,repository:'alpha/api',title:pageNumber===1?'Fix paging':'Next result',url:'https://github.com/alpha/api/pull/7',author:'sam',state:'open',draft:false,updated_at:'2026-10-27T18:00:00Z',review:'not_loaded',checks:'not_loaded'}],total_count:mode==='empty'?0:mode==='incomplete'?1200:31,page:pageNumber,per_page:30,has_next:pageNumber===1,incomplete_results:mode==='incomplete',truncated:mode==='incomplete',fetched_at:new Date().toISOString()}
-   }else if(u.pathname==='/api/projects')body={projects:[{slug:'fixture',name:'fixture'}]}
+   }else if(u.pathname==='/api/v1/prs/summaries')body={items:[{repository:'alpha/api',number:7,review:'APPROVED',checks:{total:4,passed:2,failed:1,pending:1,skipped:0},comments:2,assignees:[],stack:null}]}
+   else if(u.pathname.endsWith('/reviews'))body={items:[{id:1,author:'reviewer',body:'Looks good',state:'APPROVED'}],has_next:false}
+   else if(u.pathname.endsWith('/checks'))body={items:[{id:1,name:'Unit tests',state:'FAILURE',body:'A test failed',url:'https://github.com/alpha/api/actions/runs/1'}],has_next:false,head:'abc'}
+   else if(u.pathname.endsWith('/code-comments'))body={items:[{id:3,author:'sam',body:'Please simplify this',path:'main.go'}],has_next:false}
+   else if(u.pathname.endsWith('/comments'))body={items:[{id:2,author:'build[bot]',bot:true,body:'Automation report\n'+('Detail line\n'.repeat(100))}],has_next:false}
+   else if(u.pathname==='/api/projects')body={projects:[{slug:'fixture',name:'fixture'}]}
    else if(u.pathname==='/api/config')body={read_only:true,multi:false,ws_port:null}
    else if(u.pathname==='/api/beads')body=[]
    else return route.fulfill({status:404,body:'{}'})
@@ -29,6 +34,21 @@ try{
   await page.goto(base+'/?view=list&label=keep')
   await page.getByRole('link',{name:'Pull requests',exact:true}).click()
   await page.getByRole('link',{name:'#7 Fix paging'}).waitFor()
+  await page.getByRole('button',{name:'Remove Open filter',exact:true}).click()
+  await page.getByLabel('Quick PR state',{exact:true}).selectOption('open')
+  await page.getByRole('button',{name:'Remove Open filter',exact:true}).waitFor()
+  const reviews=page.getByRole('button',{name:'Reviews for Fix paging: Approved',exact:true})
+  await reviews.click();await page.getByText('Looks good',{exact:true}).waitFor();await page.keyboard.press('Escape')
+  assert.equal(await reviews.evaluate(e=>document.activeElement===e),true)
+  await page.getByRole('button',{name:'Checks for Fix paging: ✕ 2/4',exact:true}).click()
+  await page.getByText('Unit tests',{exact:true}).waitFor();await page.keyboard.press('Escape')
+  await page.getByRole('button',{name:'Comments for Fix paging: 2',exact:true}).click()
+  await page.getByText('Bot',{exact:true}).waitFor()
+  assert.ok(await page.locator('.pr-detail-scroll').evaluate(e=>e.scrollHeight>e.clientHeight),'comments must scroll inside the dialog')
+  await page.getByRole('button',{name:'Code comments',exact:true}).click();await page.getByText('Please simplify this',{exact:true}).waitFor()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button',{name:'Assignees for Fix paging: Unassigned',exact:true}).click()
+  await page.getByText('The author is not assigned automatically.',{exact:false}).waitFor();await page.keyboard.press('Escape')
   await page.getByRole('button',{name:'Organization ▾',exact:true}).click()
   await page.getByRole('button',{name:'Pin organization alpha',exact:true}).click()
   await page.keyboard.press('Escape')

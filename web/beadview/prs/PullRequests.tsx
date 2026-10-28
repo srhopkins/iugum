@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { useTheme, type Theme } from '@/context/theme-provider'
 import './iugum-prs.css'
+import {DetailButton, useSummaries, summaryKey, reviewLabel} from './iugum-pr-details'
 
 type Kind = 'org' | 'repo' | 'author'
 type Pin = {kind:Kind;value:string}
@@ -59,6 +60,7 @@ function PullRequests({search}:{search:string}){
  const queryString=apiParams.toString()
  const query=useQuery<Result>({queryKey:['iugum-prs',queryString],queryFn:async({signal})=>{const r=await fetch('/api/v1/prs?'+queryString,{signal});const data=await r.json();if(!r.ok)throw new Error(data.error?.message||'Unable to load pull requests');return data},retry:false,staleTime:30000,refetchOnWindowFocus:false})
  const rows=query.data?.items||[]
+ const summaries=useSummaries(rows,query.dataUpdatedAt)
  const suggestions:Record<Kind,string[]>={org:rows.map(p=>p.repository.split('/')[0]!),repo:rows.map(p=>p.repository),author:rows.map(p=>p.author)}
  const selected=(kind:Kind)=>params.getAll(kind)
  const toggle=(kind:Kind,v:string)=>{const values=selected(kind);update(kind,values.includes(v)?values.filter(x=>x!==v):[...values,v])}
@@ -68,9 +70,16 @@ function PullRequests({search}:{search:string}){
   {accessorKey:'repository',header:'Repository',cell:({row})=><a href={'https://github.com/'+row.original.repository} target='_blank' rel='noreferrer'>{row.original.repository}</a>},
   {accessorKey:'title',header:'Pull request',cell:({row})=><a href={safeLink(row.original.url)} target='_blank' rel='noreferrer'><span className='pr-number'>#{row.original.number}</span> {row.original.title}</a>},
   {accessorKey:'author',header:'Author'},
+  ...(['stack','reviews','checks','comments','assignees'] as const).map(kind=>({id:kind,header:({stack:'Stacked PRs',reviews:'Reviews',checks:'Checks',comments:'Comments',assignees:'Assignees'})[kind],cell:({row}:{row:{original:PR}})=>{
+   const item=summaries.data?.[summaryKey(row.original)]
+   const summary=item&&!item.error?{...item,stack_known:true}:undefined
+   let label='Unavailable'
+   if(summary){if(kind==='reviews')label=reviewLabel(summary.review);else if(kind==='checks')label=summary.checks?.total?`${summary.checks.failed?'✕ ':summary.checks.pending?'◷ ':'✓ '}${summary.checks.passed}/${summary.checks.total}`:'No checks';else if(kind==='comments')label=String(summary.comments);else if(kind==='assignees')label=summary.assignees.join(', ')||'Unassigned';else label=summary.stack?`${summary.stack.position} of ${summary.stack.total}`:'Not in stack'}
+   return <DetailButton pr={row.original} kind={kind} summary={summary} label={label} loading={summaries.isPending}/>
+  }})),
   {id:'state',header:'State',cell:({row})=><span>{row.original.draft?'Draft · ':''}{row.original.state}</span>},
   {accessorKey:'updated_at',header:'Updated',cell:({getValue})=>{const value=getValue<string>();return <time dateTime={value}>{new Date(value).toLocaleString()}</time>}},
- ],[])
+ ],[summaries.data,summaries.isPending])
  const table=useReactTable({data:rows,columns,getCoreRowModel:getCoreRowModel(),manualPagination:true,manualSorting:true})
  const state=params.get('state')||'open',draft=params.get('draft')||'any',sort=params.get('sort')||'updated',order=params.get('order')||'desc'
  const controls=<div className='pr-filter-fields'>
@@ -89,15 +98,16 @@ function PullRequests({search}:{search:string}){
   <div className='pr-toolbar'><label className='pr-search'><span className='sr-only'>Search pull requests</span><Input aria-label='Search pull requests' value={draftText} onChange={e=>setDraftText(e.target.value)} placeholder='Search pull requests…'/></label>
   <Sheet><SheetTrigger asChild><Button variant='outline'>All filters</Button></SheetTrigger><SheetContent><SheetHeader><SheetTitle>All filters</SheetTitle><SheetDescription>Changes apply immediately. Match any selection within a category, and every category together.</SheetDescription></SheetHeader><div className='pr-drawer'>{(['org','repo','author'] as const).map(kind=><Facet key={kind} kind={kind} selected={selected(kind)} suggestions={suggestions[kind]} pins={pins} toggle={v=>toggle(kind,v)} pin={v=>pin(kind,v)}/>)}{controls}<p className='pr-help'>GitHub supports up to five OR operators in this search. Review and CI filtering are not loaded in this first pass.</p><Button variant='outline' onClick={clear}>Reset to open PRs</Button></div></SheetContent></Sheet>
   <Button variant='outline' disabled={query.isFetching} onClick={()=>void query.refetch()}>{query.isFetching?'Refreshing…':'Refresh'}</Button></div>
-  <div className='pr-quick' aria-label='Quick filters'><span className='pr-help'>Quick filters</span>{pins.map(p=><button key={p.kind+':'+p.value} className='pr-chip' aria-label={`Toggle ${labels[p.kind].toLowerCase()} ${p.value}`} aria-pressed={selected(p.kind).includes(p.value)} onClick={()=>toggle(p.kind,p.value)}>{selected(p.kind).includes(p.value)?'✓ ':''}{p.value}</button>)}{!pins.length&&<span className='pr-help'>Pin an organization, repository, or author from a dropdown.</span>}</div>
+  <div className='pr-quick' aria-label='Quick filters'><span className='pr-help'>Pinned shortcuts</span>{pins.map(p=><button key={p.kind+':'+p.value} className='pr-chip' aria-label={`Toggle ${labels[p.kind].toLowerCase()} ${p.value}`} aria-pressed={selected(p.kind).includes(p.value)} onClick={()=>toggle(p.kind,p.value)}>{selected(p.kind).includes(p.value)?'✓ ':''}{p.value}</button>)}{!pins.length&&<span className='pr-help'>Use a dropdown below to add a filter. Select ☆ to keep it as a one-click shortcut.</span>}</div>
   <div className='pr-toolbar'>{(['org','repo','author'] as const).map(kind=><Facet key={kind} kind={kind} selected={selected(kind)} suggestions={suggestions[kind]} pins={pins} toggle={v=>toggle(kind,v)} pin={v=>pin(kind,v)}/>)}</div>
-  <div className='pr-active' aria-label='Active filters'>{chips.map(([key,value,label])=><button key={key+value} className='pr-chip' aria-label={`Remove ${label} filter`} onClick={()=>{if(key==='q')setDraftText('');update(key,key==='state'?['all']:params.getAll(key).filter(v=>v!==value))}}>{label} ×</button>)}<button className='pr-clear' onClick={clear}>Clear all · reset</button></div>
+  <div className='pr-active' aria-label='Active filters'><label className='pr-state-filter'>State <select aria-label='Quick PR state' value={state} onChange={e=>update('state',[e.target.value])}><option value='open'>Open</option><option value='closed'>Closed</option><option value='all'>All states</option></select></label>{chips.map(([key,value,label])=><button key={key+value} className='pr-chip' aria-label={`Remove ${label} filter`} onClick={()=>{if(key==='q')setDraftText('');update(key,key==='state'?['all']:params.getAll(key).filter(v=>v!==value))}}>{label} ×</button>)}<button className='pr-clear' onClick={clear}>Clear all · reset</button></div>
   <div role='status' className='pr-help'>{query.isFetching?'Loading results…':query.data?`${query.data.total_count.toLocaleString()} matches · refreshed ${new Date(query.data.fetched_at).toLocaleTimeString()}`:''}</div>
   {query.isError&&<div role='alert' className='pr-notice'>{query.error.message}{query.data?' Showing the last successful response.':''}</div>}
   {(query.data?.incomplete_results||query.data?.truncated)&&<div role='alert' className='pr-notice'>Results are incomplete{query.data.truncated?' — GitHub exposes only the first 1,000 matches':''}. Narrow your filters.</div>}
   {!query.isPending&&!query.isError&&!rows.length&&<p className='pr-empty'>No pull requests match these filters.</p>}
+  {summaries.isError&&<div role='alert' className='pr-notice'>PR details unavailable: {summaries.error.message} <button className='pr-clear' onClick={()=>void summaries.refetch()}>Retry details</button></div>}
   {!!rows.length&&<div className='pr-table-scroll'><table className='pr-table'><thead>{table.getHeaderGroups().map(group=><tr key={group.id}>{group.headers.map(header=><th key={header.id} scope='col'>{header.id==='updated_at'?<button onClick={()=>{const p=new URLSearchParams(window.location.search);p.set('sort','updated');p.set('order',order==='desc'?'asc':'desc');p.delete('page');navigate('?'+p.toString())}}>Updated {sort==='updated'?(order==='desc'?'↓':'↑'):''}</button>:flexRender(header.column.columnDef.header,header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map(row=><tr key={row.original.repository+':'+row.original.number}>{row.getVisibleCells().map(cell=><td key={cell.id}>{flexRender(cell.column.columnDef.cell,cell.getContext())}</td>)}</tr>)}</tbody></table></div>}
   {query.data&&<footer className='pr-pagination'><Button variant='outline' disabled={query.data.page<=1||query.isFetching} onClick={()=>update('page',[String(query.data!.page-1)])}>Previous</Button><span>Page {query.data.page} · {rows.length} shown</span><Button variant='outline' disabled={!query.data.has_next||query.isFetching} onClick={()=>update('page',[String(query.data!.page+1)])}>Next</Button></footer>}
-  <p className='pr-help'>Review decisions and CI checks are not loaded. Open a pull request on GitHub for those details. Search may omit inaccessible or unindexed repositories.</p>
+  <p className='pr-help'>Select a review, check count, comment count, assignee, or stack to see details. Search may omit inaccessible or unindexed repositories.</p>
  </main>
 }

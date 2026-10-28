@@ -59,7 +59,14 @@ func Handler(next http.Handler, s *Service) http.Handler {
 		case "/api/v1/health":
 			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "github": "credentials_checked_on_request", "read_only": true})
 		case "/api/v1/meta":
-			json.NewEncoder(w).Encode(map[string]any{"version": 1, "defaults": map[string]any{"state": "open", "draft": "any", "sort": "updated", "order": "desc", "per_page": 30}, "filters": []string{"q", "org", "repo", "author", "state", "draft", "sort", "order", "page", "per_page"}, "capabilities": map[string]any{"q": "plain_text", "multi_select": []string{"org", "repo", "author"}, "within_category": "OR", "between_categories": "AND", "max_or_operators": 5, "max_results": 1000, "max_per_page": 100, "review_checks": false, "discovery": "current_results_and_exact_input", "scope": "GitHub search under the authenticated account; not an exhaustive repository inventory"}})
+			json.NewEncoder(w).Encode(map[string]any{"version": 1, "defaults": map[string]any{"state": "open", "draft": "any", "sort": "updated", "order": "desc", "per_page": 30}, "filters": []string{"q", "org", "repo", "author", "state", "draft", "sort", "order", "page", "per_page"}, "capabilities": map[string]any{"q": "plain_text", "multi_select": []string{"org", "repo", "author"}, "within_category": "OR", "between_categories": "AND", "max_or_operators": 5, "max_results": 1000, "max_per_page": 100, "review_checks": true, "discovery": "current_results_and_exact_input", "scope": "GitHub search under the authenticated account; not an exhaustive repository inventory"}})
+		case "/api/v1/prs/summaries":
+			data, err := s.Summaries(r.Context(), r.URL.Query())
+			if err != nil {
+				fail(err)
+				return
+			}
+			json.NewEncoder(w).Encode(data)
 		case "/api/v1/prs":
 			f, err := Parse(r.URL.Query())
 			if err != nil {
@@ -74,6 +81,15 @@ func Handler(next http.Handler, s *Service) http.Handler {
 			json.NewEncoder(w).Encode(data)
 		default:
 			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/prs/"), "/")
+			if strings.HasPrefix(r.URL.Path, "/api/v1/prs/") && len(parts) == 4 {
+				data, err := s.Section(r.Context(), parts[0], parts[1], parts[2], parts[3], r.URL.Query())
+				if err != nil {
+					fail(err)
+					return
+				}
+				json.NewEncoder(w).Encode(data)
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/api/v1/prs/") && len(parts) == 3 {
 				data, err := s.Detail(r.Context(), parts[0], parts[1], parts[2])
 				if err != nil {
