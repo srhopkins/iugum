@@ -30,7 +30,7 @@ Sync is incremental and atomic, with newest changed files first. It uses file si
 
 The process accepts context cancellation. Native Claude permission checks remain enabled. No real work was dispatched while implementing this adapter. A fresh timestamp is prepended to the dispatched prompt; the adapter cannot guarantee a timestamp on every internal Claude tool-loop iteration.
 
-Live steering is explicitly unsupported: local CLI help documents saved-session resume and background attach, but resuming an already-running background session can create a copy. `Steer` returns `ErrLiveSteeringUnsupported` rather than silently forking or claiming live control. Verified live control is still required to meet the full Chief MVP requirement.
+Live steering is explicitly unsupported: local CLI help documents saved-session resume and background attach, but resuming an already-running background session can create a copy. `Steer` returns `ErrLiveSteeringUnsupported` rather than silently forking or claiming live control. Verified live control is still required to meet the full Iugum Agent MVP requirement.
 
 ## Drilldown and relaxed retrieval
 

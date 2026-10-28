@@ -1,0 +1,21 @@
+# Shared lane defaults for the iugum Beads viewer.
+# Projects choose their own valid statuses in Beads. Unknown entries here are
+# ignored until a project configures that status; browser changes override these defaults.
+# Lanes with hidden: true stay off the board until "Show backlog" is ticked.
+lanes:
+  - status: open
+    label: Ready
+  - status: in_progress
+    label: In Progress
+  - status: in_review
+    label: In Review
+  - status: blocked
+    label: Blocked
+  - status: closed
+    label: Closed
+  - status: backlog
+    label: Backlog
+    hidden: true
+  - status: deferred
+    label: Deferred
+    hidden: true

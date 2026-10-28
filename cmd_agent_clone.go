@@ -206,5 +206,5 @@ func clonePolicyActor(policy, oldActor, newActor string) string {
 }
 
 func validNativeCloneName(name string) bool {
-	return regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString(name)
+	return regexp.MustCompile(nativeCloneNamePattern).MatchString(name)
 }

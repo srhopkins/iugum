@@ -94,11 +94,11 @@ Future UI changes must reference the relevant rule and preserve the others. Reco
 ## Running the contract checks
 
 <!-- <atom id="C0000016" slug="running-checks" iugum-kind="reference"/> -->
-Install the existing SilverBullet browser test dependencies and Chromium, then run `npm ci --prefix plugs/chief` for the pinned axe accessibility dependency. Run `scripts/chief-fe-check.sh` for the disposable-wiki suite. It uses generated fixtures and does not call models or read personal conversations.
+Install the existing SilverBullet browser test dependencies and Chromium, then run `npm ci --prefix plugs/agentchat` for the pinned axe accessibility dependency. Run `scripts/agentchat-fe-check.sh` for the disposable-wiki suite. It uses generated fixtures and does not call models or read personal conversations.
 
 The suite checks owned chat and search UI with axe, including the open options menu and agent drawer. It also checks keyboard behavior, focus, conversation persistence, resizing, scrolling, and theme overrides. Static checks reject inline style strings in feature modules and repeated properties within a shared CSS rule. Calculated geometry remains permitted. This is a focused guard, not a complete CSS duplication detector.
 
-Visual checks cover both theme families in Day and Night at 900- and 1440-pixel viewport widths. Baselines use Playwright Chromium on macOS. Review changes on that environment; font rasterization can differ on other systems. To propose new baselines, run `IUGUM_UI_UPDATE_BASELINES=1 scripts/chief-fe-check.sh`, inspect every changed image, then rerun without that variable. Never accept a baseline merely because a comparison failed. Browser failure artifacts are written to `plugs/chief/visual-results/` and are not committed.
+Visual checks cover both theme families in Day and Night at 900- and 1440-pixel viewport widths. Baselines use Playwright Chromium on macOS. Review changes on that environment; font rasterization can differ on other systems. To propose new baselines, run `IUGUM_UI_UPDATE_BASELINES=1 scripts/agentchat-fe-check.sh`, inspect every changed image, then rerun without that variable. Never accept a baseline merely because a comparison failed. Browser failure artifacts are written to `plugs/agentchat/visual-results/` and are not committed.
 
 The model/settings regression checks cover profile selection, reload, rejected-save draft recovery, and accessibility of the settings drawer. Runtime tests check policy revocation, configured-document write boundaries, ACP discovery without prompting, and saved-session resume. Startup tests require automatic opening without a manual-click fallback; the proxy waits for the underlying wiki page to become ready.
 

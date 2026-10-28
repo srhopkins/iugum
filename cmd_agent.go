@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls|tui|acp|rm|checkpoint>
+const agentUsage = `Usage: iugum agent <speech-relay|run|clone|session|init|up|down|status|ls|tui|acp|rm|checkpoint>
 
   supervisor --home DIRECTORY
                  print launchd configuration (does not install or start it)
@@ -28,6 +28,9 @@ const agentUsage = `Usage: iugum agent <run|clone|session|init|up|down|status|ls
 
   home-init NAME DIRECTORY
                  create a private native agent home with no permission grants
+
+  speech-relay --upstream URL [--listen 127.0.0.1:8766]
+                 optional loopback relay for the two Chat speech API routes
 
   run --config FILE
                  run a native agent and its local chat workspace
@@ -98,6 +101,10 @@ func runAgentIO(ctx context.Context, a *app.App, args []string, stdout, stderr i
 		return 0
 	}
 	switch args[0] {
+	case "speech-relay":
+		return runAgentSpeechRelay(ctx, a, args[1:], stdout, stderr)
+	case "sessions":
+		return runAgentSessions(ctx, a, args[1:], stdout, stderr)
 	case "supervisor", "policy-apply":
 		return runAgentAdmin(ctx, a, args[0], args[1:], stdout, stderr)
 	case "start", "stop", "attach":

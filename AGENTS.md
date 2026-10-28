@@ -1,5 +1,26 @@
 # iugum — agent context
 
+## Beads progress and independent review
+
+Use ticket comments as the visible work log. Add a comment when claiming work,
+at meaningful implementation or validation milestones, when finding a defect
+or blocker, and at review handoff or completion. State what changed, the evidence,
+and the next action. Record actual results; avoid repetitive activity messages.
+Keep Notes as the current handoff summary. Notes do not replace comments.
+
+The actual worker claims Ready work and moves it to In Progress. After self-tests,
+move implementation to `in_review`. A different agent claims a separate review
+ticket. Record reviewer identity in metadata and the verdict, reviewed code state,
+findings, and checks in comments on both tickets. Failed review returns affected
+implementation to In Progress. The original owner closes only after independent
+review passes for the current code state.
+
+Mark work Blocked only for a real unresolved prerequisite. Record a `blocks`
+dependency when applicable and comment with the specific reason and unblock
+condition. Recheck waiting tickets when their prerequisites close. Unstarted,
+otherwise actionable work remains Ready; In Review alone does not imply a
+reviewer is working. Record the reviewer assignment and claim explicitly.
+
 ## Shared wiki UI contract
 
 For wiki, chat, search, menu, or theme changes, follow [docs/wiki-ui-contract.md](docs/wiki-ui-contract.md). It records approved interaction, styling, persistence, and regression rules. Document exceptions; do not replace visual baselines merely to clear failures.
@@ -35,15 +56,15 @@ The Beads blocks below this layout are generated. Do not rewrite those blocks fo
 Wiki flags: `-p` / `--port` (default `3000`), `-L` / `--hostname`. No `serve` subcommand.
 Observe flags: `--port` (default `3848`), `--hostname`. Do not bind SilverBullet `:3737`.
 
-## Chief chat regression checks
+## Iugum Agent chat regression checks
 
-For changes to `plugs/chief/` or native wiki keyboard integration, run
-`scripts/chief-fe-check.sh`. It builds the current code, starts a disposable wiki,
+For changes to `plugs/agentchat/` or native wiki keyboard integration, run
+`scripts/agentchat-fe-check.sh`. It builds the current code, starts a disposable wiki,
 and tests native text editing without touching personal data. Requires the existing
 SilverBullet Playwright installation and its Chromium browser.
 
 For changes to keyboard event handling, also run
-`scripts/chief-fe-check.sh --prove-regression`. This removes the composer handler
+`scripts/agentchat-fe-check.sh --prove-regression`. This removes the composer handler
 only inside the disposable browser and verifies that the original cursor bug is caught.
 
 ## Build

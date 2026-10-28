@@ -26,3 +26,10 @@ A remote tool becomes `mcp_example__remote_tool`. Server names permit letters, d
 HTTP redirects and automatic reconnect retries are disabled. Responses are bounded to 4 MiB, returned result text to 32,000 bytes, discovery to 100 tools and ten pages, and HTTP requests to 45 seconds. Oversized result text carries a truncation notice. Tool calls receive the caller's cancellation context. Transport failures are not retried automatically, because a remote mutation may already have occurred.
 
 Implementation references: official SDK `examples/http/main.go`, `mcp/streamable.go`, and `mcp/protocol.go`, version 1.7.0. Tests use a local synthetic SDK server and verify policy revocation before a second call.
+
+Image tools additionally require `allow_images: true` on the configured MCP source.
+This raises only that source's response limit to 12 MiB. A result may contain one
+validated PNG up to 8 MiB; its metadata must fit 64 KiB without truncation. PNG bytes
+travel through the typed tool result, with text and observation metadata preserved.
+The legacy string-only consumer rejects image results explicitly. The model profile
+must separately opt into vision; MCP image permission does not enable model access.

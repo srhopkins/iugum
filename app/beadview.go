@@ -28,6 +28,7 @@ type BeadViewExtras struct {
 	// ProjectsFile is the --projects YAML file. When set, dir is ignored and
 	// the viewer serves every project in it.
 	ProjectsFile string
+	ViewerConfig string
 }
 
 // ServeBeadViewWith runs the fork's web command. The Casbin action
@@ -42,12 +43,13 @@ func (a *App) ServeBeadViewWith(ctx context.Context, port int, host, dir string,
 		return err
 	}
 	return beadsadapt.ServeWeb(ctx, beadsadapt.WebOptions{
-		Exe:      exe,
-		Port:     port,
-		Host:     host,
-		Dir:      dir,
-		Projects: extras.ProjectsFile,
-		ReadOnly: extras.ReadOnly,
+		Exe:          exe,
+		Port:         port,
+		Host:         host,
+		Dir:          dir,
+		Projects:     extras.ProjectsFile,
+		ViewerConfig: extras.ViewerConfig,
+		ReadOnly:     extras.ReadOnly,
 		Authorize: func(ctx context.Context, _ string) error {
 			return a.Check(ctx, "beadview", "write")
 		},

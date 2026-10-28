@@ -31,10 +31,10 @@ configure the child process. Selectable model IDs must be supported by that agen
 
 Each choice stores its history, ACP session reference, and reported usage in
 `data/chat-agents/ID`. Switching preserves each draft in the browser. It does not
-copy another agent's chat or Chief's private memory. The ACP agent must support
+copy another agent's chat or Iugum Agent's private memory. The ACP agent must support
 `session/load` to continue its saved conversation across process restarts.
 
-ACP commands are passed through to the selected agent; native Chief commitment
+ACP commands are passed through to the selected agent; native Iugum Agent commitment
 commands are not injected. Wiki search remains a shared, policy-checked service.
 Every prompt receives the current timestamp. The adapter records reported token
 usage in `usage.jsonl`; missing usage is null, not zero. It does not estimate prices
@@ -49,9 +49,9 @@ configured external executable retains its own process privileges.
 
 The Go integration uses `github.com/coder/acp-go-sdk`. Standard Markdown rendering,
 search, keyboard editing, and sticky prompts are shared by all choices.
-Run `scripts/chief-fe-check.sh` for browser regressions and
+Run `scripts/agentchat-fe-check.sh` for browser regressions and
 `CGO_ENABLED=0 go test ./agentacp ./agentdesk .` for protocol and routing tests.
 
-For compatibility the source directory and CSS selectors still use their original
-`plugs/chief` names. The installed plug and command are **iugum-agent-chat** and
+The source directory and CSS selectors use neutral `agentchat` names.
+The previous asset route remains an upgrade alias. The installed plug and command are **iugum-agent-chat** and
 **Chat: Open**. Installation retires the old managed plug to a `.previous` backup.

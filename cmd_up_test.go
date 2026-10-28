@@ -158,3 +158,26 @@ m = (p.sub == "*" || p.sub == r.sub) && (p.obj == "*" || p.obj == r.obj) && (p.a
 		t.Fatalf("build must stay allowed: %v", err)
 	}
 }
+
+func TestT3ContainerOptions(t *testing.T) {
+	o, _, ok := parseUpArgs([]string{"--no-t3", "--t3-port", "4773"})
+	if !ok || !o.NoT3 || o.T3Port != 4773 {
+		t.Fatalf("T3 options: %+v", o)
+	}
+	got := strings.Join(containerRunArgv("docker", config.Container{}, o, "/w", "/d"), " ")
+	if !strings.Contains(got, "--no-t3 --t3-port 4773") || strings.Contains(got, "127.0.0.1:4773") {
+		t.Fatal(got)
+	}
+	o.NoT3 = false
+	got = strings.Join(containerRunArgv("docker", config.Container{}, o, "/w", "/d"), " ")
+	if !strings.Contains(got, "-p 127.0.0.1:4773:4773") {
+		t.Fatal(got)
+	}
+	if _, _, ok := parseUpArgs([]string{"--t3-port", "65536"}); ok {
+		t.Fatal("invalid T3 port accepted")
+	}
+	b := strings.Join(containerBuildArgv("docker", config.Container{}, containerOpts{With: "codex,t3"}), " ")
+	if !strings.Contains(b, "WITH=codex,t3") {
+		t.Fatal(b)
+	}
+}

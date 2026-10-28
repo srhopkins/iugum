@@ -77,4 +77,4 @@ These snapshots are replaced, never summed: provider fields can be cumulative
 across turns or resumed work. Estimated dollar value is not subscription billing;
 `billed_known` remains false. Raw result events retain the original evidence.
 Delegated Claude usage is available through session status/events separately from
-Chief's `/usage` model-loop ledger; it is not charged into Chief's OpenAI pool.
+Iugum Agent's `/usage` model-loop ledger; it is not charged into Iugum Agent's OpenAI pool.

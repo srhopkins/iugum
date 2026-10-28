@@ -18,6 +18,8 @@ ENV PATH=/usr/local/go/bin:$PATH CGO_ENABLED=1 GOPATH=/go GOCACHE=/root/.cache/g
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libicu-dev g++ pkg-config git unzip ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+ARG SOURCE_REVISION=unknown
+ARG BUILD_DATE=unknown
 WORKDIR /src
 COPY . .
 ARG TARGETARCH
@@ -28,7 +30,12 @@ RUN case "$TARGETARCH" in amd64) arch=x86_64;; arm64) arch=aarch64;; *) exit 1;;
     && install -m 755 /tmp/wiki/silverbullet wikiblob/silverbullet
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -buildvcs=false -trimpath -ldflags='-s -w -X main.buildCGO=on' -o /out/iugum .
+    --mount=type=secret,id=github_netrc,target=/root/.netrc \
+    HOME=/root GOPRIVATE=github.com/srhopkins/* go build -buildvcs=false -trimpath -ldflags="-s -w -X main.buildCGO=on -X main.buildCommit=${SOURCE_REVISION} -X main.buildDate=${BUILD_DATE}" -o /out/iugum .
+
+# Export just the source-built binary without building or replacing a runtime.
+FROM scratch AS binary-export
+COPY --from=builder /out/iugum /iugum
 
 FROM base AS desktop
 USER root
@@ -36,10 +43,12 @@ ARG BASE
 ARG TARGETARCH
 ARG NODE_VERSION=22.22.2
 ARG CODE_SERVER_VERSION=4.134.0
-ARG CLAUDE_VERSION=2.1.248
-ARG CODEX_VERSION=0.150.1
+ARG CLAUDE_VERSION=2.1.302
+ARG CODEX_VERSION=0.163.0
 ARG OPENCODE_VERSION=1.18.23
 ARG CURSOR_AGENT_VERSION=2026.08.25-3e8eec8
+ARG T3=0
+ARG T3_VERSION=0.1.0
 ARG PLAYWRITER_VERSION=0.7.0
 ARG PLAYWRIGHT_VERSION=1.63.0
 
@@ -94,6 +103,12 @@ ENV TZ=UTC \
     CHROME_CLI="--remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=/config/.chrome-profile --disable-dev-shm-usage --force-device-scale-factor=1.25 http://127.0.0.1:8080/?folder=/config/workspace"
 COPY --from=builder /out/iugum /usr/local/bin/iugum
 COPY --chmod=755 agentbox/runtime.sh /usr/local/lib/agentbox/runtime.sh
+RUN case "$T3" in \
+      1) T3_VERSION="$T3_VERSION" bash /usr/local/lib/agentbox/runtime.sh install-t3 \
+         && mkdir -p /custom-services.d \
+         && printf '#!/bin/sh\nexec s6-setuidgid abc /usr/local/lib/agentbox/runtime.sh serve-t3\n' > /custom-services.d/t3-server \
+         && chmod 755 /custom-services.d/t3-server ;; \
+      0) ;; *) echo 'T3 must be 0 or 1' >&2; exit 1 ;; esac
 COPY agentbox/WORKFLOW.md /usr/local/share/agentbox/WORKFLOW.md
 COPY --chmod=755 agentbox/50-install-d.sh /custom-cont-init.d/50-install-d.sh
 COPY --chmod=755 agentbox/kde/ /usr/local/lib/agentbox/kde/
@@ -109,6 +124,6 @@ RUN mkdir -p /custom-cont-init.d /custom-services.d \
          ln -s /usr/local/lib/agentbox/runtime.sh /usr/local/bin/$command; \
        done
 LABEL agentbox.base=$BASE
-EXPOSE 3000 3001 8080
+EXPOSE 3000 3001 8080 3773
 HEALTHCHECK --start-period=120s --interval=30s --timeout=5s \
     CMD curl -fsS http://127.0.0.1:8080/healthz >/dev/null && curl -fkSs https://127.0.0.1:3001/ >/dev/null

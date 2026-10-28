@@ -46,6 +46,14 @@ func (r *Runtime) runSubscription(ctx context.Context, q RunRequest, binary, mod
 	if model == "" {
 		return result, fmt.Errorf("agentcore: subscription model is required")
 	}
+	if hasImages(q.Messages) && !r.subscriptionVision(model) {
+		return result, fmt.Errorf("agentcore: Codex subscription model does not support image context (subscription_vision_models opt-in required)")
+	}
+	ownedMessages, imageErr := cloneMessages(q.Messages)
+	if imageErr != nil {
+		return result, imageErr
+	}
+	q.Messages = ownedMessages
 	dir, err := os.MkdirTemp("", "iugum-synthesis-")
 	if err != nil {
 		return result, err
@@ -56,7 +64,15 @@ func (r *Runtime) runSubscription(ctx context.Context, q RunRequest, binary, mod
 	for _, feature := range []string{"shell_tool", "apps", "browser_use", "computer_use", "hooks", "multi_agent", "multi_agent_v2", "plugins", "remote_plugin", "skill_search", "image_generation", "view_image", "code_mode", "code_mode_host", "workspace_dependencies", "in_app_browser", "request_permissions_tool", "unified_exec"} {
 		args = append(args, "--disable", feature)
 	}
-	args = append(args, "-c", `web_search="disabled"`, "-m", model, "--json", "-o", output, "-")
+	args = append(args, "-c", `web_search="disabled"`, "-m", model, "--json", "-o", output)
+	attachments, attachErr := writeSubscriptionImages(dir, q.Messages)
+	if attachErr != nil {
+		return result, attachErr
+	}
+	for _, file := range attachments {
+		args = append(args, "--image", file)
+	}
+	args = append(args, "-")
 	loc, _ := time.LoadLocation(r.config.Timezone)
 	var prompt strings.Builder
 	prompt.WriteString(r.config.Instructions)

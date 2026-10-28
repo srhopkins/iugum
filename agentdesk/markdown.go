@@ -30,6 +30,16 @@ type messageView struct {
 
 // Keep the durable Markdown unchanged. Only the response carries rendered HTML.
 func viewMessage(m Message) messageView {
+	// Recognize only the old application wrapper plus its native loop marker.
+	// Keep the durable source unchanged and never render its raw payload.
+	if m.Role == "assistant" && strings.HasPrefix(m.Text, "I couldn't complete that request: ") && strings.Contains(m.Text, "(Tool loop: result=failed steps=") {
+		f := turnFailure(nil)
+		f.Details = "Legacy native runtime failure. Raw diagnostics are withheld."
+		m.Role, m.Text, m.Failure = "error", f.Summary, &f
+	}
+	if m.Role == "error" {
+		return messageView{m, ""}
+	}
 	return messageView{m, renderChat(m.Text)}
 }
 

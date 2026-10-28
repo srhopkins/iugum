@@ -277,7 +277,7 @@ func buildClonePromptTools(root, parent string, check func(context.Context, stri
 		if err = writeAgentState(parent, content); err != nil {
 			return "", err
 		}
-		return "Promoted the instructions file. Original saved in the candidate directory. Chief reads the updated instructions on its next conversation turn.", nil
+		return "Promoted the instructions file. Original saved in the candidate directory. Iugum Agent reads the updated instructions on its next conversation turn.", nil
 	}
 	return tools, execute
 }

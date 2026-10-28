@@ -36,3 +36,13 @@ The fork base must match the `bd` binary that writes the `.beads` database. A ne
 ## Private module access
 
 Set `GOPRIVATE=github.com/srhopkins/*` so Go skips the public proxy and checksum database. Git needs SSH access to the repo. A Docker build or CI job needs the same access. For local work you can use `replace github.com/steveyegge/beads => ../beads` (the fork clone) instead.
+
+The viewer accepts `iugum beadview --viewer-config FILE` for optional shared YAML lane defaults (`lanes:`, with `status`, optional `label`, and `hidden`). List order sets column order. Status catalogs come from each project's `bd statuses --json`; browser Board lanes preferences override the YAML and persist in localStorage. Hidden and unknown tickets remain accessible in Other, which cannot be a drag destination for status writes. See the fork's `beadview/README.md` for a full example. Building this change requires the active local Beads fork replacement; install and restart the viewer only when requested.
+
+The dependency-readiness fix in the local fork reads `bd blocked --json`
+alongside the cached issue list. The board, status filters and counts classify
+dependency-blocked open work as Blocked while preserving its stored status.
+Closing a blocker returns its dependent work to Ready on refresh. This includes
+inherited blockers and uses Beads' own rules. The source change requires a fork
+version update or a local module replacement before it is included in an iugum
+build; it does not update a running viewer.

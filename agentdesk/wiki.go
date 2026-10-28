@@ -2,7 +2,7 @@ package agentdesk
 
 import (
 	"fmt"
-	chiefui "github.com/srhopkins/iugum/plugs/chief"
+	agentchat "github.com/srhopkins/iugum/plugs/agentchat"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -21,7 +21,7 @@ func wikiProxy(raw string) (*httputil.ReverseProxy, error) {
 	return p, nil
 }
 
-// serveWikiExtension keeps the wiki as the top-level application. Chief's API
+// serveWikiExtension keeps the wiki as the top-level application. Iugum Agent's API
 // occupies a reserved namespace; SilverBullet's file and WebSocket routes pass through.
 func (s *Server) serveWikiExtension(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.Path == "/.proxy/iugum/agents" && r.Method == "GET" && !s.cfg.DisableChat {
@@ -29,15 +29,15 @@ func (s *Server) serveWikiExtension(w http.ResponseWriter, r *http.Request) bool
 		fmt.Fprint(w, agentManagerPage)
 		return true
 	}
-	if (r.URL.Path == "/.proxy/iugum/assets/ui-controls.js" || r.URL.Path == "/.proxy/iugum/assets/ui-styles.js" || r.URL.Path == "/.proxy/iugum/assets/agent-chat.js" || r.URL.Path == "/.proxy/iugum/assets/chief.js") && r.Method == http.MethodGet {
-		asset := "chief.js"
+	if (r.URL.Path == "/.proxy/iugum/assets/ui-controls.js" || r.URL.Path == "/.proxy/iugum/assets/ui-styles.js" || r.URL.Path == "/.proxy/iugum/assets/agent-chat.js" || r.URL.Path == "/.proxy/iugum/assets/agentchat.js" || r.URL.Path == "/.proxy/iugum/assets/chief.js") && r.Method == http.MethodGet {
+		asset := "agentchat.js"
 		if r.URL.Path == "/.proxy/iugum/assets/ui-controls.js" {
 			asset = "ui-controls.js"
 		}
 		if r.URL.Path == "/.proxy/iugum/assets/ui-styles.js" {
 			asset = "ui-styles.js"
 		}
-		b, e := chiefui.Files.ReadFile(asset)
+		b, e := agentchat.Files.ReadFile(asset)
 		if e != nil {
 			fail(w, e, 500)
 			return true

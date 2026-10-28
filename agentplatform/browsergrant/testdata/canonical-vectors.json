@@ -1,0 +1,81 @@
+[
+  {
+    "domain": "arguments",
+    "value": {
+      "operation": "observe",
+      "args": {}
+    },
+    "canonical": "{\"args\":{},\"operation\":\"observe\"}",
+    "digest": "3ba1c4d0ccd31b825e3de6032129b2f7756b26b93d50b5413f9d3944f855e6b1"
+  },
+  {
+    "domain": "arguments",
+    "value": {
+      "operation": "click",
+      "args": {
+        "x": 0.000001,
+        "y": 1e-7,
+        "target": "button-1"
+      }
+    },
+    "canonical": "{\"args\":{\"target\":\"button-1\",\"x\":0.000001,\"y\":1e-7},\"operation\":\"click\"}",
+    "digest": "a3020c6ff87cc42bd65c4cf7673dbf1f866fff5d1a9eedd31b33bf7fd396129d"
+  },
+  {
+    "domain": "arguments",
+    "value": {
+      "operation": "scroll",
+      "args": {
+        "deltaX": -0.25,
+        "deltaY": 2000
+      }
+    },
+    "canonical": "{\"args\":{\"deltaX\":-0.25,\"deltaY\":2000},\"operation\":\"scroll\"}",
+    "digest": "ace3f53d713f89615b3e9236c043932bf94081ca251f36899ddc2d162ea9a5c9"
+  },
+  {
+    "domain": "viewport",
+    "value": {
+      "width": 1000,
+      "height": 800,
+      "scrollX": 0,
+      "scrollY": 1.5,
+      "zoom": 1,
+      "scale": 2
+    },
+    "canonical": "{\"height\":800,\"scale\":2,\"scrollX\":0,\"scrollY\":1.5,\"width\":1000,\"zoom\":1}",
+    "digest": "f0920c47f622c6a81925938fd387a329bcd9a9efb566df12d65f12f7eebfc43c"
+  },
+  {
+    "domain": "targets",
+    "value": [
+      {
+        "id": "button-1",
+        "bounds": {
+          "x": 10,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        },
+        "topFrame": true
+      }
+    ],
+    "canonical": "[{\"bounds\":{\"height\":40,\"width\":80,\"x\":10,\"y\":20},\"id\":\"button-1\",\"topFrame\":true}]",
+    "digest": "375f7a7180cb5ed52d7fa24566e5b233f268174f99aa1c8ea0de7195577ef303"
+  },
+  {
+    "domain": "target",
+    "value": null,
+    "canonical": "null",
+    "digest": "4a1741b6e3821cdaaf9e659c3e7658327419d1a0435d7fd48a641bb43678593c"
+  },
+  {
+    "domain": "result-data",
+    "value": {
+      "operation": "click",
+      "dispatched": true
+    },
+    "canonical": "{\"dispatched\":true,\"operation\":\"click\"}",
+    "digest": "ed3dea671aeeaa4745964ac06cd9ade9edf5044bf4d26e47a406b83c67f15c56"
+  }
+]

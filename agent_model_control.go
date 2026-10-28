@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/srhopkins/iugum/agentcore"
 	"github.com/srhopkins/iugum/agentdesk"
@@ -53,9 +54,18 @@ func nativeModelControl(ctx context.Context, runtime *agentcore.Runtime, c nativ
 	for key := range choices {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		if choices[keys[i]] == choices[keys[j]] {
+			return keys[i] < keys[j]
+		}
+		return choices[keys[i]] < choices[keys[j]]
+	})
 	for _, key := range keys {
-		state.Options = append(state.Options, agentdesk.ModelOption{ID: key, Name: choices[key] + " · " + key})
+		label := choices[key] + " · " + key
+		if c.ChatTransport != "codex-subscription" && strings.HasPrefix(key, "discovered-") {
+			label = choices[key] + " · " + c.Models.Profiles[key].Pool
+		}
+		state.Options = append(state.Options, agentdesk.ModelOption{ID: key, Name: label})
 	}
 	if len(state.Options) == 0 {
 		state.Reason = "No selectable model profiles are configured or permitted for this transport."

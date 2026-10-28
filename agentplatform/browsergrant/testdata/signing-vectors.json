@@ -1,0 +1,53 @@
+{
+  "records": [
+    {
+      "domain": "confirmation",
+      "record": {
+        "version": 2,
+        "pair": "11111111-1111-4111-8111-111111111111",
+        "bootstrapDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "role": "editor",
+        "confirmedAt": 10000
+      },
+      "canonical": "{\"bootstrapDigest\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"confirmedAt\":10000,\"pair\":\"11111111-1111-4111-8111-111111111111\",\"role\":\"editor\",\"version\":2}",
+      "digest": "2bdf6196bf8b0215c035b0340cb8295bb274cf14fb4bd0394449521952351d09",
+      "publicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+      "signature": "B0ILbUFxu8aNy09w5Z3bSXEy_XXi3JDCF9GAMidhN3VCp_eIfq3vx8rl15yDCvhG3XJIg9_mOVhxGQ-p7WiAAw"
+    },
+    {
+      "domain": "grant",
+      "record": {
+        "version": 2,
+        "pair": "11111111-1111-4111-8111-111111111111",
+        "authority": "22222222-2222-4222-8222-222222222222",
+        "serverKeyId": "0000000000000000000000000000000000000000000000000000000000000000",
+        "clientKeyId": "1111111111111111111111111111111111111111111111111111111111111111",
+        "instance": "33333333-3333-4333-8333-333333333333",
+        "windowLease": "2222222222222222222222222222222222222222222222222222222222222222",
+        "client": "44444444-4444-4444-8444-444444444444",
+        "document": "55555555-5555-4555-8555-555555555555",
+        "tabId": 17,
+        "origin": "https://iugum-agent-code.local",
+        "commandId": "66666666-6666-4666-8666-666666666666",
+        "operation": "observe",
+        "argsDigest": "3ba1c4d0ccd31b825e3de6032129b2f7756b26b93d50b5413f9d3944f855e6b1",
+        "observation": "",
+        "issuedAt": 10000,
+        "expires": 11000
+      },
+      "canonical": "{\"argsDigest\":\"3ba1c4d0ccd31b825e3de6032129b2f7756b26b93d50b5413f9d3944f855e6b1\",\"authority\":\"22222222-2222-4222-8222-222222222222\",\"client\":\"44444444-4444-4444-8444-444444444444\",\"clientKeyId\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"commandId\":\"66666666-6666-4666-8666-666666666666\",\"document\":\"55555555-5555-4555-8555-555555555555\",\"expires\":11000,\"instance\":\"33333333-3333-4333-8333-333333333333\",\"issuedAt\":10000,\"observation\":\"\",\"operation\":\"observe\",\"origin\":\"https://iugum-agent-code.local\",\"pair\":\"11111111-1111-4111-8111-111111111111\",\"serverKeyId\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"tabId\":17,\"version\":2,\"windowLease\":\"2222222222222222222222222222222222222222222222222222222222222222\"}",
+      "digest": "075a5b079d871fff92d537b4b31087c1d7e7e44601ab1a0bdce429374cafa732",
+      "publicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+      "signature": "uwulchvhpN90s6hAV_qIxyEKVJlFIyrw4xilKCcZDWN9uEvQq6GMWVtQpJD7_9u6VT7UrkUOZi4x7AMEYMz9Aw"
+    }
+  ],
+  "raster": {
+    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGJigAI4AxAAAP//AEgABdCvTH4AAAAASUVORK5CYII=",
+    "width": 2,
+    "height": 2,
+    "cssWidth": 1,
+    "cssHeight": 1,
+    "scale": 2,
+    "digest": "c10df5bc454687448d1fc11c882b492937f7d6baf057fb62baa6612df79ef06f"
+  }
+}
